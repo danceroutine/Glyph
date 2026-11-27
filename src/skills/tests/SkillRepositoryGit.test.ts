@@ -1,3 +1,4 @@
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -6,20 +7,30 @@ import { SkillRepositoryGit } from '#src/skills/SkillRepositoryGit.js';
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'glyph-git-budget-'));
+  const config = join(directory, 'trusted.config');
+  await writeFile(config, '');
+  vi.stubEnv('HOME', directory);
+  vi.stubEnv('GIT_CONFIG_GLOBAL', config);
+  vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
 it('rejects a repository object store over budget before starting another object fetch', async () => {
   const root = await fixture();
   await writeFile(join(root, 'objects.pack'), Buffer.alloc(32 * 1024 * 1024 + 1));
-  await expect(new SkillRepositoryGit(root, new AbortController().signal).run(['version'])).rejects.toThrow('32 MiB');
+  await expect(
+    new SkillRepositoryGit(root, new AbortController().signal, [], testFilesystemMetadata).run(['version']),
+  ).rejects.toThrow('32 MiB');
 });
 it.skipIf(process.platform === 'win32')(
   'terminates Git transport helpers and settles cancellation before returning',
   async () => {
     const root = await fixture();
     const cancel = new AbortController();
-    const result = new SkillRepositoryGit(root, cancel.signal).run([
+    const result = new SkillRepositoryGit(root, cancel.signal, [], testFilesystemMetadata).run([
       '-c',
       'alias.wait-for-cancel=!sleep 30 & echo $! > helper-pid; wait',
       'wait-for-cancel',
@@ -38,7 +49,23 @@ it.skipIf(process.platform === 'win32')(
 );
 it('bounds each Git object read and propagates missing-command diagnostics', async () => {
   const root = await fixture();
-  const git = new SkillRepositoryGit(root, new AbortController().signal);
+  const git = new SkillRepositoryGit(root, new AbortController().signal, [], testFilesystemMetadata);
   await expect(git.run(['--version'], 2)).rejects.toThrow('output budget');
   await expect(git.run(['missing-glyph-test-subcommand'])).rejects.toThrow('missing-glyph-test-subcommand');
+});
+
+it('evaluates conditional includes against the initialized bare store before using any repository transport', async () => {
+  const root = await fixture();
+  const included = join(root, 'conditional.config');
+  await writeFile(included, '[user]\nname = Conditional trusted identity\n');
+  await writeFile(join(root, 'trusted.config'), '[includeIf "gitdir:**/source.git"]\npath = conditional.config\n');
+  const git = new SkillRepositoryGit(root, new AbortController().signal, [], testFilesystemMetadata);
+  await git.run(['init', '--bare', '--template=', 'source.git']);
+  expect((await git.run(['--git-dir=source.git', 'config', '--get', 'user.name'])).toString()).toBe(
+    'Conditional trusted identity\n',
+  );
+  await writeFile(included, '[user]\nname = Later changed value\n');
+  expect((await git.run(['--git-dir=source.git', 'config', '--get', 'user.name'])).toString()).toBe(
+    'Conditional trusted identity\n',
+  );
 });

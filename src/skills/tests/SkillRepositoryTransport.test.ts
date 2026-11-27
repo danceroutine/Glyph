@@ -1,3 +1,4 @@
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -12,6 +13,9 @@ vi.mock('node:fs/promises', () => ({ readdir: io.list, lstat: io.stat }));
 vi.mock('#src/shell/TrustedHostExecutable.js', () => ({
   trustedHostExecutable: (name: string) => '/usr/bin/' + name,
   repositoryEnvironment: () => ({}),
+}));
+vi.mock('#src/skills/SkillRepositoryConfiguration.js', () => ({
+  captureRepositoryEnvironment: async () => ({}),
 }));
 vi.mock('node:child_process', () => ({ spawn: io.spawn }));
 function child(pid?: number) {
@@ -34,7 +38,21 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
-const git = (signal = new AbortController().signal) => new SkillRepositoryGit('/temporary', signal);
+const git = (signal = new AbortController().signal) =>
+  new SkillRepositoryGit('/temporary', signal, [], testFilesystemMetadata);
+it.each(['linux', 'win32'])('initializes a bare store without external Git configuration on %s', async os => {
+  Object.defineProperty(process, 'platform', { ...platform, value: os });
+  const initialized = child(123);
+  io.spawn.mockImplementationOnce(() => {
+    queueMicrotask(() => initialized.emit('close', 0));
+    return initialized;
+  });
+  await git().run(['init', '--bare', '--template=', 'source.git']);
+  expect(io.spawn.mock.calls[0]![2].env).toMatchObject({
+    GIT_CONFIG_GLOBAL: os === 'win32' ? 'NUL' : '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+  });
+});
 it('counts directories and disappearing loose objects against the shared storage budget', async () => {
   const missing = Object.assign(new Error('gone'), { code: 'ENOENT' });
   io.list

@@ -1,10 +1,12 @@
 import { trustedHostExecutable, type HostExecutable } from '#src/shell/TrustedHostExecutable.js';
 import { ShellProgram } from '#src/shell/ShellProgram.js';
-import { chmod, mkdir, mkdtemp, realpath, writeFile, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, open, rm } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import type { SkillPackage } from './SkillPackage.ts';
+import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
+import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 
 /** A host-authorized project root and the discovery origins whose scripts it owns. */
 export interface SkillExecutionRoot {
@@ -20,6 +22,7 @@ export class SkillScriptRunner {
   constructor(
     private readonly shells: Pick<ShellSessionManager, 'executeProgram'>,
     private readonly roots: readonly SkillExecutionRoot[],
+    private readonly metadata: FilesystemMetadata,
     private readonly stagingRoot = tmpdir(),
   ) {}
 
@@ -77,21 +80,37 @@ export class SkillScriptRunner {
       this.roots.map(candidate => candidate.directory),
     );
     const directory = await mkdtemp(join(stagingRoot, 'glyph-skill-run-'));
-    await chmod(directory, 0o700);
+    const stagedDirectories: string[] = [];
     try {
+      await chmod(directory, 0o700);
+      await inspectPrivateDirectory(this.metadata, directory);
       const stagePath = (entry: string) => {
         signal.throwIfAborted();
         if (entry.split('/').some(part => !part || part === '.' || part === '..') || /[\\\0:]/u.test(entry))
           throw new Error('Pinned package contains an invalid resource path.');
         return join(directory, entry);
       };
-      for (const folder of skill.packageDirectories().keys())
+      for (const folder of skill.packageDirectories().keys()) {
         await mkdir(stagePath(folder), { recursive: true, mode: 0o700 });
+        stagedDirectories.push(folder);
+      }
       for (const [file, content] of files) {
         const destination = stagePath(file);
         await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
-        await writeFile(destination, content.bytes, { flag: 'wx', mode: content.mode & 0o111 ? 0o500 : 0o400 });
+        const handle = await open(destination, 'wx', 0o600);
+        try {
+          await this.metadata.inspect(handle, 'access');
+          await handle.writeFile(content.bytes);
+          await handle.chmod(content.mode);
+        } finally {
+          await handle.close();
+        }
       }
+      // Populate through private, writable ancestors, then retain the reviewed directory modes.
+      for (const [folder, mode] of [...skill.packageDirectories()].sort(
+        (a, b) => b[0].split('/').length - a[0].split('/').length,
+      ))
+        await chmod(stagePath(folder), mode);
       const description = `# Skill ${skill.descriptor.name}, revision ${skill.revision}\n# Interpreter: ${executable}\n# Compatibility: ${(skill.descriptor.compatibility ?? 'No requirements declared').replaceAll('\n', '\n# ')}\n${source
         .split('\n')
         .map(line => `# ${line}`)
@@ -119,6 +138,9 @@ export class SkillScriptRunner {
         ...result,
       };
     } finally {
+      // Restore traversal from the private root before removing a reviewed read-only scaffold.
+      for (const folder of stagedDirectories.sort((a, b) => a.split('/').length - b.split('/').length))
+        await chmod(join(directory, folder), 0o700).catch(() => {});
       await rm(directory, { recursive: true, force: true });
     }
   }

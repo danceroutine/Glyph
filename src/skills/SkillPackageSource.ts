@@ -3,12 +3,14 @@ import { SkillRepositoryGit } from './SkillRepositoryGit.ts';
 import { indexedPackageDirectories } from './listSkillPackageFiles.ts';
 import { inventoryPackage } from './skillPackageInventory.ts';
 import { basename, join, resolve } from 'node:path';
-import { mkdtemp, rm, lstat } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { SkillPackageDraft } from './SkillPackageDraft.ts';
+import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
+import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 
 export const skillPackageSourceSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('local'), path: z.string().min(1) }).strict(),
@@ -26,13 +28,15 @@ export type SkillPackageSource = z.infer<typeof skillPackageSourceSchema>;
 export class SkillPackageSourceReader {
   constructor(
     private readonly binaryPath: string,
-    private readonly workspaceRoots: readonly string[] = [],
+    private readonly workspaceRoots: readonly string[],
+    private readonly metadata: FilesystemMetadata,
   ) {}
   async read(input: SkillPackageSource, signal?: AbortSignal): Promise<SkillPackageDraft> {
     const source = skillPackageSourceSchema.parse(input);
     if (source.kind === 'local') {
       const root = resolve(source.path);
       if ((await lstat(root)).isSymbolicLink()) throw new Error('Skill sources cannot be symlinked directories.');
+      await inspectFileMetadata(this.metadata, root, 'replaceable');
       const store = new FileSystemWorkspaceTextStore(root);
       const index = new RustWorkspacePathIndex({
         root,
@@ -48,6 +52,8 @@ export class SkillPackageSourceReader {
         if (list.truncated) throw new Error('Skill source exceeds the file budget.');
         const inventory = await inventoryPackage(root, signal);
         const modes = await indexedPackageDirectories(index, path => store.resolvePath(path), signal);
+        for (const path of modes.keys())
+          await inspectFileMetadata(this.metadata, await store.resolvePath(path), 'replaceable');
         const indexed = new Set(list.files);
         if (
           indexed.size !== inventory.files.length ||
@@ -59,7 +65,7 @@ export class SkillPackageSourceReader {
         let bytes = 0;
         for (const path of list.files) {
           signal?.throwIfAborted();
-          const file = await store.readBytes(path, { maxBytes: 1024 * 1024 });
+          const file = await store.readBytes(path, { maxBytes: 1024 * 1024, metadata: this.metadata });
           bytes += file.bytes.byteLength;
           if (bytes > 8 * 1024 * 1024) throw new Error('Skill source exceeds 8 MiB.');
           files.push({
@@ -94,13 +100,18 @@ export class SkillPackageSourceReader {
       throw new Error('Select a commit, branch or tag.');
     const temporary = await mkdtemp(join(outsideWorkspace(tmpdir(), this.workspaceRoots), 'glyph-skill-repository-'));
     const deadline = AbortSignal.timeout(60_000);
-    const transport = new SkillRepositoryGit(
-      temporary,
-      signal ? AbortSignal.any([signal, deadline]) : deadline,
-      this.workspaceRoots,
-    );
-    const git = async (...args: string[]) => (await transport.run(args)).toString('utf8');
     try {
+      await inspectPrivateDirectory(this.metadata, temporary);
+      const storage = join(temporary, '.skill-staging');
+      await mkdir(storage, { mode: 0o700 });
+      await inspectPrivateDirectory(this.metadata, storage);
+      const transport = new SkillRepositoryGit(
+        storage,
+        signal ? AbortSignal.any([signal, deadline]) : deadline,
+        this.workspaceRoots,
+        this.metadata,
+      );
+      const git = async (...args: string[]) => (await transport.run(args)).toString('utf8');
       await git('init', '--bare', '--template=', 'source.git');
       await git('--git-dir=source.git', 'remote', 'add', 'origin', source.url);
       await git(

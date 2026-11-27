@@ -1,3 +1,4 @@
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
@@ -16,7 +17,11 @@ async function fixture() {
   const directory = join(root, 'example');
   await mkdir(directory);
   await writeFile(join(directory, 'SKILL.md'), manifest);
-  const reader = new SkillPackageSourceReader(resolve('target/release/glyph-context-index'));
+  const reader = new SkillPackageSourceReader(
+    resolve('target/release/glyph-context-index'),
+    [],
+    testFilesystemMetadata,
+  );
   return { root, directory, reader };
 }
 describe(SkillPackageSourceReader, () => {

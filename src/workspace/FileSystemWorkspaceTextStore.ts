@@ -30,6 +30,7 @@ import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 import { WorkspaceReadLimitError } from './WorkspaceReadLimitError.ts';
 import { assertWellFormedWorkspacePath } from './assertWellFormedWorkspacePath.ts';
 import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
+import type { FilesystemMetadata } from './FilesystemMetadata.ts';
 
 const fileSystemWorkspaceTextStoreOptionsSchema = z
   .object({
@@ -176,7 +177,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   /** Read bounded binary assets through the same policy, identity, and no-symlink checks as text. */
   async readBytes(
     input: string,
-    options: WorkspaceReadOptions = {},
+    options: WorkspaceReadOptions & { readonly metadata?: FilesystemMetadata } = {},
   ): Promise<{ path: string; bytes: Buffer; mode: number; identity: string; revision: string }> {
     const { path, resolvedFile, identity } = await this.inspectReadPath(input, options.interruptedRename);
     // Inspection and open are separate operations. Do not follow a replacement
@@ -208,6 +209,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       if (`${info.dev}:${info.ino}` !== identity) {
         throw new EditError(EditFailureReason.STALE, 'The file changed while opening it for reading.', { path });
       }
+      await options.metadata?.inspect(handle, 'replaceable');
       // Keep loading bound to the same validated descriptor even if the path is
       // renamed again. A snapshot's mode and identity describe these bytes.
       const bytes =
@@ -215,6 +217,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           ? await handle.readFile()
           : await this.readBounded(handle, path, options.maxBytes, info.size);
       const revision = createHash('sha256').update(bytes).digest('hex');
+      await options.metadata?.inspect(handle, 'replaceable');
       if (info.nlink !== 1 && revision !== options.interruptedRename!.revision) {
         throw new EditError(EditFailureReason.STALE, 'The interrupted rename no longer contains the reviewed bytes.', {
           path,

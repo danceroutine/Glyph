@@ -1,11 +1,13 @@
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { SkillScriptRunner } from '#src/skills/SkillScriptRunner.js';
 import { SkillPackage } from '#src/skills/SkillPackage.js';
 import { aSkillDescriptor, aSkillPackage } from './fixtures/aSkillDescriptor.ts';
+import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 
 async function fixture() {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-skill-execution-')));
@@ -38,14 +40,20 @@ it('runs secondary-root packages in their owning root using private, immutable r
     const directory = options.readOnlyPaths![0]!;
     staged.push(directory);
     expect((await stat(join(directory, 'templates/empty'))).isDirectory()).toBe(true);
+    expect((await stat(join(directory, 'templates/empty'))).mode & 0o777).toBe(0o750);
     expect(f.roots.every(root => !directory.startsWith(root.directory + '/'))).toBe(true);
     expect((await stat(directory)).mode & 0o777).toBe(0o700);
-    expect((await stat(join(directory, 'helper'))).mode & 0o777).toBe(0o500);
-    expect((await stat(join(directory, 'scripts/task.sh'))).mode & 0o777).toBe(0o400);
+    expect((await stat(join(directory, 'helper'))).mode & 0o777).toBe(0o755);
+    expect((await stat(join(directory, 'scripts/task.sh'))).mode & 0o777).toBe(files.get('scripts/task.sh')!.mode);
     expect(await readFile(join(directory, 'helper'), 'utf8')).toContain('echo pinned');
     return { terminalId: 'shell', status: 'completed' as const, exitCode: 3, output: 'x'.repeat(17000) };
   });
-  const runner = new SkillScriptRunner({ executeProgram: execute }, f.roots, join(f.directory, 'private'));
+  const runner = new SkillScriptRunner(
+    { executeProgram: execute },
+    f.roots,
+    testFilesystemMetadata,
+    join(f.directory, 'private'),
+  );
   expect(runner.targets).toEqual([
     { id: 'A', label: 'A' },
     { id: 'B', label: 'B' },
@@ -72,14 +80,34 @@ it('requires an explicit root for multi-root user skills and rejects staging ins
     exitCode: 0,
     output: 'done',
   }));
-  const runner = new SkillScriptRunner({ executeProgram: execute }, f.roots, join(f.directory, 'private'));
+  const runner = new SkillScriptRunner(
+    { executeProgram: execute },
+    f.roots,
+    testFilesystemMetadata,
+    join(f.directory, 'private'),
+  );
   await expect(runner.run(skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('explicit root');
   await runner.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B');
-  const single = new SkillScriptRunner({ executeProgram: execute }, [f.roots[0]!], join(f.directory, 'private'));
+  const single = new SkillScriptRunner(
+    { executeProgram: execute },
+    [f.roots[0]!],
+    testFilesystemMetadata,
+    join(f.directory, 'private'),
+  );
   await single.run(skill, 'scripts/task.sh', [], 'chat', f.signal);
-  const unsafe = new SkillScriptRunner({ executeProgram: execute }, f.roots, join(f.roots[1]!.directory, 'staged'));
+  const unsafe = new SkillScriptRunner(
+    { executeProgram: execute },
+    f.roots,
+    testFilesystemMetadata,
+    join(f.roots[1]!.directory, 'staged'),
+  );
   await expect(unsafe.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B')).rejects.toThrow('outside every');
-  const same = new SkillScriptRunner({ executeProgram: execute }, f.roots, f.roots[1]!.directory);
+  const same = new SkillScriptRunner(
+    { executeProgram: execute },
+    f.roots,
+    testFilesystemMetadata,
+    f.roots[1]!.directory,
+  );
   await expect(same.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B')).rejects.toThrow('outside every');
   expect(execute).toHaveBeenCalledTimes(2);
 });
@@ -91,11 +119,70 @@ it('cleans failed staging and does not record a disclosure when approval is deni
     staged.push(options.readOnlyPaths![0]!);
     throw new Error('Denied');
   });
-  const runner = new SkillScriptRunner({ executeProgram: execute }, f.roots, join(f.directory, 'private'));
+  const runner = new SkillScriptRunner(
+    { executeProgram: execute },
+    f.roots,
+    testFilesystemMetadata,
+    join(f.directory, 'private'),
+  );
   await expect(runner.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('Denied');
   expect(f.skill.resources()).toEqual([]);
   await expect(stat(staged[0]!)).rejects.toMatchObject({ code: 'ENOENT' });
   const controller = new AbortController();
   controller.abort(new Error('Cancelled'));
   await expect(runner.run(f.skill, 'scripts/task.sh', [], 'chat', controller.signal)).rejects.toThrow('Cancelled');
+});
+
+it('rejects inherited access controls before exposing a pinned file or requesting approval', async () => {
+  const f = await fixture();
+  const execute = vi.fn();
+  const metadata = {
+    inspect: vi.fn<FilesystemMetadata['inspect']>(async () => {
+      throw new Error('Inherited ACL');
+    }),
+  };
+  const runner = new SkillScriptRunner({ executeProgram: execute }, f.roots, metadata, join(f.directory, 'private'));
+  await expect(runner.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('Inherited ACL');
+  expect(execute).not.toHaveBeenCalled();
+  const handle = metadata.inspect.mock.calls[0]![0];
+  expect(handle.fd).toBe(-1);
+});
+
+it('closes a rejected script inode and cleans a scaffold whose reviewed directories are not writable', async () => {
+  const f = await fixture();
+  const execute = vi.fn<ShellSessionManager['executeProgram']>(async (_program, options) => {
+    expect((await stat(join(options.readOnlyPaths![0]!, 'locked'))).mode & 0o777).toBe(0);
+    // Explicit full-access execution can remove its own staging resources.
+    await chmod(join(options.readOnlyPaths![0]!, 'locked'), 0o700);
+    await rm(join(options.readOnlyPaths![0]!, 'locked/empty'), { recursive: true });
+    return { terminalId: 'shell', status: 'completed', exitCode: 0, output: '' };
+  });
+  const skill = new SkillPackage(
+    f.skill.descriptor,
+    f.skill.body,
+    f.skill.packageFiles(),
+    new Map([
+      ['locked', 0],
+      ['locked/empty', 0o500],
+    ]),
+  );
+  const runner = new SkillScriptRunner(
+    { executeProgram: execute },
+    f.roots,
+    testFilesystemMetadata,
+    join(f.directory, 'private'),
+  );
+  await runner.run(skill, 'scripts/task.sh', [], 'chat', f.signal);
+  const inspect = vi.fn<FilesystemMetadata['inspect']>(async handle => {
+    if ((await handle.stat()).isFile()) throw new Error('File ACL');
+  });
+  const rejected = new SkillScriptRunner(
+    { executeProgram: execute },
+    f.roots,
+    { inspect },
+    join(f.directory, 'private'),
+  );
+  await expect(rejected.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('File ACL');
+  expect(execute).toHaveBeenCalledOnce();
+  expect(inspect.mock.calls.at(-1)![0].fd).toBe(-1);
 });

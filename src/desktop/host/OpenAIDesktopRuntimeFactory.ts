@@ -687,6 +687,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                       location => new ProjectSkillIdentity(part.disk.root, location).originId,
                     ),
                   })),
+                  filesystemMetadata,
                 ),
               ),
             ]
@@ -822,6 +823,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             skillSources: new SkillPackageSourceReader(
               indexExecutable,
               roots.map(workspaceRoot => workspaceRoot.path),
+              filesystemMetadata,
             ),
           }
         : {}),

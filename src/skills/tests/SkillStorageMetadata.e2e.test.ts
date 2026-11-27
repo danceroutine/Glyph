@@ -1,8 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { expect, it, onTestFinished } from 'vitest';
+import { expect, it, onTestFinished, vi } from 'vitest';
+import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
+import { SkillScriptRunner } from '#src/skills/SkillScriptRunner.js';
+import { aSkillPackage } from './fixtures/aSkillDescriptor.ts';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { SkillTransactionJournal } from '#src/skills/SkillTransactionJournal.js';
@@ -13,6 +16,65 @@ const metadata = new NativeFilesystemMetadata(resolve('target/release/glyph-cont
 const openMutations = (root: string) =>
   NativeWorkspaceMutations.open(resolve('target/release/glyph-workspace-mutations'), root);
 const chmodAcl = (path: string, ...args: string[]) => execFileSync('/bin/chmod', [...args, path]);
+
+it.skipIf(process.platform !== 'darwin')(
+  'rejects a local source with secondary asset data before producing an approved draft',
+  async () => {
+    const base = await mkdtemp(join(tmpdir(), 'glyph-import-metadata-'));
+    onTestFinished(() => rm(base, { recursive: true, force: true }));
+    const root = join(base, 'example');
+    await mkdir(root);
+    await writeFile(join(root, 'SKILL.md'), '---\nname: example\ndescription: Example\n---\nInstructions');
+    const asset = join(root, 'asset');
+    await writeFile(asset, '');
+    await writeFile(join(asset, '..namedfork/rsrc'), 'secondary bytes');
+    const reader = new SkillPackageSourceReader(resolve('target/release/glyph-context-index'), [], metadata);
+    await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('metadata');
+    expect(await readFile(join(asset, '..namedfork/rsrc'), 'utf8')).toBe('secondary bytes');
+  },
+);
+
+it.skipIf(process.platform !== 'darwin')(
+  'checks inherited temporary ACLs before staging scripts or starting repository transport',
+  async () => {
+    const base = await mkdtemp(join(tmpdir(), 'glyph-run-inheritance-'));
+    onTestFinished(() => rm(base, { recursive: true, force: true }));
+    const workspace = join(base, 'workspace'),
+      temporary = join(base, 'temporary');
+    await mkdir(workspace);
+    await mkdir(temporary);
+    chmodAcl(temporary, '+a', 'everyone allow list,search,file_inherit,directory_inherit');
+    const execute = vi.fn();
+    const runner = new SkillScriptRunner(
+      { executeProgram: execute },
+      [{ id: 'project', label: 'Project', directory: workspace, workingDirectory: '.', originIds: ['project'] }],
+      metadata,
+      temporary,
+    );
+    const skill = aSkillPackage(undefined, undefined, { 'scripts/task.sh': Buffer.from('echo should-not-run') });
+    try {
+      await expect(runner.run(skill, 'scripts/task.sh', [], 'chat', new AbortController().signal)).rejects.toThrow(
+        'metadata',
+      );
+      expect(execute).not.toHaveBeenCalled();
+      expect(await readdir(temporary)).toEqual([]);
+      vi.stubEnv('TMPDIR', temporary);
+      const reader = new SkillPackageSourceReader(resolve('target/release/glyph-context-index'), [workspace], metadata);
+      await expect(
+        reader.read({
+          kind: 'repository',
+          url: 'https://fixture.invalid/example.git',
+          revision: 'main',
+          directory: '',
+        }),
+      ).rejects.toThrow('metadata');
+      expect(await readdir(temporary)).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+      chmodAcl(temporary, '-N');
+    }
+  },
+);
 
 it.skipIf(process.platform !== 'darwin')(
   'rejects private directories with inherited access grants before writing a marker',

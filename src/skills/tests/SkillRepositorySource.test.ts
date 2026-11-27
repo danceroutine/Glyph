@@ -1,3 +1,4 @@
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 
@@ -15,7 +16,7 @@ const source = {
   revision: 'release',
   directory: '',
 };
-const reader = new SkillPackageSourceReader('unused');
+const reader = new SkillPackageSourceReader('unused', [], testFilesystemMetadata);
 
 function repository(entries = '100644 blob abc\tSKILL.md\0', blob = manifest) {
   git.mockImplementation(async args => {

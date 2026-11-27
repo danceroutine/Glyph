@@ -1,3 +1,4 @@
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
@@ -4873,7 +4874,7 @@ describe('Skill lifecycle host commands', () => {
   });
   async function setup() {
     const lifecycle = await aSkillLifecycle();
-    const sources = new SkillPackageSourceReader('unused');
+    const sources = new SkillPackageSourceReader('unused', [], testFilesystemMetadata);
     const harness = await fixture(async () => {}, 'owner', undefined, {
       skillManager: lifecycle.manager,
       skillCatalog: lifecycle.catalog,
