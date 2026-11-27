@@ -215,6 +215,33 @@ class TwoToolClaudeAdapter extends ClaudeShapedAdapter {
 }
 
 describe(AgentRuntime, () => {
+  it('rejects a stale manual skill before acknowledging a submitted document or contacting the model', async () => {
+    const adapter = new ClaudeShapedAdapter();
+    const begin = vi.spyOn(adapter, 'beginTurn');
+    const admitted = vi.fn();
+    const contexts = new TurnContextCoordinator([new SkillContextContributor(new SkillCatalog([]))]);
+    const runtime = new AgentRuntime(
+      adapter,
+      { timeoutMs: 10_000 },
+      mockTools(async () => ''),
+      undefined,
+      contexts,
+    );
+    await expect(
+      runtime.send(
+        { text: 'Use /missing', turnId: 'missing', skillIds: ['missing'], attachments: [] },
+        { signal: new AbortController().signal, onText: () => {}, onTurnAdmitted: admitted },
+      ),
+    ).rejects.toThrow('Selected skill is unavailable');
+    expect(admitted).not.toHaveBeenCalled();
+    expect(begin).not.toHaveBeenCalled();
+    await runtime.send('Continue', {
+      signal: new AbortController().signal,
+      onText: () => {},
+      onTurnAdmitted: admitted,
+    });
+    expect(admitted).toHaveBeenCalledOnce();
+  });
   it('releases its own failed turn while preserving an already admitted turn with the same id', async () => {
     const contexts = new TurnContextCoordinator(new AgentInstructionCatalog([]));
     await contexts.beginTurn({ turnId: 'shared', attachmentPaths: [] });
