@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { SkillPackageDraft } from './SkillPackageDraft.ts';
+import { optionalStat } from './SkillPackageStorage.ts';
 import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 import type { HostWorkspaceRoots } from '#src/shell/HostExecutionAuthority.js';
@@ -64,6 +65,9 @@ export class SkillPackageSourceReader {
           inventory.directories.some(path => !modes.has(path))
         )
           throw new Error('Skill source contains excluded or unindexed files.');
+        // Only the captured file identified by the standard manifest path gets the portable name.
+        const manifest = await optionalStat(join(root, 'SKILL.md'));
+        const manifestIdentity = manifest && `${manifest.dev}:${manifest.ino}`;
         const files = [];
         let bytes = 0;
         for (const path of list.files) {
@@ -72,7 +76,7 @@ export class SkillPackageSourceReader {
           bytes += file.bytes.byteLength;
           if (bytes > 8 * 1024 * 1024) throw new Error('Skill source exceeds 8 MiB.');
           files.push({
-            path,
+            path: !path.includes('/') && file.identity === manifestIdentity ? 'SKILL.md' : path,
             mode: file.mode,
             content: Buffer.from(file.bytes).toString('base64'),
             encoding: 'base64' as const,
@@ -99,6 +103,10 @@ export class SkillPackageSourceReader {
       source.directory.startsWith('/')
     )
       throw new Error('Repository package directory must be relative.');
+    const directory = source.directory
+      .split('/')
+      .filter(part => part !== '' && part !== '.')
+      .join('/');
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/u.test(source.revision) || source.revision.includes('..'))
       throw new Error('Select a commit, branch or tag.');
     const currentRoots =
@@ -140,7 +148,7 @@ export class SkillPackageSourceReader {
       const revision = (
         await git('--git-dir=source.git', 'rev-parse', '--verify', '--end-of-options', 'FETCH_HEAD^{commit}')
       ).trim();
-      const tree = source.directory ? `${revision}:${source.directory.replace(/\/$/u, '')}` : revision;
+      const tree = directory ? `${revision}:${directory}` : revision;
       const entries = (await git('--git-dir=source.git', 'ls-tree', '-r', '-t', '-z', tree))
         .split('\0')
         .filter(Boolean);
@@ -169,7 +177,7 @@ export class SkillPackageSourceReader {
         });
       }
       return new SkillPackageDraft({
-        name: basename(source.directory || url.pathname.replace(/\/+$/u, '').replace(/\.git$/u, '')),
+        name: basename(directory || url.pathname.replace(/\/+$/u, '').replace(/\.git$/u, '')),
         source: `Requested repository ${source.url}@${revision}${source.directory ? `:${source.directory}` : ''}`,
         files,
         directories,

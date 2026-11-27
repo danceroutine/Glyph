@@ -1,4 +1,5 @@
-import { type HostExecutable } from '#src/shell/TrustedHostExecutable.js';
+import { escapeDisplayControls } from '#src/shared/presentation/escapeDisplayControls.js';
+import type { HostExecutable } from '#src/shell/TrustedHostExecutable.js';
 import { HostExecutionAuthority, type HostWorkspaceRoots } from '#src/shell/HostExecutionAuthority.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 import { ShellProgram } from '#src/shell/ShellProgram.js';
@@ -57,7 +58,7 @@ export class SkillScriptRunner {
     const files = skill.packageFiles();
     const resource = skill.inspectResource(path);
     if (resource.encoding !== 'utf8') throw new Error('Skill scripts must contain UTF-8 source.');
-    const source = resource.content;
+    const source = escapeDisplayControls(resource.content);
     const interpreter = (
       { '.sh': 'sh', '.py': 'python3', '.js': 'node', '.mjs': 'node' } as Readonly<Record<string, HostExecutable>>
     )[extname(path)];

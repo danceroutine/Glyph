@@ -4,7 +4,7 @@ import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutation
 import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { execFileSync } from 'node:child_process';
-import { chmod, lstat, mkdir, mkdtemp, rm, writeFile, symlink } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, rm, writeFile, symlink, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -88,6 +88,24 @@ describe(SkillPackageSourceReader, () => {
     expect(draft.files().get('assets/data')).toEqual(Uint8Array.from([0, 255]));
     expect(draft.files().get('SKILL.md')).toEqual(Uint8Array.from(Buffer.from(manifest)));
     expect(draft.source).toBe(directory);
+  });
+  it('imports a stored manifest alias under its portable name and keeps physically distinct resources', async () => {
+    const { directory, reader } = await fixture();
+    const standard = join(directory, 'SKILL.md');
+    const alias = join(directory, 'ſkill.md');
+    await rename(standard, alias);
+    const stored = await lstat(alias);
+    const canonical = await lstat(standard).catch(() => undefined);
+    const sameManifest = canonical?.ino === stored.ino && canonical.dev === stored.dev;
+    if (!sameManifest) {
+      await expect(reader.read({ kind: 'local', path: directory })).rejects.toThrow('missing SKILL.md');
+      await writeFile(standard, manifest, { flag: 'wx' });
+      await writeFile(alias, 'Independent resource');
+    }
+    const draft = await reader.read({ kind: 'local', path: directory });
+    expect(draft.files().get('SKILL.md')).toEqual(Uint8Array.from(Buffer.from(manifest)));
+    if (sameManifest) expect([...draft.files().keys()]).toEqual(['SKILL.md']);
+    else expect(draft.files().get('ſkill.md')).toEqual(Uint8Array.from(Buffer.from('Independent resource')));
   });
   it('rejects symlinked source directories and missing manifests', async () => {
     const { root, directory, reader } = await fixture();

@@ -68,6 +68,15 @@ describe('Repository package source boundary', () => {
     expect(git.mock.calls.find(([args]) => args.includes('ls-tree'))?.[0]).toContain('deadbeef:nested/example');
     expect(git.mock.calls.flatMap(call => call[0])).not.toContain('checkout');
   });
+  it.each([
+    ['.', 'deadbeef'],
+    ['./', 'deadbeef'],
+    ['./nested//example/.', 'deadbeef:nested/example'],
+  ])('normalizes repository directory %s for the selected tree and package name', async (directory, tree) => {
+    repository();
+    expect((await reader.read({ ...source, directory })).name).toBe('example');
+    expect(git.mock.calls.find(([args]) => args.includes('ls-tree'))?.[0].at(-1)).toBe(tree);
+  });
   it('preserves subprocess failures without returning a partial package', async () => {
     git.mockRejectedValue(new Error('Authentication required'));
     await expect(reader.read(source)).rejects.toThrow('Authentication required');
@@ -80,7 +89,7 @@ describe('Repository package source boundary', () => {
     await expect(reader.read({ ...source, url })).rejects.toThrow('without embedded credentials');
     expect(git).not.toHaveBeenCalled();
   });
-  it.each(['../outside', '/absolute', 'bad\\directory', 'bad:tree'])(
+  it.each(['../outside', 'valid/../example', '/absolute', 'bad\\directory', 'bad:tree'])(
     'rejects unsafe package directories before fetching %s',
     async directory => {
       await expect(reader.read({ ...source, directory })).rejects.toThrow('relative');

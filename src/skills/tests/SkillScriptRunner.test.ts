@@ -24,7 +24,7 @@ async function fixture() {
   const skill = aSkillPackage(
     aSkillDescriptor({ origin: { id: 'B', label: 'B', scope: 'project', compatibility: 'glyph' } }),
     'Run task',
-    { 'scripts/task.sh': Buffer.from('./helper'), helper: Buffer.from('#!/bin/sh\necho pinned') },
+    { 'scripts/task.sh': Buffer.from('\uFEFF./helper'), helper: Buffer.from('#!/bin/sh\necho pinned') },
   );
   const signal = new AbortController().signal;
   return { directory, roots, skill, signal };
@@ -36,13 +36,15 @@ it('runs secondary-root packages in their owning root using private, immutable r
   files.set('helper', { ...files.get('helper')!, mode: 0o755 });
   const skill = new SkillPackage(f.skill.descriptor, f.skill.body, files, new Map([['templates/empty', 0o750]]));
   const staged: string[] = [];
-  const execute = vi.fn<ShellSessionManager['executeProgram']>(async (_command, options) => {
+  const execute = vi.fn<ShellSessionManager['executeProgram']>(async (command, options) => {
+    expect(command.display).toContain('# \\uFEFF./helper');
     expect(options).toMatchObject({ workingDirectory: 'B', transient: true, background: false });
     const directory = options.readOnlyPaths![0]!;
     staged.push(directory);
     expect((await stat(join(directory, 'templates/empty'))).isDirectory()).toBe(true);
     expect((await stat(join(directory, 'templates/empty'))).mode & 0o777).toBe(0o750);
     expect(f.roots.every(root => !directory.startsWith(root.directory + '/'))).toBe(true);
+    expect(await readFile(join(directory, 'scripts/task.sh'), 'utf8')).toBe('\uFEFF./helper');
     expect((await stat(directory)).mode & 0o777).toBe(0o700);
     expect((await stat(join(directory, 'helper'))).mode & 0o777).toBe(0o755);
     expect((await stat(join(directory, 'scripts/task.sh'))).mode & 0o777).toBe(files.get('scripts/task.sh')!.mode);
