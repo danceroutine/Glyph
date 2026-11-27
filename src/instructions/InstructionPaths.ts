@@ -41,6 +41,25 @@ export class InstructionPaths {
     return typeof this.casing === 'boolean' ? this.casing : this.casing.get(path.split('/')[0]!) !== false;
   }
 
+  prepare(paths: readonly string[]): void {
+    this.routes?.prepare(paths);
+  }
+
+  /** All unique logical ancestors of a target, including routes through overlapping attachments. */
+  ancestorKeys(path: string): Set<string> {
+    const ancestors = new Set<string>();
+    for (const route of this.equivalents(path)) {
+      let key = this.key(route);
+      while (!ancestors.has(key)) {
+        ancestors.add(key);
+        const slash = key.lastIndexOf('/');
+        if (slash < 0) break;
+        key = key.slice(0, slash);
+      }
+    }
+    return ancestors;
+  }
+
   key(path: string): string {
     const confirmed = this.routes?.scopeKey(path, this.caseSensitive(path));
     if (confirmed !== undefined) return confirmed;

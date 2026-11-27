@@ -8,8 +8,11 @@ import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.
 export async function listUserRuleFiles(
   index: Pick<WorkspacePathIndex, 'glob'>,
   maxFiles: number,
+  signal?: AbortSignal,
 ): Promise<{ files: string[]; truncated: boolean }> {
-  const result = await index.glob('*.mdc', { limit: maxFiles, rootFilesOnly: true });
+  signal?.throwIfAborted();
+  const result = await index.glob('*.mdc', { limit: maxFiles, rootFilesOnly: true, ...(signal && { signal }) });
+  signal?.throwIfAborted();
   return {
     files: result.files.filter(path => !path.includes('/')).map(path => `rules/${path}`),
     truncated: result.truncated,

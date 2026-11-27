@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
+import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { AgentInstructionSet } from '#src/instructions/AgentInstructionSet.js';
 import {
   AgentInstructionSourceKind,
@@ -119,4 +121,34 @@ describe(AgentInstructionSet, () => {
     expect(new AgentInstructionSet([compatible, native]).sources).toEqual([native]);
     expect(new AgentInstructionSet([compatible, error]).sources).toEqual([error]);
   });
+});
+
+it('shadows a compatible rule independently of which overlapping index returned each family', () => {
+  const roots = [
+    { name: 'Outer', path: '/repo' },
+    { name: 'Inner', path: '/repo/sub' },
+  ];
+  const paths = new InstructionPaths(new Map(roots.map(root => [root.name, true])), new WorkspaceSourceRoutes(roots));
+  const native = anInstructionSource({
+    kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+    id: 'native',
+    name: 'Style',
+    scope: 'Outer/sub',
+    enabled: false,
+  });
+  const cursor = anInstructionSource({
+    kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
+    id: 'cursor',
+    name: 'Style',
+    scope: 'Inner',
+  });
+  const sibling = { ...cursor, scope: 'Outer/another' };
+  expect(new AgentInstructionSet([cursor, native, sibling], paths).sources).toEqual([sibling, native]);
+  const user = anInstructionSource({
+    kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+    id: 'user',
+    name: 'Style',
+    projectAlias: { id: 'native', kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, scope: native.scope },
+  });
+  expect(new AgentInstructionSet([cursor, user], paths).sources.map(source => source.id)).toEqual(['user']);
 });

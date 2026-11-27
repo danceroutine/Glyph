@@ -50,8 +50,9 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     maxFiles: number,
     globPattern?: string,
     targetDirectory?: string,
+    signal?: AbortSignal,
   ): Promise<{ files: string[]; truncated: boolean }> {
-    return this.client.listPaths(maxFiles, globPattern, targetDirectory);
+    return this.client.listPaths(maxFiles, globPattern, targetDirectory, signal);
   }
 
   normalizePath(input: string): string {

@@ -126,7 +126,9 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     maxFiles: number,
     globPattern = '**/*',
     targetDirectory?: string,
+    signal?: AbortSignal,
   ): Promise<{ files: string[]; truncated: boolean }> {
+    signal?.throwIfAborted();
     if (this.privateRoot) return { files: [], truncated: false };
     const root = await realpath(this.root);
     const normalizedTarget = targetDirectory === undefined ? undefined : this.normalizePath(targetDirectory);
@@ -146,9 +148,11 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const files: string[] = [];
     let truncated = false;
     const visit = async (directory: string): Promise<void> => {
+      signal?.throwIfAborted();
       const entries = await readdir(directory, { withFileTypes: true });
       entries.sort((left, right) => left.name.localeCompare(right.name));
       for (const entry of entries) {
+        signal?.throwIfAborted();
         if (entry.isSymbolicLink()) continue;
         const absolute = resolve(directory, entry.name);
         if (this.options.physicalAccess) {
@@ -180,6 +184,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       }
     };
     await visit(searchRoot);
+    signal?.throwIfAborted();
     return { files, truncated };
   }
 

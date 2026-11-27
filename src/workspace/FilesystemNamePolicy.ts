@@ -19,3 +19,6 @@ export function normalizeVolumeName(
     .join('')
     .normalize('NFC');
 }
+
+/** Resolve each directory's filename semantics in input order, including prospective directories. */
+export type ReadDirectoryNamePolicies = (directories: readonly string[]) => readonly FilesystemNamePolicy[];

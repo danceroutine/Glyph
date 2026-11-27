@@ -24,17 +24,19 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
       readonly maxBytes?: number;
       readonly maxDiscoveryBytes?: number;
     } = {},
-    private readonly listFiles: (maxFiles: number, globPattern: string) => Promise<InstructionFileListing> = (
-      maxFiles,
-      globPattern,
-    ) => workspace.list(maxFiles, globPattern),
+    private readonly listFiles: (
+      maxFiles: number,
+      globPattern: string,
+      signal?: AbortSignal,
+    ) => Promise<InstructionFileListing> = (maxFiles, globPattern, signal) =>
+      workspace.list(maxFiles, globPattern, undefined, signal),
   ) {}
 
   async discover(signal?: AbortSignal): Promise<readonly AgentInstructionSource[]> {
     signal?.throwIfAborted();
     let listed: InstructionFileListing;
     try {
-      listed = await this.listFiles(this.options.maxFiles ?? DEFAULT_MAX_FILES, '**/AGENTS.md');
+      listed = await this.listFiles(this.options.maxFiles ?? DEFAULT_MAX_FILES, '**/AGENTS.md', signal);
     } catch (error) {
       if (signal?.aborted === true) throw signal.reason;
       return [
