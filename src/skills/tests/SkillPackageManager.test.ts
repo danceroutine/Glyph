@@ -99,7 +99,11 @@ describe(SkillPackageManager, () => {
     const userPreview = await user.prepare(location.id, draft);
     expect(user.workspacePaths(userPreview.id)).toEqual([]);
     user.discard(userPreview.id);
-    const manager = new SkillPackageManager([{ ...location, scope: 'project' }], catalog, state);
+    const manager = new SkillPackageManager(
+      [{ ...location, scope: 'project', scopePrefix: 'Project' }],
+      catalog,
+      state,
+    );
     const install = await manager.prepare(location.id, draft);
     const installedPaths = [
       'skills/example',

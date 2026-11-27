@@ -955,6 +955,10 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           draft: { ...draft.toJSON(), directories: [{ path: 'templates/empty' }] },
         });
         await runtime.handle({ type: Command.APPLY_SKILL, previewId: (await runtime.snapshot()).skillPreview!.id });
+        expect(RustWorkspacePathIndex.prototype.glob).toHaveBeenCalledWith('**/*', {
+          targetDirectory: target.scope === 'user' ? draft.name : '.glyph/skills/' + draft.name,
+          limit: 257,
+        });
       }
       vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
         if (
@@ -2181,7 +2185,7 @@ function useFilesystemIndex(): void {
       accessPolicy: configuration.accessPolicy,
       caseSensitive: configuration.caseSensitive,
     });
-    if (!options.rootFilesOnly) return store.list(options.limit, pattern);
+    if (!options.rootFilesOnly) return store.list(options.limit, pattern, options.targetDirectory);
     const listed = await store.list(10_000, pattern);
     const direct = listed.files.filter(path => !path.includes('/'));
     return { files: direct.slice(0, options.limit), truncated: direct.length > options.limit };

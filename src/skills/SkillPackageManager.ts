@@ -503,7 +503,11 @@ export class SkillPackageManager {
       throw new Error('Installation directories changed after preview. Preview the change again.');
     // mkdir applies the process umask to newly created project parents. The published tree
     // then inherits the actual parent permissions, including a checkout's deliberate sharing settings.
-    await location.mutations.ensureDirectory(posix.dirname(directory), location.scope === 'project' ? 0o777 : 0o700);
+    await location.mutations.ensureDirectory(
+      posix.dirname(directory),
+      location.scope === 'project' ? 0o777 : 0o700,
+      preview.createdParentDirectories.length,
+    );
     const directoryMode = location.scope === 'project' ? (await lstat(dirname(target))).mode & 0o777 : 0o700;
     const relativeStage = '.skill-staging/' + preview.id;
     const stage = join(await privateSkillDirectory(this.state.metadata, location.store.root), preview.id);

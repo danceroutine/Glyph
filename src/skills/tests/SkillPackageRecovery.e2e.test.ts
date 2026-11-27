@@ -56,6 +56,25 @@ it('orders a second process installing a shared skill after the first process ha
   expect(await readFile(join(root, 'skills/example/SKILL.md'), 'utf8')).toContain('Installed concurrently');
 });
 
+it('preserves the approved existing installation directory boundary if a parent disappears during publication', async () => {
+  const { root, location, catalog, state } = await aSkillLifecycle(openMutations);
+  await mkdir(join(root, '.glyph'));
+  const ensure = location.mutations.ensureDirectory.bind(location.mutations);
+  vi.spyOn(location.mutations, 'ensureDirectory').mockImplementation(async (path, mode, suffix) => {
+    await rm(join(root, '.glyph'), { recursive: true });
+    return ensure(path, mode, suffix);
+  });
+  const manager = new SkillPackageManager(
+    [{ ...location, directory: '.glyph/skills', scope: 'project' }],
+    catalog,
+    state,
+  );
+  const preview = await manager.prepare(location.id, aSkillDraft());
+  expect(preview.createdParentDirectories).toEqual([join(root, '.glyph/skills')]);
+  await expect(manager.apply(preview.id)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(stat(join(root, '.glyph'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
 it('refuses a different directory mounted at the same configured path and preserves an occupied destination', async () => {
   const { root, location } = await aSkillLifecycle(openMutations);
   const { mutations } = location;

@@ -15,7 +15,8 @@ type MetadataInspection = {
   ownershipReference?: string;
 };
 type Operation =
-  | { operation: 'ensure_directory' | 'remove_tree' | 'create_stage'; relative: string; mode?: number }
+  | { operation: 'ensure_directory'; relative: string; mode?: number; createSuffixLength?: number }
+  | { operation: 'remove_tree' | 'create_stage'; relative: string }
   | {
       operation: 'stage_package';
       relative: string;
@@ -53,8 +54,13 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
       ...(ownershipReference === undefined ? {} : { ownershipReference }),
     });
   }
-  ensureDirectory(relative: string, mode?: number): Promise<void> {
-    return this.run({ operation: 'ensure_directory', relative, ...(mode === undefined ? {} : { mode }) });
+  ensureDirectory(relative: string, mode?: number, createSuffixLength?: number): Promise<void> {
+    return this.run({
+      operation: 'ensure_directory',
+      relative,
+      ...(mode === undefined ? {} : { mode }),
+      ...(createSuffixLength === undefined ? {} : { createSuffixLength }),
+    });
   }
   createStage(relative: string): Promise<void> {
     return this.run({ operation: 'create_stage', relative });

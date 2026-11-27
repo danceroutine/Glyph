@@ -48,6 +48,25 @@ mod supported {
     fn ensure(path: &str) -> Value {
         json!({"operation":"ensure_directory","relative":path})
     }
+    #[test]
+    fn creates_only_the_approved_suffix_of_an_installation_directory() {
+        let fixture = tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let ensure_approved = |count: usize| {
+            let mut operation = ensure(".glyph/skills");
+            operation["createSuffixLength"] = json!(count);
+            run(&request(&root, operation))
+        };
+        assert_eq!(ensure_approved(3)["code"], "INVALID_INPUT");
+        assert_eq!(ensure_approved(1)["code"], "ENOENT");
+        assert!(!root.join(".glyph").exists());
+        fs::create_dir(root.join(".glyph")).unwrap();
+        assert_eq!(ensure_approved(0)["code"], "ENOENT");
+        assert_eq!(ensure_approved(1)["ok"], true);
+        assert!(root.join(".glyph/skills").is_dir());
+        fs::remove_dir_all(root.join(".glyph")).unwrap();
+        assert_eq!(ensure_approved(2)["ok"], true);
+    }
     fn remove(path: &str) -> Value {
         json!({"operation":"remove_tree","relative":path})
     }

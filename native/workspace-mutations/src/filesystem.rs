@@ -56,6 +56,7 @@ pub(super) fn execute(request: &Request) -> Result<Option<String>, Failure> {
                     rustix::io::dup(&root)?,
                     &relative_components(path)?,
                     None,
+                    0,
                 )?;
                 let stat = fstat(dir)?;
                 Some((stat.st_uid, stat.st_gid))
@@ -75,12 +76,21 @@ pub(super) fn execute(request: &Request) -> Result<Option<String>, Failure> {
             )?;
             return Ok(Some(format!("{digest:x}")));
         }
-        Operation::EnsureDirectory { relative, mode } => {
+        Operation::EnsureDirectory {
+            relative,
+            mode,
+            create_suffix_length,
+        } => {
             let components = relative_components(relative)?;
+            let existing_depth = components
+                .len()
+                .checked_sub(create_suffix_length.unwrap_or(components.len()))
+                .ok_or_else(Failure::invalid)?;
             open_relative_directories(
                 root,
                 &components,
                 Some(staging::mode(mode.unwrap_or(0o700))?),
+                existing_depth,
             )?;
         }
         Operation::CreateStage { relative } => {
@@ -212,29 +222,30 @@ fn open_parent<'a>(root: &OwnedFd, components: &[&'a str]) -> Result<(OwnedFd, &
     // Validated paths contain a final non-empty name; the parent walk never includes that name.
     let (name, ancestors) = components.split_last().expect("validated relative path");
     Ok((
-        open_relative_directories(rustix::io::dup(root)?, ancestors, None)?,
+        open_relative_directories(rustix::io::dup(root)?, ancestors, None, 0)?,
         name,
     ))
 }
 
+/// Hold each ancestor descriptor before opening the next component. Only the reviewed suffix may be created.
 fn open_relative_directories(
     mut parent: OwnedFd,
     path: &[&str],
     create: Option<Mode>,
+    existing_depth: usize,
 ) -> Result<OwnedFd, Failure> {
-    if path.first() != Some(&".skill-staging") {
-        return open_directories(parent, path, create);
+    for (depth, component) in path.iter().enumerate() {
+        let private = depth < 2 && path[0] == ".skill-staging";
+        let mode =
+            create
+                .filter(|_| depth >= existing_depth)
+                .map(|mode| if private { Mode::RWXU } else { mode });
+        parent = open_directories(parent, std::slice::from_ref(component), mode)?;
+        if private {
+            staging::check_private(&parent)?;
+        }
     }
-    let (private, contents) = path.split_at(path.len().min(2));
-    for component in private {
-        parent = open_directories(
-            parent,
-            std::slice::from_ref(component),
-            create.map(|_| Mode::RWXU),
-        )?;
-        staging::check_private(&parent)?;
-    }
-    open_directories(parent, contents, create)
+    Ok(parent)
 }
 
 fn rename_pinned(

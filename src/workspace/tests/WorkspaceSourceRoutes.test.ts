@@ -52,6 +52,8 @@ it('keeps logical aliases and selects the most specific indexed route for each p
   const single = new WorkspaceSourceRoutes([outer]);
   expect(single.legacyPaths('AGENTS.md')).toEqual(['AGENTS.md', 'Outer/AGENTS.md']);
   expect(single.equivalents('AGENTS.md')).toEqual(['AGENTS.md']);
+  expect(single.routesForPhysicalPath('/work')).toEqual(['.']);
+  expect(single.routesForPhysicalPath('/unrelated')).toEqual([]);
 });
 
 it('compares physical root prefixes using their volume policy and retains exact logical labels', () => {

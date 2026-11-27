@@ -1,7 +1,8 @@
 /** Mutations relative to a single authorized filesystem root. Renames preserve any existing destination. */
 export interface WorkspaceDirectoryMutations {
   assertReplaceableMetadata(relative: string, recursive: boolean, ownershipReference?: string): Promise<string>;
-  ensureDirectory(relative: string, mode?: number): Promise<void>;
+  /** Creation can be limited to the approved trailing path components. The remaining parents must exist. */
+  ensureDirectory(relative: string, mode?: number, createSuffixLength?: number): Promise<void>;
   createStage(relative: string): Promise<void>;
   stagePackage(
     relative: string,

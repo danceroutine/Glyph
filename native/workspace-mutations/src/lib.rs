@@ -57,6 +57,7 @@ enum Operation {
     EnsureDirectory {
         relative: String,
         mode: Option<u32>,
+        create_suffix_length: Option<usize>,
     },
     CreateStage {
         relative: String,
