@@ -1,4 +1,5 @@
 import { trustedHostExecutable, type HostExecutable } from '#src/shell/TrustedHostExecutable.js';
+import { ShellProgram } from '#src/shell/ShellProgram.js';
 import { chmod, mkdir, mkdtemp, realpath, writeFile, rm } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -17,7 +18,7 @@ export interface SkillExecutionRoot {
 /** Executes pinned resources outside writable workspaces, with one-shot shell approval. */
 export class SkillScriptRunner {
   constructor(
-    private readonly shells: Pick<ShellSessionManager, 'execute'>,
+    private readonly shells: Pick<ShellSessionManager, 'executeProgram'>,
     private readonly roots: readonly SkillExecutionRoot[],
     private readonly stagingRoot = tmpdir(),
   ) {}
@@ -86,21 +87,22 @@ export class SkillScriptRunner {
         await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
         await writeFile(destination, content.bytes, { flag: 'wx', mode: content.mode & 0o111 ? 0o500 : 0o400 });
       }
-      const command = `# Skill ${skill.descriptor.name}, revision ${skill.revision}\n# Interpreter: ${executable}\n# Compatibility: ${(skill.descriptor.compatibility ?? 'No requirements declared').replaceAll('\n', '\n# ')}\n${source
+      const description = `# Skill ${skill.descriptor.name}, revision ${skill.revision}\n# Interpreter: ${executable}\n# Compatibility: ${(skill.descriptor.compatibility ?? 'No requirements declared').replaceAll('\n', '\n# ')}\n${source
         .split('\n')
         .map(line => `# ${line}`)
-        .join(
-          '\n',
-        )}\n${quote(executable)} ${quote(join(directory, path))} ${args.map(argument => quote(argument)).join(' ')}`;
-      const result = await this.shells.execute(command, {
-        ownerChatId,
-        signal,
-        timeoutMs: 600000,
-        background: false,
-        workingDirectory: root.workingDirectory,
-        transient: true,
-        readOnlyPaths: [directory],
-      });
+        .join('\n')}`;
+      const result = await this.shells.executeProgram(
+        new ShellProgram(executable, [join(directory, path), ...args], description),
+        {
+          ownerChatId,
+          signal,
+          timeoutMs: 600000,
+          background: false,
+          workingDirectory: root.workingDirectory,
+          transient: true,
+          readOnlyPaths: [directory],
+        },
+      );
       // Keep the outcome before potentially truncated process output in model transcripts.
       return {
         exitCode: result.exitCode,
@@ -115,7 +117,4 @@ export class SkillScriptRunner {
       await rm(directory, { recursive: true, force: true });
     }
   }
-}
-function quote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }

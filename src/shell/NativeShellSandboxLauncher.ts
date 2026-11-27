@@ -3,6 +3,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { basename, delimiter, isAbsolute, relative, sep } from 'node:path';
 import type { ShellExecutionAuthorization } from './ShellExecutionAuthorization.ts';
 import type { ShellProcessLauncher } from './ShellProcessLauncher.ts';
+import type { ShellProgram } from './ShellProgram.ts';
 import { externalShellContentStores, type ShellContentStore } from './ShellContentStore.ts';
 import { pnpmContentStore } from './pnpmContentStore.ts';
 import { ShellSandboxProfile } from './ShellSandboxProfile.ts';
@@ -30,7 +31,12 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       spawn(command, arguments_, options_),
   ) {}
 
-  launch(command: string, workingDirectory: string, authorization: ShellExecutionAuthorization): ChildProcess {
+  launch(
+    command: string,
+    workingDirectory: string,
+    authorization: ShellExecutionAuthorization,
+    program?: ShellProgram,
+  ): ChildProcess {
     const environment = this.options.environment ?? process.env;
     const fullAccessShell =
       process.platform === 'win32' ? (environment.ComSpec ?? 'cmd.exe') : (environment.SHELL ?? '/bin/sh');
@@ -41,7 +47,7 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
     };
     if (authorization.sandboxProfile === ShellSandboxProfile.FULL_ACCESS) {
       const arguments_ = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-lc', command];
-      return this.spawnProcess(fullAccessShell, arguments_, {
+      return this.spawnProcess(program?.executable ?? fullAccessShell, program?.arguments ?? arguments_, {
         ...common,
         env: { ...environment, TERM: 'dumb', NO_COLOR: '1' },
       });
@@ -72,8 +78,7 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       '--workspace-policy',
       JSON.stringify(accessPolicy.toJSON()),
       '--',
-      shell.executable,
-      ...shell.arguments(command),
+      ...(program ? [program.executable, ...program.arguments] : [shell.executable, ...shell.arguments(command)]),
     ];
     return this.spawnProcess(this.options.binaryPath, arguments_, {
       ...common,

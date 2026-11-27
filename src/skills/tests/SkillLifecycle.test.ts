@@ -1,3 +1,4 @@
+import type { ShellProgram } from '#src/shell/ShellProgram.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -133,15 +134,18 @@ describe(SkillScriptRunner, () => {
     });
     const signal = new AbortController().signal;
     const execute = vi.fn(
-      async (command: string, options: { signal: AbortSignal; ownerChatId?: string; workingDirectory?: string }) => {
+      async (
+        program: ShellProgram,
+        options: { signal: AbortSignal; ownerChatId?: string; workingDirectory?: string },
+      ) => {
         expect(options).toMatchObject({ signal, ownerChatId: 'chat', workingDirectory: 'project' });
-        expect(command).toContain('echo pinned');
-        expect(command).not.toContain('echo changed');
+        expect(program.description).toContain('echo pinned');
+        expect(program.description).not.toContain('echo changed');
         return { terminalId: 'terminal', status: 'completed' as const, exitCode: 0, output: 'pinned' };
       },
     );
     script.fill(0);
-    const runner = new SkillScriptRunner({ execute }, [
+    const runner = new SkillScriptRunner({ executeProgram: execute }, [
       { id: 'project', label: 'Project', directory: root, workingDirectory: 'project', originIds: ['project'] },
     ]);
     expect(await runner.run(skill, 'scripts/task.sh', ["argument'with quote"], 'chat', signal)).toMatchObject({
@@ -150,14 +154,14 @@ describe(SkillScriptRunner, () => {
       workflowCompleted: false,
     });
     expect(execute).toHaveBeenCalledOnce();
-    const command = execute.mock.calls[0]![0];
-    expect(command).toContain('# Interpreter: /');
-    const matched = /sh' '([^']+task.sh)'/u.exec(command)!;
-    await expect(readFile(matched[1]!)).rejects.toMatchObject({ code: 'ENOENT' });
+    const program = execute.mock.calls[0]![0];
+    expect(program.description).toContain('# Interpreter: /');
+    expect(program.arguments[1]).toBe("argument'with quote");
+    await expect(readFile(program.arguments[0]!)).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it('rejects undeclared execution, missing resources, traversal, binary scripts, and unsupported interpreters', async () => {
     const execute = vi.fn();
-    const runner = new SkillScriptRunner({ execute }, []);
+    const runner = new SkillScriptRunner({ executeProgram: execute }, []);
     const signal = new AbortController().signal;
     const skill = aSkillPackage(aSkillDescriptor({ allowedTools: ['project.read_file'] }), 'Body', {
       'scripts/task.sh': Buffer.from('echo nope'),
@@ -180,7 +184,7 @@ it('rejects malformed paths in a pinned package before running a script and clea
   const root = await mkdtemp(join(tmpdir(), 'glyph-skill-stage-'));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   const execute = vi.fn();
-  const runner = new SkillScriptRunner({ execute }, [
+  const runner = new SkillScriptRunner({ executeProgram: execute }, [
     { id: 'project', label: 'Project', directory: root, workingDirectory: '.', originIds: ['project'] },
   ]);
   const skill = aSkillPackage(undefined, undefined, {
@@ -211,7 +215,7 @@ it('runs supported Python and Node scripts with visible compatibility guidance',
     exitCode: 127,
     output: 'Interpreter unavailable',
   }));
-  const runner = new SkillScriptRunner({ execute }, [
+  const runner = new SkillScriptRunner({ executeProgram: execute }, [
     { id: 'project', label: 'Project', directory: root, workingDirectory: '.', originIds: ['project'] },
   ]);
   const skill = aSkillPackage(aSkillDescriptor({ compatibility: 'Requires Python or Node' }), 'Body', {

@@ -33,7 +33,7 @@ it('runs secondary-root packages in their owning root using private, immutable r
   files.set('helper', { ...files.get('helper')!, mode: 0o755 });
   const skill = new SkillPackage(f.skill.descriptor, f.skill.body, files);
   const staged: string[] = [];
-  const execute = vi.fn<ShellSessionManager['execute']>(async (_command, options) => {
+  const execute = vi.fn<ShellSessionManager['executeProgram']>(async (_command, options) => {
     expect(options).toMatchObject({ workingDirectory: 'B', transient: true, background: false });
     const directory = options.readOnlyPaths![0]!;
     staged.push(directory);
@@ -44,7 +44,7 @@ it('runs secondary-root packages in their owning root using private, immutable r
     expect(await readFile(join(directory, 'helper'), 'utf8')).toContain('echo pinned');
     return { terminalId: 'shell', status: 'completed' as const, exitCode: 3, output: 'x'.repeat(17000) };
   });
-  const runner = new SkillScriptRunner({ execute }, f.roots, join(f.directory, 'private'));
+  const runner = new SkillScriptRunner({ executeProgram: execute }, f.roots, join(f.directory, 'private'));
   expect(runner.targets).toEqual([
     { id: 'A', label: 'A' },
     { id: 'B', label: 'B' },
@@ -71,14 +71,14 @@ it('requires an explicit root for multi-root user skills and rejects staging ins
     exitCode: 0,
     output: 'done',
   }));
-  const runner = new SkillScriptRunner({ execute }, f.roots, join(f.directory, 'private'));
+  const runner = new SkillScriptRunner({ executeProgram: execute }, f.roots, join(f.directory, 'private'));
   await expect(runner.run(skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('explicit root');
   await runner.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B');
-  const single = new SkillScriptRunner({ execute }, [f.roots[0]!], join(f.directory, 'private'));
+  const single = new SkillScriptRunner({ executeProgram: execute }, [f.roots[0]!], join(f.directory, 'private'));
   await single.run(skill, 'scripts/task.sh', [], 'chat', f.signal);
-  const unsafe = new SkillScriptRunner({ execute }, f.roots, join(f.roots[1]!.directory, 'staged'));
+  const unsafe = new SkillScriptRunner({ executeProgram: execute }, f.roots, join(f.roots[1]!.directory, 'staged'));
   await expect(unsafe.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B')).rejects.toThrow('outside every');
-  const same = new SkillScriptRunner({ execute }, f.roots, f.roots[1]!.directory);
+  const same = new SkillScriptRunner({ executeProgram: execute }, f.roots, f.roots[1]!.directory);
   await expect(same.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B')).rejects.toThrow('outside every');
   expect(execute).toHaveBeenCalledTimes(2);
 });
@@ -86,11 +86,11 @@ it('requires an explicit root for multi-root user skills and rejects staging ins
 it('cleans failed staging and does not record a disclosure when approval is denied', async () => {
   const f = await fixture();
   const staged: string[] = [];
-  const execute = vi.fn<ShellSessionManager['execute']>(async (_command, options) => {
+  const execute = vi.fn<ShellSessionManager['executeProgram']>(async (_command, options) => {
     staged.push(options.readOnlyPaths![0]!);
     throw new Error('Denied');
   });
-  const runner = new SkillScriptRunner({ execute }, f.roots, join(f.directory, 'private'));
+  const runner = new SkillScriptRunner({ executeProgram: execute }, f.roots, join(f.directory, 'private'));
   await expect(runner.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('Denied');
   expect(f.skill.resources()).toEqual([]);
   await expect(stat(staged[0]!)).rejects.toMatchObject({ code: 'ENOENT' });

@@ -4,10 +4,43 @@ import { delimiter } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
 import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
+import { ShellProgram } from '#src/shell/ShellProgram.js';
 
 vi.mock('node:fs', { spy: true });
 
 describe(NativeShellSandboxLauncher, () => {
+  it.each([ShellSandboxProfile.READ_ONLY, ShellSandboxProfile.FULL_ACCESS])(
+    'launches the exact interpreter arguments without the configured shell in %s',
+    sandboxProfile => {
+      const spawn = vi.fn<(command: string, args: readonly string[], options: SpawnOptions) => ChildProcess>(
+        () => ({}) as ChildProcess,
+      );
+      const launcher = new NativeShellSandboxLauncher(
+        {
+          binaryPath: '/helper',
+          workspaceRoots: ['/project'],
+          stateDirectory: '/state',
+          environment: { SHELL: '/usr/bin/fish' },
+        },
+        spawn,
+      );
+      const program = new ShellProgram(
+        '/usr/bin/node',
+        ['/pinned/task.js', 'two\\\\slashes', 'trailing\\', '', "quote'", 'line\nbreak'],
+        'Pinned script',
+      );
+      launcher.launch(program.display, '/project', { sandboxProfile }, program);
+      const [executable, args] = spawn.mock.calls[0]!;
+      if (sandboxProfile === ShellSandboxProfile.FULL_ACCESS) {
+        expect(executable).toBe(program.executable);
+        expect(args).toEqual(program.arguments);
+      } else {
+        expect(executable).toBe('/helper');
+        expect(args.slice(args.indexOf('--') + 1)).toEqual([program.executable, ...program.arguments]);
+      }
+      expect(args).not.toContain('-c');
+    },
+  );
   describe(NativeShellSandboxLauncher.prototype.launch, () => {
     it.each([true, false])(
       'routes restricted commands through the helper with a sanitized environment, dynamic private paths: %s',

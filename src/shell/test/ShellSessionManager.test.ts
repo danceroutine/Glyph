@@ -9,6 +9,7 @@ import type { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.j
 import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
 import { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
+import { ShellProgram } from '#src/shell/ShellProgram.js';
 import type { ShellWorkingDirectoryResolver } from '#src/shell/ShellWorkingDirectoryResolver.js';
 
 const managers: ShellSessionManager[] = [];
@@ -20,6 +21,24 @@ afterEach(async () => {
 });
 
 describe(ShellSessionManager, () => {
+  it('preserves direct argument bytes and requires one-shot approval even when the caller requests reuse', async () => {
+    const { manager, authorize } = await fixture();
+    const args = ['two\\\\slashes', 'trailing\\', '', "quote'", 'line\nbreak', '$(false)'];
+    const program = new ShellProgram(
+      process.execPath,
+      ['-e', 'process.stdout.write(JSON.stringify(process.argv.slice(1)))', ...args],
+      'Read argument bytes',
+    );
+    const result = await manager.executeProgram(program, { signal: new AbortController().signal, transient: false });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.output)).toEqual(args);
+    expect(authorize).toHaveBeenCalledWith(
+      program.display,
+      expect.any(String),
+      expect.any(AbortSignal),
+      expect.objectContaining({ transient: true }),
+    );
+  });
   describe('command lifecycle', () => {
     it('leaves the wake subscription unchanged when full-access input is rejected', async () => {
       const { manager } = await fixture(ShellSandboxProfile.FULL_ACCESS);

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ShellProgram } from './ShellProgram.ts';
 import type { ChildProcess } from 'node:child_process';
 import { stripVTControlCharacters } from 'node:util';
 import { TerminalControlFilter } from './TerminalControlFilter.ts';
@@ -117,74 +118,12 @@ export class ShellSessionManager implements ShellSessionRegistry {
   }
 
   async execute(command: string, options: ExecuteShellCommandOptions): Promise<ShellCommandResult> {
-    options.signal.throwIfAborted();
-    this.assertAvailable();
-    const ownerChatId = options.ownerChatId ?? this.ownerChatId;
-    const existing =
-      options.terminalId !== undefined && options.terminalId !== ''
-        ? this.requireTerminal(options.terminalId, ownerChatId)
-        : undefined;
-    if (!existing && this.terminals.size >= this.maxSessions) {
-      throw new Error(`At most ${this.maxSessions} shell terminals may be active.`);
-    }
-    const workingDirectory = existing
-      ? existing.snapshot.workingDirectory
-      : await this.workingDirectories.resolve(options.workingDirectory);
-    const authorization = await this.authorizer.authorize(command, workingDirectory, options.signal, {
-      background: options.background === true,
-      existingTerminal: existing !== undefined,
-      ...(options.transient ? { transient: true } : {}),
-    });
-    options.signal.throwIfAborted();
-    this.assertAvailable();
-    if (existing && (this.terminals.get(existing.snapshot.id) !== existing || this.closing.has(existing.snapshot.id))) {
-      throw new Error('The shell terminal was closed while permission was pending.');
-    }
-    if (!existing && this.terminals.size >= this.maxSessions) {
-      throw new Error(`At most ${this.maxSessions} shell terminals may be active.`);
-    }
-    const terminal = existing ?? this.createTerminal(workingDirectory, options.background === true, ownerChatId);
-    let completion: Promise<{ output: string; exitCode: number }>;
-    try {
-      // Configuration can fail before launch too; it must release a newly
-      // allocated terminal just like a synchronous process-launch failure.
-      completion = terminal.execute({
-        command,
-        authorization: options.readOnlyPaths
-          ? { ...authorization, readOnlyPaths: options.readOnlyPaths }
-          : authorization,
-        wakeOn: options.wakeOn,
-        executionId: options.executionId,
-      });
-    } catch (error) {
-      if (!existing) {
-        this.terminals.delete(terminal.snapshot.id);
-        this.changed();
-      }
-      throw error;
-    }
-    if (options.background === true) {
-      void completion.catch(() => {
-        // The terminal snapshot reports process failure; no caller is awaiting a background command.
-      });
-      terminal.setBackground(true);
-      this.changed();
-      return {
-        terminalId: terminal.snapshot.id,
-        workingDirectory,
-        status: 'backgrounded',
-        output: terminal.snapshot.outputTail,
-      };
-    }
-    try {
-      const result = await waitForCommand(completion, options.signal, options.timeoutMs);
-      return { terminalId: terminal.snapshot.id, workingDirectory, status: 'completed', ...result };
-    } catch (error) {
-      if (existing) await terminal.terminate();
-      throw error;
-    } finally {
-      if (!existing) await this.close(terminal.snapshot.id, ownerChatId);
-    }
+    return this.executeCommand(command, options);
+  }
+
+  /** Direct programs always receive a fresh one-shot decision over their exact argument vector. */
+  async executeProgram(program: ShellProgram, options: ExecuteShellCommandOptions): Promise<ShellCommandResult> {
+    return this.executeCommand(program.display, { ...options, transient: true }, program);
   }
 
   async writeInput(options: WriteShellInputOptions): Promise<void> {
@@ -224,6 +163,82 @@ export class ShellSessionManager implements ShellSessionRegistry {
     await Promise.all(terminals.map(terminal => terminal.terminate()));
     this.changeListeners.clear();
     this.wakeListeners.clear();
+  }
+
+  private async executeCommand(
+    command: string,
+    options: ExecuteShellCommandOptions,
+    program?: ShellProgram,
+  ): Promise<ShellCommandResult> {
+    options.signal.throwIfAborted();
+    this.assertAvailable();
+    const ownerChatId = options.ownerChatId ?? this.ownerChatId;
+    const existing =
+      options.terminalId !== undefined && options.terminalId !== ''
+        ? this.requireTerminal(options.terminalId, ownerChatId)
+        : undefined;
+    if (!existing && this.terminals.size >= this.maxSessions) {
+      throw new Error(`At most ${this.maxSessions} shell terminals may be active.`);
+    }
+    const workingDirectory = existing
+      ? existing.snapshot.workingDirectory
+      : await this.workingDirectories.resolve(options.workingDirectory);
+    const authorization = await this.authorizer.authorize(command, workingDirectory, options.signal, {
+      background: options.background === true,
+      existingTerminal: existing !== undefined,
+      ...(options.transient ? { transient: true } : {}),
+    });
+    options.signal.throwIfAborted();
+    this.assertAvailable();
+    if (existing && (this.terminals.get(existing.snapshot.id) !== existing || this.closing.has(existing.snapshot.id))) {
+      throw new Error('The shell terminal was closed while permission was pending.');
+    }
+    if (!existing && this.terminals.size >= this.maxSessions) {
+      throw new Error(`At most ${this.maxSessions} shell terminals may be active.`);
+    }
+    const terminal = existing ?? this.createTerminal(workingDirectory, options.background === true, ownerChatId);
+    let completion: Promise<{ output: string; exitCode: number }>;
+    try {
+      // Configuration can fail before launch too; it must release a newly
+      // allocated terminal just like a synchronous process-launch failure.
+      completion = terminal.execute({
+        command,
+        program,
+        authorization: options.readOnlyPaths
+          ? { ...authorization, readOnlyPaths: options.readOnlyPaths }
+          : authorization,
+        wakeOn: options.wakeOn,
+        executionId: options.executionId,
+      });
+    } catch (error) {
+      if (!existing) {
+        this.terminals.delete(terminal.snapshot.id);
+        this.changed();
+      }
+      throw error;
+    }
+    if (options.background === true) {
+      void completion.catch(() => {
+        // The terminal snapshot reports process failure; no caller is awaiting a background command.
+      });
+      terminal.setBackground(true);
+      this.changed();
+      return {
+        terminalId: terminal.snapshot.id,
+        workingDirectory,
+        status: 'backgrounded',
+        output: terminal.snapshot.outputTail,
+      };
+    }
+    try {
+      const result = await waitForCommand(completion, options.signal, options.timeoutMs);
+      return { terminalId: terminal.snapshot.id, workingDirectory, status: 'completed', ...result };
+    } catch (error) {
+      if (existing) await terminal.terminate();
+      throw error;
+    } finally {
+      if (!existing) await this.close(terminal.snapshot.id, ownerChatId);
+    }
   }
 
   private createTerminal(workingDirectory: string, background: boolean, ownerChatId?: string): ManagedShellSession {
@@ -331,11 +346,13 @@ class ManagedShellSession {
 
   execute({
     command,
+    program,
     authorization,
     wakeOn,
     executionId,
   }: {
     readonly command: string;
+    readonly program?: ShellProgram | undefined;
     readonly executionId?: string | undefined;
     readonly authorization: ShellExecutionAuthorization;
     readonly wakeOn: string | undefined;
@@ -356,7 +373,9 @@ class ManagedShellSession {
     this.exitCode = undefined;
     let child: ChildProcess;
     try {
-      child = this.options.processLauncher.launch(normalized, this.options.workingDirectory, authorization);
+      child = program
+        ? this.options.processLauncher.launch(normalized, this.options.workingDirectory, authorization, program)
+        : this.options.processLauncher.launch(normalized, this.options.workingDirectory, authorization);
     } catch (error) {
       this.status = ShellSessionStatus.IDLE;
       this.options.changed();
