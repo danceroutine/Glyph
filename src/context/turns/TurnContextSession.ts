@@ -252,17 +252,17 @@ export class TurnContextSession {
     const offered: AgentInstructionCandidate[] = [];
     for (const candidate of candidates) {
       if (this.advertisedCandidates.size + offered.length >= 50) break;
-      const size = Buffer.byteLength(JSON.stringify(candidate)) + (offered.length ? 1 : ',"candidates":[]'.length);
+      const size = Buffer.byteLength(JSON.stringify(candidate)) + (offered.length > 0 ? 1 : ',"candidates":[]'.length);
       if (size > this.remainingCandidateBytes || bytes + size > this.remainingBytes) continue;
       this.remainingCandidateBytes -= size;
       bytes += size;
       offered.push(candidate);
     }
-    if (!pending.length && !offered.length) return undefined;
+    if (pending.length === 0 && offered.length === 0) return undefined;
     this.remainingBytes -= bytes;
     for (const [source, activation] of pending) this.activated.set(source.id, activation);
     for (const candidate of offered) this.advertisedCandidates.set(candidate.id, candidate);
-    return offered.length ? { ...envelope, candidates: offered } : envelope;
+    return offered.length > 0 ? { ...envelope, candidates: offered } : envelope;
   }
 }
 

@@ -158,12 +158,41 @@ describe(TurnContextCoordinator, () => {
         turn
           .initialEnvelope()
           .sources.map(item => item.id)
-          .sort(),
+          .toSorted(),
       ).toEqual(normalizesUnicode ? ['glob', 'nested'] : []);
       expect(coordinator.disclosePaths('unicode', [composed + '/file.txt'])?.sources.length).toBe(
         normalizesUnicode ? undefined : 2,
       );
     }
+  });
+
+  it('uses a scoped rule’s owning volume when another attached root routes the read', async () => {
+    const routes = new WorkspaceSourceRoutes([
+      { name: 'outer', path: '/workspace' },
+      { name: 'mount', path: '/workspace/mount', normalizesUnicode: true },
+    ]);
+    const paths = new InstructionPaths(
+      new Map([
+        ['outer', true],
+        ['mount', true],
+      ]),
+      routes,
+    );
+    const scoped = source(
+      'scoped',
+      AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      'mount',
+      AgentInstructionActivationMode.FILE_PATTERN,
+      ['café.txt'],
+    );
+    const coordinator = new TurnContextCoordinator(
+      new AgentInstructionCatalog([{ discover: async () => [scoped] }], paths),
+    );
+    const turn = await coordinator.beginTurn({
+      turnId: 'mounted',
+      attachmentPaths: ['outer/mount/' + 'café.txt'.normalize('NFD')],
+    });
+    expect(turn.initialEnvelope().sources.map(item => item.id)).toEqual(['scoped']);
   });
 
   it('starts with AGENTS.md from every attached workspace root and defers other scoped guidance', async () => {
