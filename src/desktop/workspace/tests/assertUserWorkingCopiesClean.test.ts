@@ -9,6 +9,7 @@ import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEdit
 import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.js';
 
 const owner = { windowId: 'owner', workspaceId: 'workspace', profileId: 'one' };
+const namePolicy = { caseSensitive: true, normalizesUnicode: true, foldsUnicode: false };
 const other = { identity: { ...owner, windowId: 'peer' }, connectionId: 'peer-port' };
 it('requires the matching affirmative response from every trusted editor and rechecks membership', async () => {
   const peers = vi.fn(() => [other]);
@@ -19,12 +20,13 @@ it('requires the matching affirmative response from every trusted editor and rec
         kind: 'rule',
         name: 'x.mdc',
         caseSensitive: true,
+        namePolicy,
       });
       return { ok: true, operationId: 'operationId' in input ? input.operationId : '', workingCopiesClean: true };
     },
   );
   const check = () =>
-    assertUserWorkingCopiesClean({ request, trustedUserEditors: peers }, owner, 'rule', 'x.mdc', true);
+    assertUserWorkingCopiesClean({ request, trustedUserEditors: peers }, owner, 'rule', 'x.mdc', namePolicy);
   await check();
   expect(request.mock.calls.map(([identity]) => identity)).toEqual([owner, other.identity]);
   for (const reply of [
@@ -61,7 +63,7 @@ it('rechecks the configured profile while dirty-editor requests are in flight', 
       owner,
       'rule',
       'one.mdc',
-      true,
+      namePolicy,
       join(a, 'rules', 'one.mdc'),
       profile,
     );

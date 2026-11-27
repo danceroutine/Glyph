@@ -242,6 +242,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               path: route,
               physicalUri: pathToFileURL(join(disk.root, request.path)).toString(),
               caseSensitive: disk.caseSensitive,
+              namePolicy: namePolicies[i]!,
             });
             if (!response.ok) throw new Error(response.error?.message ?? 'The editor catalog snapshot is unavailable.');
             if (response.snapshot && response.snapshot.path !== route)
@@ -304,12 +305,19 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         return { ...listed, files: routes.uniqueFiles(listed.files) };
       };
       const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
+      const userNamePolicy = await RustWorkspacePathIndex.filesystemNamePolicy(
+        indexExecutable,
+        filesystemPolicyDirectory(userRuleRoot),
+      ).catch(() => undefined);
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
-        caseSensitive: await RustWorkspacePathIndex.filesystemCaseSensitive(
-          indexExecutable,
-          filesystemPolicyDirectory(userRuleRoot),
-        ).catch(() => workspaceCaseSensitivity(userRuleRoot)),
+        caseSensitive: userNamePolicy?.caseSensitive ?? workspaceCaseSensitivity(userRuleRoot),
       });
+      // A failed probe must still protect edits made through insensitive filename aliases.
+      const userWorkingCopyPolicy = userNamePolicy ?? {
+        caseSensitive: false,
+        normalizesUnicode: true,
+        foldsUnicode: true,
+      };
       // Agent-facing sources cannot acquire the host's preference and credential authority.
       const userInstructionPolicy = new WorkspaceAccessPolicy(
         {},
@@ -464,7 +472,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             input.identity,
             'rule',
             filename,
-            userRuleStore.caseSensitive,
+            userWorkingCopyPolicy,
             join(userRuleRoot, 'rules', filename),
             this.userDirectory,
           ),

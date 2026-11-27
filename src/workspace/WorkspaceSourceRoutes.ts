@@ -1,3 +1,4 @@
+import { normalizeVolumeName } from './FilesystemNamePolicy.ts';
 import fs, { realpathSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
@@ -151,15 +152,4 @@ export class WorkspaceSourceRoutes {
 
 function contained(path: string) {
   return path !== '..' && !path.startsWith('..' + sep) && !isAbsolute(path);
-}
-
-function normalizeVolumeName(value: string, policy?: { normalizesUnicode?: boolean; foldsUnicode?: boolean }): string {
-  if (!policy?.normalizesUnicode) return value;
-  const normalized = value.normalize('NFC');
-  if (!policy.foldsUnicode) return normalized;
-  // Map one scalar at a time so Greek sigma is independent of its word position.
-  // Default Unicode folding preserves dotless i and expands sharp s and ligatures.
-  return Array.from(normalized, char => (char === 'ı' ? char : char.toLowerCase().toUpperCase().toLowerCase()))
-    .join('')
-    .normalize('NFC');
 }
