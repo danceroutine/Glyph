@@ -1826,7 +1826,11 @@ function useFilesystemIndex(): void {
     options,
   ) {
     const configuration = captured.indexOptions[captured.indexes.indexOf(this)]!;
-    return new FileSystemWorkspaceTextStore(configuration.root).list(options.limit, pattern);
+    const store = new FileSystemWorkspaceTextStore(configuration.root);
+    if (!options.rootFilesOnly) return store.list(options.limit, pattern);
+    const listed = await store.list(10_000, pattern);
+    const direct = listed.files.filter(path => !path.includes('/'));
+    return { files: direct.slice(0, options.limit), truncated: direct.length > options.limit };
   });
 }
 

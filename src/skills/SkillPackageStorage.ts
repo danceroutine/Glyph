@@ -1,10 +1,8 @@
-import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
-import Database from 'better-sqlite3';
+import { withPrivateFileLock } from '#src/workspace/withPrivateFileLock.js';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { link, lstat, mkdir, open, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { setTimeout } from 'node:timers/promises';
 
 /** Separate SQLite connections acquire a process-owned lock that the OS releases on exit. */
 export async function withSkillLock<T>(
@@ -14,29 +12,7 @@ export async function withSkillLock<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const staging = await privateSkillDirectory(root);
-  const path = join(staging, name + '.sqlite');
-  const existing = await optionalStat(path);
-  if (existing && (!existing.isFile() || existing.nlink !== 1 || existing.size > 0))
-    throw new Error('Invalid skill lock file.');
-  for (const suffix of ['-journal', '-shm', '-wal'])
-    if (await optionalStat(path + suffix)) throw new Error('Invalid skill lock sidecar.');
-  const db = new Database(path, { timeout: 0 });
-  try {
-    const deadline = Date.now() + 30000;
-    for (;;) {
-      signal?.throwIfAborted();
-      try {
-        db.exec('PRAGMA journal_mode=MEMORY; BEGIN IMMEDIATE');
-        break;
-      } catch (error) {
-        if (errorCodeOf(error) !== 'SQLITE_BUSY' || Date.now() >= deadline) throw error;
-        await setTimeout(20, undefined, { signal });
-      }
-    }
-    return await work();
-  } finally {
-    db.close();
-  }
+  return withPrivateFileLock(join(staging, name + '.sqlite'), work, signal);
 }
 
 export async function privateSkillDirectory(root: string): Promise<string> {

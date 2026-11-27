@@ -34,15 +34,15 @@ it('rejects fake and linked lock or journal files and unexpected SQLite sidecars
   const lock = join(staging, 'destination.sqlite');
   const using = () => withSkillLock(root, 'destination', async () => {});
   await writeFile(lock, 'other contents');
-  await expect(using()).rejects.toThrow('Invalid skill lock file');
+  await expect(using()).rejects.toThrow('Invalid lock file');
   await rm(lock);
   await mkdir(lock);
-  await expect(using()).rejects.toThrow('Invalid skill lock file');
+  await expect(using()).rejects.toThrow('Invalid lock file');
   await rm(lock, { recursive: true });
   const other = join(root, 'empty');
   await writeFile(other, '');
   await link(other, lock);
-  await expect(using()).rejects.toThrow('Invalid skill lock file');
+  await expect(using()).rejects.toThrow('Invalid lock file');
   await rm(lock);
   await writeFile(lock + '-wal', '');
   await expect(using()).rejects.toThrow('sidecar');
