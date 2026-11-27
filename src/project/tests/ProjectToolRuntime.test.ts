@@ -102,7 +102,7 @@ describe(ProjectToolRuntime, () => {
       expect(stage).not.toHaveBeenCalled();
       await runtime.execute(ProjectToolName.PROPOSE_PATCH, 'patch', undefined, context);
       expect(stage).toHaveBeenCalledOnce();
-      expect(disclosePaths).toHaveBeenCalledWith('turn-1', ['src/new.ts']);
+      expect(disclosePaths).toHaveBeenCalledWith('turn-1', ['src/new.ts'], undefined);
     });
 
     it('reports an unknown tool as a failed tool call', async () => {
