@@ -28,6 +28,13 @@ the manager checks the source, destination and peer editors again. Ordinary
 project edits consult `SkillProjectMutationPolicy` to reserve this workflow for
 managed paths.
 
+A desktop command inherits a signal from the window's current workspace attachment.
+The desktop host grants access after checking ownership and trust. Its
+`WindowCommandAuthority` revokes outstanding commands on disconnect, detach,
+trust loss, or a change of roots. Reconnecting issues a fresh signal. Carry the
+original signal through approvals and lock waits, then check it alongside the
+resource policy before submitting the write or returning data to the window.
+
 ## Composing a host
 
 Select the consumer's policy through `WorkspaceContentAccess` at the CLI or

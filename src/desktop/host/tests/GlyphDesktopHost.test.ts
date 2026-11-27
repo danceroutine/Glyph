@@ -156,6 +156,36 @@ describe(GlyphDesktopHost, () => {
     },
   );
 
+  it('withdraws queued commands when trust changes while an earlier attach is collecting a snapshot', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    fixture.connect('owner', owner);
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+    await fixture.receive('owner', owner, 'attach', attach);
+    await fixture.receive('owner', owner, 'list', { type: GlyphWorkbenchCommandType.LIST_CHATS });
+    const context = fixture.runtime.handle.mock.lastCall![1]!;
+    let finish!: (value: GlyphRuntimeSnapshot) => void;
+    vi.spyOn(fixture.runtime, 'snapshot').mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          finish = resolve;
+        }),
+    );
+    const first = fixture.receive('owner', owner, 'refresh', attach);
+    const second = fixture.receive('owner', owner, 'downgrade', { ...attach, trusted: false });
+    expect(context.signal.aborted).toBe(true);
+    expect(() => {
+      context.emit({ type: GlyphHostEventType.HOST_STATUS, status: GlyphHostStatus.READY });
+    }).toThrow();
+    finish({ accounts: [], models: [], chats: [], proposals: [], runs: [] });
+    await Promise.all([first, second]);
+    expect(
+      fixture
+        .events('owner')
+        .find(entry => entry.event.type === GlyphHostEventType.ERROR && entry.event.requestId === 'refresh'),
+    ).toBeDefined();
+  });
+
   it('returns rule identity lookups only to their authorized attached window', async () => {
     const fixture = new HostFixture();
     const command = {

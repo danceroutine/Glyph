@@ -14,6 +14,8 @@ import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleI
 import { listUserRuleFiles } from '#src/instructions/rules/listUserRuleFiles.js';
 import { UserAgentRuleManager } from '#src/instructions/rules/UserAgentRuleManager.js';
 
+const commandSignal = new AbortController().signal;
+
 describe('Native instruction discovery', () => {
   it('consumes original spellings returned by a case-insensitive native index', async () => {
     const root = await mkdtemp(join(tmpdir(), 'glyph-rules-casing-'));
@@ -53,7 +55,9 @@ describe('Native instruction discovery', () => {
       const files = { refresh: vi.fn(), assertReplaceableMetadata: vi.fn() };
       const metadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
       const manager = new UserAgentRuleManager(fixtureWorkspace(root), catalog, files, metadata);
-      await expect(manager.create('Example', 'model', 'Local fixture')).rejects.toThrow('access controls');
+      await expect(manager.create(commandSignal, 'Example', 'model', 'Local fixture')).rejects.toThrow(
+        'access controls',
+      );
       expect(await readdir(rules)).toEqual([]);
       expect(catalog.refresh).not.toHaveBeenCalled();
       expect(files.refresh).not.toHaveBeenCalled();
@@ -109,20 +113,22 @@ describe('Native instruction discovery', () => {
       index,
       new NativeFilesystemMetadata(resolve('target/release/glyph-context-index')),
     );
-    await manager.create('Style', 'manual');
+    await manager.create(commandSignal, 'Style', 'manual');
     expect(catalog.sources.map(source => source.path)).toContain('~/.glyph/rules/style.mdc');
     const created = await workspace.read('rules/style.mdc');
-    await manager.setEnabled('rules/style.mdc', created.revision, false);
+    await manager.setEnabled(commandSignal, 'rules/style.mdc', created.revision, false);
     expect(catalog.sources.find(source => source.path === '~/.glyph/rules/style.mdc')?.enabled).toBe(false);
     const disabled = await workspace.read('rules/style.mdc');
     if (process.platform === 'darwin') {
       const fork = join(rulesRoot, 'style.mdc/..namedfork/rsrc');
       await writeFile(fork, 'alternate rule content');
-      await expect(manager.setEnabled('rules/style.mdc', disabled.revision, true)).rejects.toThrow('extended data');
+      await expect(manager.setEnabled(commandSignal, 'rules/style.mdc', disabled.revision, true)).rejects.toThrow(
+        'extended data',
+      );
       expect(await readFile(fork, 'utf8')).toBe('alternate rule content');
       expect((await workspace.read('rules/style.mdc')).revision).toBe(disabled.revision);
     }
-    await manager.remove('rules/style.mdc', disabled.revision);
+    await manager.remove(commandSignal, 'rules/style.mdc', disabled.revision);
     expect(catalog.sources.map(source => source.path)).toEqual(['~/.glyph/rules/existing.mdc']);
     expect(refresh).toHaveBeenCalledTimes(3);
     await catalog.refresh();

@@ -9,6 +9,8 @@ bytes, changes a file, or launches a process. Choose the existing port for that
 operation. Inject it at construction so background work and retries inherit the
 same host boundary.
 
+- For desktop commands, carry the host-issued attachment signal through queues, approvals,
+  and lock waits. Recheck it at the write or disclosure alongside the resource policy.
 - For agent reads, edits and discovery, use the injected workspace store or index.
   Keep the workspace-relative name through routing. Let the adapter bind it to
   the physical object at use. Route each path of a rename through its owning root.
