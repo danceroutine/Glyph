@@ -30,7 +30,11 @@ export class AgentInstructionSet {
     private readonly paths = defaultInstructionPaths,
   ) {
     paths.prepare(
-      sources.flatMap(({ scope, projectAlias }) => projectAlias ? [scope, projectAlias.scope, ...(projectAlias.additionalScopes ?? []).map(location => location.scope)] : [scope]),
+      sources.flatMap(({ scope, projectAlias }) =>
+        projectAlias
+          ? [scope, projectAlias.scope, ...(projectAlias.additionalScopes ?? []).map(location => location.scope)]
+          : [scope],
+      ),
     );
     const scopes = new Map<string, string>();
     const scopeKey = (scope: string) => {
