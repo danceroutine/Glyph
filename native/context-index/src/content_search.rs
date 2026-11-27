@@ -244,10 +244,12 @@ impl ContentSearchContext {
     ) -> Result<ContentSearchResult, ContentSearchError> {
         let result = self.search_files(params, cancelled, self)?;
         self.access
-            .topology_current()
+            .current_at_completion()
             .then_some(result)
             .ok_or_else(|| {
-                ContentSearchError::Internal("Workspace mounts changed during search.".into())
+                ContentSearchError::Internal(
+                    "Workspace access boundaries changed during search.".into(),
+                )
             })
     }
 

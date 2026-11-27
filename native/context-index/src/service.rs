@@ -661,7 +661,7 @@ impl ContextIndexService {
             .ok_or_else(ServiceError::not_initialized)?;
         let mut directories = Vec::new();
         if !index.policy.exclude_root {
-            let mut walk = workspace_walk(&index.root, &index.policy)?;
+            let (mut walk, physical) = workspace_walk(&index.root, &index.policy)?;
             for (offset, entry) in walk.max_depth(Some(33)).build().enumerate() {
                 let entry = entry.map_err(|error| ServiceError::internal(error.to_string()))?;
                 if let Some(error) = entry.error() {
@@ -686,6 +686,7 @@ impl ContextIndexService {
                     directories.push(name);
                 }
             }
+            stable_result(&physical, ())?;
         }
         directories.sort();
         Ok(directories)
@@ -1148,17 +1149,21 @@ fn private_alias(path: &Path) -> bool {
 
 /// Share ignore-file, directory exclusion, and link semantics with the resident catalog.
 fn stable_result<T>(physical: &WorkspacePaths, result: T) -> Result<T, ServiceError> {
-    if physical.topology_current() {
+    if physical.current_at_completion() {
         Ok(result)
     } else {
         Err(ServiceError::internal(
-            "Workspace mounts changed during lookup.",
+            "Workspace access boundaries changed during lookup.",
         ))
     }
 }
 
-fn workspace_walk(root: &Path, policy: &IndexPolicy) -> Result<WalkBuilder, ServiceError> {
+fn workspace_walk(
+    root: &Path,
+    policy: &IndexPolicy,
+) -> Result<(WalkBuilder, WorkspacePaths), ServiceError> {
     let physical = policy.physical()?;
+    let walk_policy = physical.clone();
     let ignored: HashSet<_> = policy.ignored_directories.iter().cloned().collect();
     let excluded_paths = policy.excluded_paths.clone();
     let filter_root = root.to_path_buf();
@@ -1173,7 +1178,7 @@ fn workspace_walk(root: &Path, policy: &IndexPolicy) -> Result<WalkBuilder, Serv
         .ignore(policy.respect_git_ignore)
         .parents(policy.respect_git_ignore)
         .filter_entry(move |entry| {
-            if physical.excludes(entry.path()) {
+            if walk_policy.excludes(entry.path()) {
                 return false;
             }
             let is_directory = entry.file_type().is_some_and(|kind| kind.is_dir());
@@ -1203,7 +1208,7 @@ fn workspace_walk(root: &Path, policy: &IndexPolicy) -> Result<WalkBuilder, Serv
             })
         });
 
-    Ok(builder)
+    Ok((builder, physical))
 }
 
 /// Read only direct children, independently of watcher lag, warm caches and nested index limits.
@@ -1219,7 +1224,7 @@ fn glob_root_files(
     let mut files = BTreeSet::new();
     let mut truncated = false;
     if !initialized.policy.exclude_root {
-        let mut walk = workspace_walk(&initialized.root, &initialized.policy)?;
+        let (mut walk, physical) = workspace_walk(&initialized.root, &initialized.policy)?;
         for entry in walk.max_depth(Some(1)).build() {
             let entry = entry.map_err(|error| ServiceError::internal(error.to_string()))?;
             if let Some(error) = entry.error() {
@@ -1246,6 +1251,7 @@ fn glob_root_files(
                 }
             }
         }
+        stable_result(&physical, ())?;
     }
     Ok(GlobResult {
         files: files.into_iter().collect(),
@@ -1265,7 +1271,7 @@ fn scan_paths(
             truncated: false,
         });
     }
-    let builder = workspace_walk(root, policy)?;
+    let (builder, physical) = workspace_walk(root, policy)?;
 
     // WalkParallel::run joins its visitors before returning. Borrow the local
     // accumulator so no shared owner or fallible ownership recovery is needed.
@@ -1328,10 +1334,13 @@ fn scan_paths(
         .expect("scan accumulator cannot be poisoned");
     paths.sort_unstable();
     paths.dedup();
-    Ok(ScanResult {
-        paths,
-        truncated: truncated.load(Ordering::Acquire),
-    })
+    stable_result(
+        &physical,
+        ScanResult {
+            paths,
+            truncated: truncated.load(Ordering::Acquire),
+        },
+    )
 }
 
 fn normalize_relative_path(root: &Path, path: &Path) -> Option<String> {

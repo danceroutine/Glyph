@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 pub struct WorkspacePaths {
     private: BTreeSet<PathBuf>,
     managed: Option<BTreeSet<PathBuf>>,
+    /// Preserve the host's authority spelling as well as its current physical destination.
+    configured: Vec<(PathBuf, PathBuf)>,
     #[cfg(target_os = "linux")]
     mounts: Option<std::sync::Arc<fs::File>>,
 }
@@ -16,8 +18,8 @@ fn canonical_location(path: &Path) -> io::Result<PathBuf> {
     match path.canonicalize() {
         Ok(path) => Ok(path),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let parent = path.parent().ok_or(error)?;
-            Ok(canonical_location(parent)?.join(path.file_name().expect("absolute child")))
+            let (parent, name) = path.parent().zip(path.file_name()).ok_or(error)?;
+            Ok(canonical_location(parent)?.join(name))
         }
         Err(error) => Err(error),
     }
@@ -158,12 +160,17 @@ impl WorkspacePaths {
                 "Workspace access boundaries must be absolute.",
             ));
         }
+        let configured = private
+            .iter()
+            .map(|path| Ok((path.clone(), canonical_location(path)?)))
+            .collect::<io::Result<Vec<_>>>()?;
         #[allow(unused_mut)]
         let mut policy = Self {
-            private: private
+            private: configured
                 .iter()
-                .map(|path| canonical_location(path))
-                .collect::<io::Result<_>>()?,
+                .map(|(_, target)| target.clone())
+                .collect(),
+            configured,
             managed: managed
                 .map(|paths| {
                     paths
@@ -223,6 +230,15 @@ impl WorkspacePaths {
         true
     }
 
+    /// A policy input may have been redirected during a request even without changing mounts.
+    pub fn current_at_completion(&self) -> bool {
+        self.topology_current()
+            && self
+                .configured
+                .iter()
+                .all(|(path, target)| canonical_location(path).is_ok_and(|now| &now == target))
+    }
+
     pub fn excludes(&self, path: &Path) -> bool {
         path.ancestors().any(private_name)
             || self.private.iter().any(|p| contains(p, path))
@@ -255,7 +271,11 @@ impl WorkspacePaths {
                 return Err(denied());
             }
         }
-        Ok(())
+        if self.current_at_completion() {
+            Ok(())
+        } else {
+            Err(denied())
+        }
     }
 }
 
