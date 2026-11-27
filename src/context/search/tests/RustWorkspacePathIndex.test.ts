@@ -385,8 +385,6 @@ describe(RustWorkspacePathIndex, () => {
               'dist',
               'node_modules',
               'target',
-              '.skill-staging',
-              '.glyph-skill-run',
             ],
             excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
             sensitiveFileNames: ['.git-credentials', '.netrc', '.npmrc', '.pypirc'],

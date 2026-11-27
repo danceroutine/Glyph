@@ -1,19 +1,25 @@
-import { posix, resolve, sep } from 'node:path';
+import { lstatSync } from 'node:fs';
+import { basename, dirname, join, posix, resolve, sep } from 'node:path';
+import { normalizeVolumeName } from '../FilesystemNamePolicy.ts';
+import { workspaceCaseSensitivity } from '../workspaceCaseSensitivity.ts';
 import { z } from 'zod';
 import type { WorkspaceAccessPolicyOptions } from './WorkspaceAccessPolicyOptions.ts';
 
 export const skillExecutionDirectory = '.glyph-skill-run';
 const privateDirectories = ['.skill-staging', skillExecutionDirectory];
-// Unicode simple case folding includes APFS aliases such as long s for either reserved directory.
-const foldedPrivateDirectory = new RegExp(
-  '^(?:' + privateDirectories.map(name => name.replaceAll('.', '\\.')).join('|') + ')$',
-  'iu',
-);
 
-function isPrivateDirectory(name: string, caseSensitive: boolean): boolean {
-  return caseSensitive
-    ? privateDirectories.includes(name)
-    : foldedPrivateDirectory.test(name.replaceAll(/[ﬅﬆ]/gu, 'st'));
+function isPrivateDirectory(name: string, caseSensitive: boolean, path?: string, physicalGuard = false): boolean {
+  if (privateDirectories.includes(name)) return true;
+  // Only possible aliases require a filesystem lookup. Ordinary components stay on the fast path.
+  if (!name.startsWith('.')) return false;
+  const reserved = normalizeVolumeName(name, { normalizesUnicode: true, foldsUnicode: true });
+  if (!privateDirectories.includes(reserved)) return false;
+  if (path === undefined) return !caseSensitive;
+  const entry = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+  const other = lstatSync(join(dirname(path), reserved), { bigint: true, throwIfNoEntry: false });
+  if (entry || other) return entry?.dev === other?.dev && entry?.ino === other?.ino;
+  // Native path admission verifies prospective names on their nearest existing ancestor.
+  return !physicalGuard && !workspaceCaseSensitivity(dirname(path));
 }
 
 const defaults = {
@@ -41,6 +47,7 @@ const schema = z
  */
 export class WorkspaceAccessPolicy {
   readonly ignoredDirectories: readonly string[];
+  private readonly configuredIgnores: readonly string[];
   readonly sensitiveFileNames: readonly string[];
   readonly sensitiveFilePrefixes: readonly string[];
   readonly sensitiveFileExtensions: readonly string[];
@@ -55,7 +62,8 @@ export class WorkspaceAccessPolicy {
   ) {
     const resolved = schema.parse(options);
     // Transaction journals, locks and rollback copies remain host-private under customized policies too.
-    this.ignoredDirectories = [...new Set([...resolved.ignoredDirectories, ...privateDirectories])];
+    this.configuredIgnores = resolved.ignoredDirectories;
+    this.ignoredDirectories = [...new Set([...this.configuredIgnores, ...privateDirectories])];
     this.sensitiveFileNames = resolved.sensitiveFileNames;
     this.sensitiveFilePrefixes = resolved.sensitiveFilePrefixes;
     this.sensitiveFileExtensions = resolved.sensitiveFileExtensions;
@@ -82,13 +90,22 @@ export class WorkspaceAccessPolicy {
   }
 
   /** Project absolute host exclusions into the namespace of a single attached filesystem root. */
-  exclusionsFor(root: string, caseSensitive: boolean): { privateRoot: boolean; excludedPaths: string[] } {
+  exclusionsFor(
+    root: string,
+    caseSensitive: boolean,
+    inspectNames = false,
+    physicalGuard = false,
+  ): { privateRoot: boolean; excludedPaths: string[] } {
     const key = (path: string): string => {
       const normalized = resolve(path).split(sep).join('/');
       return caseSensitive ? normalized : normalized.toLowerCase();
     };
     const rootKey = key(root);
-    let privateRoot = rootKey.split('/').some(component => isPrivateDirectory(component, caseSensitive));
+    let privateRoot = false;
+    for (let path = resolve(root); path !== dirname(path); path = dirname(path)) {
+      if (isPrivateDirectory(basename(path), caseSensitive, inspectNames ? path : undefined, physicalGuard))
+        privateRoot = true;
+    }
     const excludedPaths: string[] = [];
     for (const path of this.privatePaths) {
       const pathKey = key(path);
@@ -102,9 +119,9 @@ export class WorkspaceAccessPolicy {
     return { privateRoot, excludedPaths };
   }
 
-  isIgnoredDirectory(name: string, caseSensitive: boolean): boolean {
-    if (isPrivateDirectory(name, caseSensitive)) return true;
-    return this.ignoredDirectories.some(value =>
+  isIgnoredDirectory(name: string, caseSensitive: boolean, path?: string, physicalGuard = false): boolean {
+    if (isPrivateDirectory(name, caseSensitive, path, physicalGuard)) return true;
+    return this.configuredIgnores.some(value =>
       caseSensitive ? value === name : value.toLowerCase() === name.toLowerCase(),
     );
   }
@@ -120,9 +137,9 @@ export class WorkspaceAccessPolicy {
     );
   }
 
-  toJSON(): Required<WorkspaceAccessPolicyOptions> {
+  toJSON(includePrivateDirectories = true): Required<WorkspaceAccessPolicyOptions> {
     return {
-      ignoredDirectories: [...this.ignoredDirectories],
+      ignoredDirectories: [...(includePrivateDirectories ? this.ignoredDirectories : this.configuredIgnores)],
       sensitiveFileNames: [...this.sensitiveFileNames],
       sensitiveFilePrefixes: [...this.sensitiveFilePrefixes],
       sensitiveFileExtensions: [...this.sensitiveFileExtensions],

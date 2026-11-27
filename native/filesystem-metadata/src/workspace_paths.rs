@@ -105,7 +105,8 @@ fn name_matches(path: &Path, expected: &str) -> bool {
     })
 }
 
-fn private_name(path: &Path) -> bool {
+/// Match host-reserved components using the containing filesystem's actual filename semantics.
+pub fn private_name(path: &Path) -> bool {
     name_matches(path, ".skill-staging") || name_matches(path, ".glyph-skill-run")
 }
 
@@ -213,14 +214,19 @@ impl WorkspacePaths {
                 }
                 project_managed_mounts(&table, paths);
             }
-            for (root, point) in table.locations() {
-                if root.ancestors().chain(point.ancestors()).any(private_name) {
-                    table.aliases(point, true, &mut policy.private);
-                }
-            }
+            policy.include_private_mounts(&table);
             policy.mounts = Some(std::sync::Arc::new(file));
         }
         Ok(policy)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn include_private_mounts(&mut self, table: &crate::mount_table::MountTable<'_>) {
+        for (root, point) in table.locations() {
+            if root.ancestors().chain(point.ancestors()).any(private_name) {
+                table.aliases(point, true, &mut self.private);
+            }
+        }
     }
 
     /// Linux marks a mountinfo descriptor for priority I/O on any namespace topology change.
@@ -291,6 +297,24 @@ impl WorkspacePaths {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn privately_named_mounts_hide_their_ordinary_aliases_and_nested_volumes() {
+        let table = crate::mount_table::MountTable::parse(
+            b"1 1 0:1 / /
+2 1 0:1 /elsewhere/.skill-staging /project/hidden
+3 2 0:2 / /project/hidden/volume
+4 1 0:2 / /project/second
+5 1 0:3 / /project/ordinary",
+        )
+        .unwrap();
+        let mut access = WorkspacePaths::default();
+        access.include_private_mounts(&table);
+        assert!(access.excludes(Path::new("/project/hidden/entry")));
+        assert!(access.excludes(Path::new("/project/second/entry")));
+        assert!(!access.excludes(Path::new("/project/ordinary/entry")));
+    }
+
     #[test]
     fn admits_ordinary_siblings_and_reserves_only_the_selected_objects() {
         let dir = tempfile::tempdir().unwrap();

@@ -210,3 +210,56 @@ fn admits_a_workspace_path_and_rechecks_its_opened_identity() {
     stale["identity"] = serde_json::json!(["0", "0"]);
     assert!(!check(&stale).status.success());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an unprivileged Linux user and mount namespace"]
+fn checks_bound_private_and_ordinary_trees_through_the_cli() {
+    const INSIDE: &str = "GLYPH_PRIVATE_MOUNT_CLI_FIXTURE";
+    if std::env::var_os(INSIDE).is_none() {
+        let output = Command::new("unshare")
+            .arg("-Urm")
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "checks_bound_private_and_ordinary_trees_through_the_cli",
+                "--ignored",
+            ])
+            .env(INSIDE, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed")
+        );
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    for (source, view, admitted) in [
+        (".skill-staging", "first", false),
+        ("ordinary", "second", true),
+    ] {
+        let source = base.join(source);
+        let view = base.join(view);
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&view).unwrap();
+        fs::write(source.join("data"), "fixture").unwrap();
+        assert!(Command::new("mount")
+            .arg("--bind")
+            .arg(&source)
+            .arg(&view)
+            .status()
+            .unwrap()
+            .success());
+        let request = serde_json::json!({"path": view.join("data"), "privatePaths": []});
+        let result = run_with_input(&request.to_string(), |cmd| {
+            cmd.arg("--assert-workspace-path");
+        });
+        assert_eq!(result.status.success(), admitted);
+        assert!(Command::new("umount")
+            .arg(&view)
+            .status()
+            .unwrap()
+            .success());
+    }
+}

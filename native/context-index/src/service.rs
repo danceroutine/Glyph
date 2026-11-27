@@ -160,10 +160,7 @@ impl IndexPolicy {
     }
 
     fn excludes(&self, relative_path: &str) -> bool {
-        if self.exclude_root
-            || (!relative_path.is_ascii()
-                && self.root.join(relative_path).ancestors().any(private_alias))
-        {
+        if self.exclude_root || self.root.join(relative_path).ancestors().any(private_alias) {
             return true;
         }
         if self
@@ -1141,8 +1138,7 @@ fn is_cache_artifact(path: &Path, cache_path: &Path) -> bool {
 }
 
 fn private_alias(path: &Path) -> bool {
-    glyph_filesystem_metadata::aliases_name(path, ".skill-staging")
-        || glyph_filesystem_metadata::aliases_name(path, ".glyph-skill-run")
+    glyph_filesystem_metadata::workspace_paths::private_name(path)
 }
 
 /// Share ignore-file, directory exclusion, and link semantics with the resident catalog.
@@ -1359,8 +1355,6 @@ fn default_ignored_directories() -> Vec<String> {
     [
         ".git",
         ".next",
-        ".skill-staging",
-        ".glyph-skill-run",
         "coverage",
         "dist",
         "node_modules",
