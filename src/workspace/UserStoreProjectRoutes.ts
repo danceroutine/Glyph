@@ -14,7 +14,7 @@ function objectId(path: string): string | undefined {
 
 /** Snapshot a user store's visible mount routes once for a catalog listing. Verify each claimed object on use. */
 export class UserStoreProjectRoutes {
-  private snapshot?: ReturnType<UserStoreProjectRoutes['index']>;
+  private snapshot: { routes: ReturnType<UserStoreProjectRoutes['index']> } | { error: unknown } | undefined;
   private entries: Map<string, string> | undefined;
   private readonly store: WorkspaceDirectoryIdentity;
   constructor(
@@ -25,9 +25,15 @@ export class UserStoreProjectRoutes {
     this.store = new WorkspaceDirectoryIdentity(directory, caseSensitive);
   }
 
+  /** Start a new discovery pass. Resolve aliases on demand inside the provider that needs their ownership. */
   refresh(): void {
-    this.snapshot = this.index();
+    this.snapshot = undefined;
     this.entries = undefined;
+  }
+
+  /** Verify that this discovery pass can identify the personal store and its mounted project aliases. */
+  verifyAliases(): void {
+    this.routes();
   }
 
   ownsStore(path: string): boolean {
@@ -36,7 +42,7 @@ export class UserStoreProjectRoutes {
 
   ownsEntry(path: string): boolean {
     if (this.ownsStore(dirname(path))) return true;
-    const { mounted } = (this.snapshot ??= this.index());
+    const { mounted } = this.routes();
     if (mounted.size === 0) return false;
     const id = objectId(path);
     if (!id || !mounted.has(id)) return false;
@@ -55,7 +61,7 @@ export class UserStoreProjectRoutes {
   }
 
   projectEntries(name: string): string[] {
-    const { stores, mounted } = (this.snapshot ??= this.index());
+    const { stores, mounted } = this.routes();
     const user = join(this.directory, name);
     const result = new Set<string>();
     for (const store of stores) {
@@ -80,6 +86,18 @@ export class UserStoreProjectRoutes {
     return (['.glyph', '.cursor'] as const).find(name =>
       sameWorkspaceDirectorySpelling(marker, join(dirname(marker), name), this.caseSensitive),
     );
+  }
+
+  private routes() {
+    if (!this.snapshot) {
+      try {
+        this.snapshot = { routes: this.index() };
+      } catch (error) {
+        this.snapshot = { error };
+      }
+    }
+    if ('error' in this.snapshot) throw this.snapshot.error;
+    return this.snapshot.routes;
   }
 
   private index() {

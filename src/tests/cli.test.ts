@@ -105,6 +105,7 @@ describe('glyph command line', () => {
     expect(launcher?.args).toEqual([
       {
         binaryPath: join(root, 'target', 'release', 'glyph-shell-sandbox'),
+        verifyWorkspaceRoot: expect.any(Function),
         workspaceRoots: [root],
         stateDirectory,
         protectedPaths: [
@@ -416,6 +417,15 @@ function prepareCli({
     mocked.push(path);
     vi.doMock(path, factory);
   };
+  mock('#src/workspace/WorkspaceRootSelections.js', () => ({
+    WorkspaceRootSelections: class {
+      assertCurrent() {}
+      select(path: string) {
+        return { path, assertCurrent: () => {} };
+      }
+      [Symbol.dispose]() {}
+    },
+  }));
   mock('#src/workspace/policy/StartupUserProfile.js', () => ({
     StartupUserProfile: class {
       readonly path: string;

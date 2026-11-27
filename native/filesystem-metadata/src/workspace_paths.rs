@@ -9,7 +9,7 @@ pub struct WorkspacePaths {
     private: BTreeSet<PathBuf>,
     managed: Option<BTreeSet<PathBuf>>,
     /// Preserve the host's authority spelling as well as its current physical destination.
-    configured: Vec<(PathBuf, PathBuf)>,
+    configured: Vec<(PathBuf, Reservation)>,
     #[cfg(target_os = "linux")]
     mounts: Option<std::sync::Arc<fs::File>>,
 }
@@ -22,6 +22,50 @@ fn canonical_location(path: &Path) -> io::Result<PathBuf> {
             Ok(canonical_location(parent)?.join(name))
         }
         Err(error) => Err(error),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Reservation {
+    Physical(PathBuf),
+    CyclicLink(PathBuf),
+}
+
+impl Reservation {
+    fn path(&self) -> &PathBuf {
+        match self {
+            Self::Physical(path) | Self::CyclicLink(path) => path,
+        }
+    }
+
+    /// A confirmed cycle of terminal symlinks has a reserved name but no accessible destination.
+    /// Other lookup failures still prevent the policy from being used.
+    fn resolve(path: &Path) -> io::Result<Self> {
+        match canonical_location(path) {
+            Ok(target) => Ok(Self::Physical(target)),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+                let physical_entry = |p: &Path| -> io::Result<PathBuf> {
+                    let (parent, name) = p
+                        .parent()
+                        .zip(p.file_name())
+                        .ok_or_else(|| io::Error::from_raw_os_error(libc::ELOOP))?;
+                    Ok(parent.canonicalize()?.join(name))
+                };
+                let entry = physical_entry(path)?;
+                let mut current = entry.clone();
+                let mut visited = BTreeSet::new();
+                for _ in 0..128 {
+                    if !visited.insert(current.clone()) {
+                        return Ok(Self::CyclicLink(entry));
+                    }
+                    let next = fs::read_link(&current)?;
+                    current = physical_entry(&current.with_file_name(next))?;
+                }
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -178,13 +222,13 @@ impl WorkspacePaths {
         }
         let configured = private
             .iter()
-            .map(|path| Ok((path.clone(), canonical_location(path)?)))
+            .map(|path| Ok((path.clone(), Reservation::resolve(path)?)))
             .collect::<io::Result<Vec<_>>>()?;
         #[allow(unused_mut)]
         let mut policy = Self {
             private: configured
                 .iter()
-                .map(|(_, target)| target.clone())
+                .map(|(_, target)| target.path().clone())
                 .collect(),
             configured,
             managed: managed
@@ -251,7 +295,7 @@ impl WorkspacePaths {
             && self
                 .configured
                 .iter()
-                .all(|(path, target)| canonical_location(path).is_ok_and(|now| &now == target))
+                .all(|(path, target)| Reservation::resolve(path).is_ok_and(|now| &now == target))
     }
 
     /// All reserved physical locations in this namespace, including mounted descendants and aliases.
@@ -332,6 +376,29 @@ mod tests {
         assert!(access.excludes(Path::new("/project/hidden/entry")));
         assert!(access.excludes(Path::new("/project/second/entry")));
         assert!(!access.excludes(Path::new("/project/ordinary/entry")));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_cyclic_personal_store_preserves_sibling_access_and_rechecks_its_reservation() {
+        use std::os::unix::fs::symlink;
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let store = root.join("rules");
+        let alias = root.join("cycle");
+        let project = root.join("AGENTS.md");
+        fs::write(&project, "project").unwrap();
+        symlink("cycle", &store).unwrap();
+        symlink("rules", &alias).unwrap();
+        let access = WorkspacePaths::current(std::slice::from_ref(&store)).unwrap();
+        access.assert_path(&project, None).unwrap();
+        assert!(access.assert_path(&store.join("one.mdc"), None).is_err());
+        fs::remove_file(&store).unwrap();
+        fs::create_dir(&store).unwrap();
+        assert!(access.assert_path(&project, None).is_err());
+        let repaired = WorkspacePaths::current(std::slice::from_ref(&store)).unwrap();
+        repaired.assert_path(&project, None).unwrap();
+        assert!(repaired.assert_path(&alias.join("one.mdc"), None).is_err());
     }
 
     #[test]

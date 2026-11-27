@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { WorkspaceRootSelections } from './workspace/WorkspaceRootSelections.ts';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { WebToolRuntime } from './web/WebToolRuntime.ts';
 import { AuthorizedWebTransport } from './web/AuthorizedWebTransport.ts';
@@ -112,12 +113,14 @@ async function main(): Promise<void> {
     installation,
     projectContext.roots.map(root => root.path),
   );
+  using selections = new WorkspaceRootSelections();
   const { workspace, selectedFiles, pathIndex } = await createProjectRuntime(
     projectContext,
     configuration.stateDirectory,
     indexExecutable,
     access,
     profile.path,
+    selections,
   );
   const ui = new TerminalUI(process.stdin, process.stdout, process.stderr, pathIndex);
   const shellAuthorizer = new ShellCommandAuthorizer(
@@ -130,6 +133,7 @@ async function main(): Promise<void> {
     new ShellWorkingDirectoryResolver(projectContext),
     new NativeShellSandboxLauncher({
       binaryPath: shellSandboxExecutable,
+      verifyWorkspaceRoot: selections.assertCurrent.bind(selections),
       workspaceRoots: projectContext.roots.map(root => root.path),
       stateDirectory: configuration.stateDirectory,
       protectedPaths: [packageRoot, indexExecutable, shellSandboxExecutable],
@@ -257,20 +261,22 @@ async function createProjectRuntime(
   indexExecutable: string,
   policy: WorkspaceContentAccess,
   profilePath: string,
+  selections: WorkspaceRootSelections,
 ): Promise<{ workspace: WorkspaceTextStore; selectedFiles: WorkspaceTextStore; pathIndex: WorkspacePathIndex }> {
+  const selected = context.roots.map(root => selections.select(root.selectedPath ?? root.path, root.path));
   const physicalAccess = new NativeFilesystemMetadata(indexExecutable);
   const casing = await Promise.all(
     context.roots.map(root => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, root.path)),
   );
   const roots = context.roots.map((root, i) => {
-    const access = new WorkspaceRootAccess(policy.project, root.path, casing[i]!);
+    const access = new WorkspaceRootAccess(policy.project, root.path, casing[i]!, [], selected[i]!.assertCurrent);
     const workspace = new FileSystemWorkspaceTextStore(root.path, {
       access,
       physicalAccess,
       managedDirectories: [join(profilePath, 'skills')],
     });
     const selectedFiles = new FileSystemWorkspaceTextStore(root.path, {
-      access: new WorkspaceRootAccess(policy.selectedFile, root.path, casing[i]!),
+      access: new WorkspaceRootAccess(policy.selectedFile, root.path, casing[i]!, [], selected[i]!.assertCurrent),
       physicalAccess,
     });
     const cacheName = createHash('sha256').update(`${context.id}\0${root.name}\0${root.path}`).digest('hex');

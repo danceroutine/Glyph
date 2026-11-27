@@ -34,13 +34,18 @@ Select the consumer's policy through `WorkspaceContentAccess` at the CLI or
 desktop composition root. Its project, shell, selected-file and user-catalog
 views share the host's reservations. Bind the chosen policy to the attached
 directory with `WorkspaceRootAccess`. The disk store and path index use that
-root's projection. The operation's `assertCurrent` check belongs immediately
+root's projection. The CLI session and desktop runtime retain selected directory
+descriptors in `WorkspaceRootSelections`. Each attached path must still reach
+its selected directory through the original route. Merged path and content
+searches retain every contributing root's operation through the last page.
+The operation's `assertCurrent` check belongs immediately
 before returning an asynchronous result or performing a write.
 
 For a rule or instruction supplied to a model, carry the identity observed by
 the authorized read. `NativePinnedSourceAuthority` checks the physical origins
 in a batch. The provider's final synchronous guard checks trust, cancellation
-and the private-path generation at the moment of delivery. Keeping the body
+and the private-path generation, along with the contributing workspace roots, at
+the moment of delivery. Keeping the body
 selected for the turn lets ordinary content edits take effect on the next turn.
 
 ## Choosing the boundary

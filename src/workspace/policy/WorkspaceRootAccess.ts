@@ -4,8 +4,8 @@ import { WorkspaceAccessPolicy } from './WorkspaceAccessPolicy.ts';
 /**
  * Projects a host's reservations into one attached root for its store and native index. Bind once per root and
  * retain the returned operation through publication or result delivery. A new policy generation invalidates
- * earlier operations and refreshes the projected paths for the next caller. Hosts that address editor entries
- * through a selected alias supply its live root check for both admission and delivery.
+ * earlier operations and refreshes the projected paths for the next caller. Hosts supply the selected directory identity
+ * for both admission and delivery, including directly selected roots and editor aliases.
  */
 export class WorkspaceRootAccess {
   private operation: ReturnType<WorkspaceRootAccess['project']> | undefined;

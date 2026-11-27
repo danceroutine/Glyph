@@ -7,14 +7,16 @@ export type SkillFileIndex = Pick<RustWorkspacePathIndex, 'refresh' | 'glob' | '
  * capture owns its index through disposal; its entries still pass through the supplied authorized workspace. */
 export type OpenSkillIndex = (root: string, caseSensitive: boolean, respectGitIgnore: boolean) => SkillFileIndex;
 
-/** Reconcile only the activated package's bounded inventory so a newly added resource cannot be omitted by watcher lag. */
+/** Reconcile the activated package through a bounded index. Retain the owning workspace admission until the
+ * temporary worker closes, so inventory from a replaced root cannot enter a later capture or mutation. */
 export async function listSkillPackageFiles(
-  workspace: Pick<FileSystemWorkspaceTextStore, 'resolvePath' | 'caseSensitive'>,
+  workspace: Pick<FileSystemWorkspaceTextStore, 'resolvePath' | 'caseSensitive' | 'beginOperation'>,
   directory: string,
   openIndex: OpenSkillIndex,
   respectGitIgnore: boolean,
   signal?: AbortSignal,
 ) {
+  const operation = workspace.beginOperation();
   const root = await workspace.resolvePath(directory);
   const index = openIndex(root, workspace.caseSensitive, respectGitIgnore);
   try {
@@ -29,6 +31,8 @@ export async function listSkillPackageFiles(
     return { ...listing, directories, files: listing.files.map(path => `${directory}/${path}`) };
   } finally {
     await index.dispose();
+    operation.assertCurrent();
+    signal?.throwIfAborted();
   }
 }
 

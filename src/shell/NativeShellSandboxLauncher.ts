@@ -13,6 +13,8 @@ export interface NativeShellSandboxLauncherOptions {
   readonly binaryPath: string;
   readonly contentStores?: (environment: NodeJS.ProcessEnv) => readonly ShellContentStore[];
   readonly workspaceRoots: readonly string[];
+  /** Verify the attached directory immediately before handing the authorized command to its process. */
+  readonly verifyWorkspaceRoot?: (physicalRoot: string) => void;
   readonly stateDirectory: string;
   readonly protectedPaths?: readonly string[];
   readonly environment?: NodeJS.ProcessEnv;
@@ -47,8 +49,10 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     };
+    const workspaceRoot = mostSpecificWorkspaceRoot(this.options.workspaceRoots, workingDirectory);
     if (authorization.sandboxProfile === ShellSandboxProfile.FULL_ACCESS) {
       const arguments_ = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-lc', command];
+      this.options.verifyWorkspaceRoot?.(workspaceRoot);
       return this.spawnProcess(program?.executable ?? fullAccessShell, program?.arguments ?? arguments_, {
         ...common,
         env: { ...environment, TERM: 'dumb', NO_COLOR: '1' },
@@ -57,7 +61,6 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
     const shell = sandboxShell(environment);
     const accessPolicy = this.options.accessPolicy;
     const operation = accessPolicy.beginOperation();
-    const workspaceRoot = mostSpecificWorkspaceRoot(this.options.workspaceRoots, workingDirectory);
     const stores = (this.options.contentStores ?? pnpmContentStore)(environment);
     const arguments_ = [
       '--profile',
@@ -81,6 +84,7 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       ...(program ? [program.executable, ...program.arguments] : [shell.executable, ...shell.arguments(command)]),
     ];
     operation.assertCurrent();
+    this.options.verifyWorkspaceRoot?.(workspaceRoot);
     return this.spawnProcess(this.options.binaryPath, arguments_, {
       ...common,
       env: sandboxEnvironment(authorization.sandboxProfile, shell.executable, environment),

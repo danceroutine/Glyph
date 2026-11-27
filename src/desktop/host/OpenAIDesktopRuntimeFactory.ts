@@ -1,6 +1,7 @@
 import { readSourcePathAliases, type SourcePathAliases } from '#src/workspace/SourcePathAliases.js';
 import { UserSkillDirectory } from '#src/skills/UserSkillDirectory.js';
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
+import { WorkspaceRootSelections } from '#src/workspace/WorkspaceRootSelections.js';
 import { readDirectoryNamePolicies } from '#src/workspace/readDirectoryNamePolicies.js';
 import { projectIntersection, WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
@@ -39,7 +40,7 @@ import { PlanToolRuntime } from '#src/planning/PlanToolRuntime.js';
 import { GoalToolRuntime } from '#src/goals/GoalToolRuntime.js';
 import { createHash, randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
-import { mkdir, realpath } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -153,17 +154,43 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   }
 
   async create(input: Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0]): Promise<ProviderDesktopRuntime> {
+    const selections = new WorkspaceRootSelections();
+    try {
+      return await this.createRuntime(input, selections);
+    } catch (error) {
+      selections[Symbol.dispose]();
+      throw error;
+    }
+  }
+
+  async dispose(): Promise<void> {
+    await this.initialized;
+    try {
+      const results = await Promise.allSettled(
+        [this.userRuleIndex, this.userSkillIndex].filter(index => index !== undefined).map(index => index.dispose()),
+      );
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed) throw failed.reason;
+    } finally {
+      this.profile.dispose();
+      await this.accounts.dispose();
+    }
+  }
+
+  private async createRuntime(
+    input: Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0],
+    selections: WorkspaceRootSelections,
+  ): Promise<ProviderDesktopRuntime> {
+    const selectedRoots = input.roots.map(root => selections.select(root.canonicalPath));
     await (this.initialized ??= this.accounts.initialize().catch(error => {
       this.initialized = undefined;
       throw error;
     }));
     const configuration = this.configuration;
-    const roots = await Promise.all(
-      input.roots.map(async root => ({
-        name: getGlyphWorkspaceRootId(root, input.roots),
-        path: await realpath(root.canonicalPath),
-      })),
-    );
+    const roots = selectedRoots.map((selection, i) => ({
+      name: getGlyphWorkspaceRootId(input.roots[i]!, input.roots),
+      path: selection.path,
+    }));
     if (roots.length === 0) throw new Error('A local workspace root is required.');
     const kind = roots.length === 1 ? ProjectContextKind.FOLDER : ProjectContextKind.WORKSPACE;
     const authority = 'file';
@@ -216,10 +243,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemNamePolicy(indexExecutable, workspaceRoot.path)),
     );
     const parts = roots.map((workspaceRoot, i) => {
-      const verifySelectedRoot = WorkspaceSourceRoutes.selectionGuard(
-        input.roots[i]!.canonicalPath,
-        workspaceRoot.path,
-      );
+      const verifySelectedRoot = selectedRoots[i]!.assertCurrent;
       const bind = (content: typeof policy) =>
         new WorkspaceRootAccess(content, workspaceRoot.path, namePolicies[i]!.caseSensitive, [], verifySelectedRoot);
       const bound = bind(policy);
@@ -358,6 +382,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         name: part.name,
         path: part.disk.root,
         selectedPath: input.roots[index]!.canonicalPath,
+        assertCurrent: selectedRoots[index]!.assertCurrent,
         caseSensitive: part.disk.caseSensitive,
         normalizesUnicode: namePolicies[index]!.normalizesUnicode,
         foldsUnicode: namePolicies[index]!.foldsUnicode,
@@ -447,6 +472,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       };
       const projectSourceAuthority = new NativePinnedSourceAuthority(
         {
+          beginSourceAccess: paths => routes.beginSourceAccess(paths),
           sourceOrigins: (paths, reservations, signal) =>
             filesystemMetadata.sourceOrigins(
               paths.map(path => routes.selectedSourcePath(path)),
@@ -567,6 +593,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             await mkdir(skillRoot, { recursive: true, mode: 0o700 });
             await userRuleStore.canonicalPath('skills');
             const result = await userSkillIndex.listSkillPackages(null, signal);
+            userSkillDirectory.verifyAliases();
             return {
               truncated: result.truncated,
               packages: result.packages.map(({ directory, manifest }) => ({
@@ -797,6 +824,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       new ShellWorkingDirectoryResolver(context),
       new NativeShellSandboxLauncher({
         binaryPath: sandboxExecutable,
+        verifyWorkspaceRoot: selections.assertCurrent.bind(selections),
         workspaceRoots: roots.map(workspaceRoot => workspaceRoot.path),
         stateDirectory: configuration.stateDirectory,
         protectedPaths: [artifactRoot],
@@ -981,6 +1009,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       throw error;
     }
     runtime = new ProviderDesktopRuntime({
+      releaseWorkspace: () => {
+        selections[Symbol.dispose]();
+      },
       glyph,
       agentReviews,
       interactions,
@@ -1031,20 +1062,6 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       trusted: input.trusted,
     });
     return runtime;
-  }
-
-  async dispose(): Promise<void> {
-    await this.initialized;
-    try {
-      const results = await Promise.allSettled(
-        [this.userRuleIndex, this.userSkillIndex].filter(index => index !== undefined).map(index => index.dispose()),
-      );
-      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-      if (failed) throw failed.reason;
-    } finally {
-      this.profile.dispose();
-      await this.accounts.dispose();
-    }
   }
 
   /** Pathless editor operations must not acquire an invented filesystem target. */

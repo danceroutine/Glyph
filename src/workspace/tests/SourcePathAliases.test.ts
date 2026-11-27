@@ -33,6 +33,23 @@ it('resolves prospective names through their actual parent and rejects an inacce
   }
 });
 
+it('keeps an alias inspection failure local to the current discovery pass', () => {
+  const lookup = vi
+    .fn<() => string[]>()
+    .mockImplementationOnce(() => {
+      throw new Error('Cannot inspect mounts');
+    })
+    .mockReturnValue([]);
+  const routes = new UserStoreProjectRoutes('/profile/rules', true, lookup);
+  routes.refresh();
+  expect(() => routes.ownsEntry('/project/.glyph/rules/one.mdc')).toThrow('Cannot inspect mounts');
+  expect(() => routes.projectEntries('one.mdc')).toThrow('Cannot inspect mounts');
+  expect(lookup).toHaveBeenCalledTimes(1);
+  routes.refresh();
+  expect(routes.ownsEntry('/project/.glyph/rules/one.mdc')).toBe(false);
+  expect(lookup).toHaveBeenCalledTimes(2);
+});
+
 it('owns a mounted store or an individual entry and retains its actual project spelling', () => {
   const root = mkdtempSync(join(tmpdir(), 'glyph-user-routes-'));
   onTestFinished(() => {

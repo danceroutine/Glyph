@@ -222,7 +222,13 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     }
   }
 
+  /** Retain this root's selection and reservations until the caller delivers a merged or paginated result. */
+  beginResultAccess(): () => void {
+    return this.access.beginOperation().assertCurrent;
+  }
+
   async initialize(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
+    const check = this.beginResultAccess();
     this.synchronizePolicy();
     if (this.initialized) return this.initialized;
     if (!this.initializing) {
@@ -232,7 +238,9 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
       });
       this.initializing = operation;
     }
-    return withAbortSignal(this.initializing, signal);
+    const result = await withAbortSignal(this.initializing, signal);
+    check();
+    return result;
   }
 
   async search(
@@ -282,16 +290,21 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
 
   /** One indexed representative per package, preferring the manifest over an ordinary resource. */
   async listSkillPackages(marker: string | null, signal?: AbortSignal) {
+    const check = this.beginResultAccess();
     await this.initialize(signal);
-    return skillPackageListingSchema.parse(await this.request(PathIndexMethod.LIST_SKILL_PACKAGES, marker, signal));
+    const result = skillPackageListingSchema.parse(
+      await this.request(PathIndexMethod.LIST_SKILL_PACKAGES, marker, signal),
+    );
+    check();
+    return result;
   }
 
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
     const { signal, ...serializableOptions } = options;
     const resolvedOptions = workspaceContentSearchOptionsSchema.parse(serializableOptions);
+    const operation = this.access.beginOperation();
     this.synchronizePolicy();
     if (!this.initialized) await this.initialize(signal);
-    const operation = this.access.beginOperation();
     const overrides = await this.readContentOverrides?.(signal);
     operation.assertCurrent();
     signal?.throwIfAborted();
@@ -305,14 +318,19 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
 
   /** Ensures mode-only replacement can preserve access controls on the file in this directory. */
   async assertReplaceableMetadata(name: string): Promise<void> {
+    const check = this.beginResultAccess();
     await this.initialize();
     z.null().parse(await this.request(PathIndexMethod.ASSERT_REPLACEABLE_METADATA, name));
+    check();
   }
 
   /** Fresh package directories admitted by the same native ignore policy as file capture. */
   async listDirectories(signal?: AbortSignal): Promise<readonly string[]> {
+    const check = this.beginResultAccess();
     await this.initialize(signal);
-    return z.array(z.string()).parse(await this.request(PathIndexMethod.LIST_DIRECTORIES, {}, signal));
+    const result = z.array(z.string()).parse(await this.request(PathIndexMethod.LIST_DIRECTORIES, {}, signal));
+    check();
+    return result;
   }
 
   /** Metadata-only intersection with the catalog, including ignore and sensitive-file exclusions. */
@@ -342,6 +360,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     params: unknown,
     signal?: AbortSignal,
   ): Promise<WorkspacePathIndexState> {
+    const check = this.beginResultAccess();
     const revision = this.policyRevision;
     const response = this.request(method, params, signal);
     const worker = this.process;
@@ -349,6 +368,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     // A decoded reply can resume after another caller rotates the worker or its policy.
     if (worker !== this.process || revision !== this.access.policy.revision)
       throw new Error('Workspace index changed while loading state. Retry the request.');
+    check();
     this.initialized = result;
     return result;
   }

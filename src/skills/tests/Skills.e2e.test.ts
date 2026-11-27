@@ -1,3 +1,5 @@
+import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -17,6 +19,43 @@ const entry =
   '---\nname: example\ndescription: Use for fixture examples\n---\nPINNED BODY: read references/notes.md when needed.';
 
 describe('Native skills discovery and model disclosure', () => {
+  it('rechecks the project admission after a temporary package index has closed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'glyph-package-admission-'));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const directory = '.glyph/skills/local';
+    const path = join(root, directory);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, 'SKILL.md'), entry);
+    let reserved: string[] = [];
+    const accessPolicy = new WorkspaceAccessPolicy({}, () => reserved);
+    const store = fixtureWorkspace(root, { accessPolicy });
+    let revoke = false;
+    const read = () =>
+      listSkillPackageFiles(
+        store,
+        directory,
+        (packageRoot, caseSensitive, respectGitIgnore) => {
+          const index = fixtureIndex({
+            root: packageRoot,
+            maxFiles: 257,
+            caseSensitive,
+            respectGitIgnore,
+            accessPolicy,
+            binaryPath: resolve('target/release/glyph-context-index'),
+          });
+          const close = index.dispose.bind(index);
+          vi.spyOn(index, 'dispose').mockImplementation(async () => {
+            await close();
+            if (revoke) reserved = [path];
+          });
+          return index;
+        },
+        true,
+      );
+    await expect(read()).resolves.toMatchObject({ files: [directory + '/SKILL.md'] });
+    revoke = true;
+    await expect(read()).rejects.toThrow('Workspace access changed');
+  });
   it('discovers indexed native/compatibility packages, rejects excluded paths, and observes external updates', async () => {
     const fixture = await nativeSkillFixture();
     await fixture.write('.glyph/skills/example/SKILL.md', entry);
