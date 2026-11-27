@@ -917,6 +917,32 @@ pub mod linux {
         let mut private = super::home_sensitive_paths(home_directory);
         private.extend(request.private_paths.iter().cloned());
         private.push(request.state_directory.clone());
+        // Snapshot explicitly requested packages and user executables before general tool caches can
+        // consume the budget. Publish parent mounts before their more specific overlays below.
+        let mut resource_mounts = Vec::new();
+        for resource in &request.read_only_paths {
+            resource_mounts.extend(view.mounts.runtime(resource, resource, request, &private)?);
+            filtered_roots.push(resource.clone());
+        }
+        let mut home_mounts = Vec::new();
+        let mut toolchains = super::home_toolchain_paths(home_directory);
+        toolchains.sort_by_key(|path| !path.ends_with("bin"));
+        for path in toolchains {
+            if path.exists() {
+                let physical = std::fs::canonicalize(&path)?;
+                if request
+                    .workspace_roots
+                    .iter()
+                    .chain(&request.private_paths)
+                    .any(|root| physical.starts_with(root) || root.starts_with(&physical))
+                {
+                    continue;
+                }
+                home_mounts.extend(view.mounts.runtime(&physical, &path, request, &private)?);
+                filtered_roots.push(path);
+            }
+        }
+
         for path in [
             "/usr",
             "/bin",
@@ -934,21 +960,7 @@ pub mod linux {
             }
         }
 
-        for path in super::home_toolchain_paths(home_directory) {
-            if path.exists() {
-                let physical = std::fs::canonicalize(&path)?;
-                if request
-                    .workspace_roots
-                    .iter()
-                    .chain(&request.private_paths)
-                    .any(|root| physical.starts_with(root) || root.starts_with(&physical))
-                {
-                    continue;
-                }
-                arguments.extend(view.mounts.runtime(&physical, &path, request, &private)?);
-                filtered_roots.push(path);
-            }
-        }
+        arguments.extend(home_mounts);
 
         let mut protected = super::protected_paths(request)?;
         for root in &request.workspace_roots {
@@ -961,10 +973,7 @@ pub mod linux {
             arguments.extend(view.workspace(root, request, &protected, &private)?);
         }
 
-        for resource in &request.read_only_paths {
-            arguments.extend(view.mounts.runtime(resource, resource, request, &private)?);
-            filtered_roots.push(resource.clone());
-        }
+        arguments.extend(resource_mounts);
         for path in &request.private_paths {
             if filtered_roots.iter().any(|root| path.starts_with(root)) {
                 continue;

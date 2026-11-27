@@ -111,6 +111,7 @@ impl Mounts for &mut KernelWorkspace {
         {
             root.clone()
         } else {
+            let replaceable_path = replaceable_ancestor(&source)?;
             let mut boundaries = Vec::new();
             let mut remaining = 750_000;
             let scan = runtime_boundaries(
@@ -118,7 +119,7 @@ impl Mounts for &mut KernelWorkspace {
                 private,
                 &mut boundaries,
                 0,
-                &user_controls,
+                &|path| Ok((path == source && replaceable_path) || user_controls(path)?),
                 &mut remaining,
             );
             scan?;
@@ -316,6 +317,16 @@ fn public_subdirectories(
     Ok(Some(children))
 }
 
+/// A user with write access to an ancestor can replace an otherwise immutable runtime root.
+fn replaceable_ancestor(source: &Path) -> io::Result<bool> {
+    for ancestor in source.ancestors().skip(1) {
+        if user_controls(ancestor)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn user_controls(path: &Path) -> io::Result<bool> {
     let info = fs::symlink_metadata(path)?;
     Ok(info.uid() == getuid().as_raw()
@@ -328,6 +339,10 @@ mod tests {
     #[test]
     fn reserved_entries_and_inaccessible_roots_receive_filtered_views() {
         let base = tempfile::tempdir().unwrap();
+        assert!(replaceable_ancestor(&base.path().join("child")).unwrap());
+        assert!(!replaceable_ancestor(Path::new("/")).unwrap());
+        assert!(replaceable_ancestor(Path::new("/usr")).is_ok());
+        assert!(replaceable_ancestor(&base.path().join("missing/child")).is_err());
         let dir = base.path().join("vendor");
         fs::create_dir(&dir).unwrap();
         fs::write(dir.join(".Skill-Staging"), "private").unwrap();
