@@ -480,6 +480,24 @@ it('restores every domain after a steering disclosure exceeds the remaining inst
   expect(accepted?.sources.map(rule => rule.id)).toEqual([nested.id]);
 });
 
+it('restores the byte allowance and eligible IDs together when a steering decision rolls back', () => {
+  const candidate = {
+    ...source('scoped', AgentInstructionSourceKind.GLYPH_PROJECT_RULE, 'src', AgentInstructionActivationMode.MODEL),
+    description: 'x'.repeat(30 * 1024),
+  };
+  const session = new TurnContextSession({
+    turnId: 'steering',
+    attachmentPaths: [],
+    manualRuleIds: [],
+    sources: [candidate],
+  });
+  const rollback = session.checkpointSteering();
+  const first = session.discloseAttachments(['src/a.ts']);
+  expect(first?.candidates).toHaveLength(1);
+  rollback();
+  expect(session.discloseAttachments(['src/b.ts'])).toEqual(first);
+});
+
 it('admits manual instructions through the direct turn session and through coordinated steering', async () => {
   const input = { turnId: 'direct', attachmentPaths: [], manualRuleIds: [] };
   const session = new TurnContextSession({ ...input, sources });

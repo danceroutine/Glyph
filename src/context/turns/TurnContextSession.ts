@@ -78,11 +78,13 @@ export class TurnContextSession {
     const pending = new Map(this.pending);
     const advertised = new Map(this.advertisedCandidates);
     const remainingBytes = this.remainingBytes;
+    const remainingCandidateBytes = this.remainingCandidateBytes;
     return () => {
       this.activated = activated;
       this.pending = pending;
       this.advertisedCandidates = advertised;
       this.remainingBytes = remainingBytes;
+      this.remainingCandidateBytes = remainingCandidateBytes;
     };
   }
   initialEnvelope(): TurnContextEnvelope {

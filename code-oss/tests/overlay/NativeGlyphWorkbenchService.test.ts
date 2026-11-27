@@ -451,6 +451,19 @@ describe(NativeGlyphWorkbenchService, () => {
     ).rejects.toThrow('Usage:');
   });
 
+  it('sends a selected goal skill with its captured identity', async () => {
+    const { service, commands, types } = await workbench();
+    const options = {
+      skillIds: ['skill'],
+      referenceSpans: [{ kind: 'skill' as const, sourceId: 'skill', label: 'goal', revision: 'one', from: 0, to: 5 }],
+    };
+    await service.send('/goal', [], options);
+    expect(commands()).toContainEqual(
+      expect.objectContaining({ type: GlyphWorkbenchCommandType.SEND, options: expect.objectContaining(options) }),
+    );
+    expect(types()).not.toContain(GlyphWorkbenchCommandType.CREATE_GOAL);
+  });
+
   it('continues an active goal after a terminal failure and reports a rejected continuation once', async () => {
     const goal = {
       id: 'goal',

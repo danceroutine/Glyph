@@ -404,6 +404,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               const identity = new ProjectSkillIdentity(part.disk.root, location);
               return new FileSkillDiscoveryProvider({
                 includeDirectory: directory => !userSkillDirectory.ownsStore(dirname(join(part.disk.root, directory))),
+                scopePathKey: paths.key.bind(paths),
                 packageId: directory => identity.forDirectory(directory),
                 matchesLegacyId: (directory, previousId, budget) =>
                   identity.matchesLegacyId(directory, previousId, budget),
