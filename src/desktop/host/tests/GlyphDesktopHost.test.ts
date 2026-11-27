@@ -119,6 +119,9 @@ describe(GlyphDesktopHost, () => {
     expect(() => fixture.host.trustedUserEditors(owner)).toThrow('removed');
     expect(() => fixture.host.trustedUserEditors(owner, join(directory, 'absent'))).toThrow('removed');
     expect(() => fixture.host.trustedUserEditors(owner, directory)).toThrow('removed');
+    expect(fixture.host.trustedUserEditors(owner, join(directory, 'missing-mount'), [project])).toEqual([
+      { identity: other, connectionId: 'peer' },
+    ]);
     expect(fixture.host.trustedUserEditors(owner, project)).toEqual([{ identity: other, connectionId: 'peer' }]);
   });
 

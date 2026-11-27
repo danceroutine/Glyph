@@ -12,8 +12,8 @@ export function sameWorkspaceDirectory(first: string, second: string, caseSensit
     const b = fs.lstatSync(second, { bigint: true, throwIfNoEntry: false });
     if (!a && !b)
       return (
-        !caseSensitive &&
-        basename(first).toLowerCase() === basename(second).toLowerCase() &&
+        (basename(first) === basename(second) ||
+          (!caseSensitive && basename(first).toLowerCase() === basename(second).toLowerCase())) &&
         sameWorkspaceDirectory(dirname(first), dirname(second), caseSensitive)
       );
     return a?.dev === b?.dev && a?.ino === b?.ino;

@@ -1,15 +1,10 @@
 #[cfg(target_os = "linux")]
 fn source_path_aliases() -> std::io::Result<()> {
-    use std::collections::BTreeSet;
     use std::path::PathBuf;
     let (path, descendants): (PathBuf, bool) = serde_json::from_reader(std::io::stdin().lock())?;
     let table = std::fs::read("/proc/self/mountinfo")?;
-    let mut aliases = BTreeSet::new();
-    glyph_filesystem_metadata::mount_table::MountTable::parse(&table)?.aliases(
-        &path,
-        descendants,
-        &mut aliases,
-    );
+    let aliases = glyph_filesystem_metadata::mount_table::MountTable::parse(&table)?
+        .visible_aliases(&path, descendants)?;
     serde_json::to_writer(std::io::stdout().lock(), &aliases)?;
     Ok(())
 }
