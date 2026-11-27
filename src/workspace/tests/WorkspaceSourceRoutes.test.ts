@@ -43,6 +43,15 @@ it('keeps logical aliases and selects the most specific indexed route for each p
     { uri: 'file:///alias-inner/a%23b.md', caseSensitive: false },
     { uri: 'file:///Alias%20Repo/sub/a%23b.md', caseSensitive: true },
   ]);
+  const selected = new WorkspaceSourceRoutes([
+    outer,
+    { ...inner, selectedPath: '/selected' },
+    { ...alias, selectedPath: '/secondary' },
+  ]);
+  expect(WorkspaceSourceRoutes.selectionGuard('/work', '/work')).toBeUndefined();
+  expect(selected.selectedSourcePath('/work/sub/directory/note.md')).toBe('/selected/directory/note.md');
+  expect(selected.selectedSourcePath('/work/note.md')).toBe('/work/note.md');
+  expect(() => selected.selectedSourcePath('/work-other/note.md')).toThrow('outside');
   expect(routes.referenceResources('missing')).toEqual([]);
   expect(new WorkspaceSourceRoutes([outer]).referenceResources('file')).toEqual([
     { uri: 'file:///work/file', caseSensitive: true },

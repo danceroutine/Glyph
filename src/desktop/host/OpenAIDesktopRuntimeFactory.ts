@@ -212,14 +212,20 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemNamePolicy(indexExecutable, workspaceRoot.path)),
     );
     const parts = roots.map((workspaceRoot, i) => {
-      const bound = new WorkspaceRootAccess(policy, workspaceRoot.path, namePolicies[i]!.caseSensitive);
+      const verifySelectedRoot = WorkspaceSourceRoutes.selectionGuard(
+        input.roots[i]!.canonicalPath,
+        workspaceRoot.path,
+      );
+      const bind = (content: typeof policy) =>
+        new WorkspaceRootAccess(content, workspaceRoot.path, namePolicies[i]!.caseSensitive, [], verifySelectedRoot);
+      const bound = bind(policy);
       const disk = new FileSystemWorkspaceTextStore(workspaceRoot.path, {
         access: bound,
         managedDirectories: this.managedSkillDirectories,
         physicalAccess: filesystemMetadata,
       });
       const selectedDisk = new FileSystemWorkspaceTextStore(workspaceRoot.path, {
-        access: new WorkspaceRootAccess(access.selectedFile, workspaceRoot.path, namePolicies[i]!.caseSensitive),
+        access: bind(access.selectedFile),
         physicalAccess: filesystemMetadata,
         managedDirectories: this.managedSkillDirectories,
       });
@@ -337,6 +343,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       parts.map((part, index) => ({
         name: part.name,
         path: part.disk.root,
+        selectedPath: input.roots[index]!.canonicalPath,
         caseSensitive: part.disk.caseSensitive,
         normalizesUnicode: namePolicies[index]!.normalizesUnicode,
         foldsUnicode: namePolicies[index]!.foldsUnicode,
@@ -425,7 +432,18 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         normalizesUnicode: true,
         foldsUnicode: true,
       };
-      const projectSourceAuthority = new NativePinnedSourceAuthority(filesystemMetadata, policy, input.assertTrusted);
+      const projectSourceAuthority = new NativePinnedSourceAuthority(
+        {
+          sourceOrigins: (paths, reservations, signal) =>
+            filesystemMetadata.sourceOrigins(
+              paths.map(path => routes.selectedSourcePath(path)),
+              reservations,
+              signal,
+            ),
+        },
+        policy,
+        input.assertTrusted,
+      );
       const userSourceAuthority = new NativePinnedSourceAuthority(
         filesystemMetadata,
         access.userCatalog,

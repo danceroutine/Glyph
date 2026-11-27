@@ -10,12 +10,14 @@ import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 /** A physical workspace root can have several editor routes, including routes through an enclosing root. */
 export class WorkspaceSourceRoutes {
+  private readonly selectedRoots: ReadonlyMap<string, string>;
   private readonly filenameKeys = new Map<string, string>();
   private readonly directories?: DirectoryNamePolicies;
   constructor(
     private readonly roots: readonly {
       name: string;
       path: string;
+      selectedPath?: string;
       caseSensitive?: boolean;
       normalizesUnicode?: boolean;
       foldsUnicode?: boolean;
@@ -23,6 +25,8 @@ export class WorkspaceSourceRoutes {
     }[],
     readPolicies?: ReadDirectoryNamePolicies,
   ) {
+    // Discovery keeps the first attachment when several selected roots resolve to one directory.
+    this.selectedRoots = new Map(roots.toReversed().map(root => [root.path, root.selectedPath ?? root.path]));
     if (readPolicies) {
       this.directories = new DirectoryNamePolicies(readPolicies);
       for (const root of roots) {
@@ -34,6 +38,14 @@ export class WorkspaceSourceRoutes {
           });
       }
     }
+  }
+
+  /** Verify that editor operations through a selected alias still reach the physical root admitted at attachment. */
+  static selectionGuard(selected: string, physical: string): (() => void) | undefined {
+    if (selected === physical) return undefined;
+    return () => {
+      if (realpathSync.native(selected) !== physical) throw new Error('The selected workspace folder changed.');
+    };
   }
 
   /** Prime all component comparisons together; a synchronous disclosure needs at most one metadata batch. */
@@ -147,6 +159,18 @@ export class WorkspaceSourceRoutes {
     const root = this.roots.length === 1 ? this.roots[0] : this.roots.find(root => root.name === name);
     if (!root) return undefined;
     return join(root.path, ...parts);
+  }
+
+  /**
+   * Recover the selected spelling of an enrolled physical source. The native disclosure receipt uses this route
+   * so a later retarget of an attached folder changes its origin. Overlapping roots use the most specific owner.
+   */
+  selectedSourcePath(path: string): string {
+    for (let parent = dirname(path); ; parent = dirname(parent)) {
+      const selected = this.selectedRoots.get(parent);
+      if (selected !== undefined) return join(selected, relative(parent, path));
+      if (dirname(parent) === parent) throw new Error('The instruction source is outside the attached workspace.');
+    }
   }
 
   /** All qualified routes to the same file, most specific attached root first. */
