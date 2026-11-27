@@ -76,16 +76,6 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     };
   }
 
-  private async assertPhysicalAccess(absolute: string, handle?: FileHandle, mutation = false): Promise<void> {
-    const managed = mutation ? this.options.managedDirectories : undefined;
-    const managedDirectories = typeof managed === 'function' ? managed() : managed;
-    await this.options.physicalAccess?.assertWorkspacePath(
-      absolute,
-      [...this.options.accessPolicy.privatePaths, ...this.options.excludedPaths.map(path => resolve(this.root, path))],
-      { ...(handle ? { handle } : {}), ...(managedDirectories ? { managedDirectories } : {}) },
-    );
-  }
-
   normalizePath(input: string): string {
     const normalized = normalizeProjectPath(this.root, input);
     if (
@@ -465,6 +455,16 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     } catch (error) {
       throw classifyPathError(error, path);
     }
+  }
+
+  private async assertPhysicalAccess(absolute: string, handle?: FileHandle, mutation = false): Promise<void> {
+    const managed = mutation ? this.options.managedDirectories : undefined;
+    const managedDirectories = typeof managed === 'function' ? managed() : managed;
+    await this.options.physicalAccess?.assertWorkspacePath(
+      absolute,
+      [...this.options.accessPolicy.privatePaths, ...this.options.excludedPaths.map(path => resolve(this.root, path))],
+      { ...(handle ? { handle } : {}), ...(managedDirectories ? { managedDirectories } : {}) },
+    );
   }
 
   private async inspectReadPath(input: string, checkpoint?: WorkspaceReadOptions['interruptedRename']) {
