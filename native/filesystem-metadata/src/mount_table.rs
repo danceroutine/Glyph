@@ -241,11 +241,9 @@ mod tests {
         bad.push(b' ');
         bad.extend_from_slice(alias.join("nested").as_os_str().as_bytes());
         bad.extend_from_slice(b" rest\n");
-        assert!(
-            MountTable::parse(&bad)
-                .unwrap()
-                .visible_aliases(&target, true)
-                .is_err()
-        );
+        assert!(MountTable::parse(&bad)
+            .unwrap()
+            .visible_aliases(&target, true)
+            .is_err());
     }
 }

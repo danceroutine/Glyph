@@ -31,6 +31,32 @@ const peer = { ...owner, windowId: 'peer' } as const;
 const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }] as const;
 
 describe(GlyphDesktopHost, () => {
+  it('rechecks the owning connection, attachment and trust generation at disclosure', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+    fixture.connect('first', owner);
+    await fixture.receive('first', owner, 'attach', attach);
+    const input = fixture.factory.create.mock.calls[0]![0] as Parameters<
+      GlyphDesktopWorkspaceRuntimeFactory['create']
+    >[0];
+    expect(input.assertTrusted).not.toThrow();
+    await fixture.host.disconnect('first');
+    expect(input.assertTrusted).toThrow();
+    fixture.connect('next', owner);
+    expect(input.assertTrusted).toThrow();
+    await fixture.receive('next', owner, 'reattach', attach);
+    expect(input.assertTrusted).not.toThrow();
+    await fixture.receive('next', owner, 'other', { ...attach, roots: [{ ...roots[0], canonicalPath: '/other' }] });
+    expect(input.assertTrusted).toThrow();
+    await fixture.receive('next', owner, 'restore', attach);
+    expect(input.assertTrusted).not.toThrow();
+    await fixture.receive('next', owner, 'revoke', { ...attach, trusted: false });
+    expect(input.assertTrusted).toThrow();
+    await fixture.receive('next', owner, 'grant', attach);
+    expect(input.assertTrusted).toThrow();
+  });
+
   it('returns rule identity lookups only to their authorized attached window', async () => {
     const fixture = new HostFixture();
     const command = {
