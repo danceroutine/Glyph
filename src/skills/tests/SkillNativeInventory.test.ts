@@ -78,7 +78,9 @@ describe('Skill package inventory boundaries', () => {
     await writeFile(join(root, 'SKILL.md'), '---\nname: example\ndescription: Fixture\n---\nExample');
     let paths: string[] = [];
     const policy = new WorkspaceAccessPolicy({}, () => paths);
-    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, [], policy);
+    const release = vi.fn();
+    const acquire = vi.fn(async () => release);
+    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, [], policy, acquire);
     const listing = { files: ['SKILL.md'], truncated: false };
     native.glob.mockImplementationOnce(async () => {
       paths = [join(root, 'future-private')];
@@ -90,7 +92,10 @@ describe('Skill package inventory boundaries', () => {
     const { manager, location, store } = await aSkillLifecycle();
     const preview = await manager.prepare(location.id, draft);
     paths = [join(root, 'SKILL.md')];
-    await expect(manager.apply(preview.id)).rejects.toThrow('Host-private locations changed');
+    const signal = new AbortController().signal;
+    await expect(manager.apply(preview.id, signal)).rejects.toThrow('Host-private locations changed');
+    expect(acquire).toHaveBeenCalledWith(root, signal);
+    expect(release).toHaveBeenCalledTimes(1);
     expect(await store.exists('skills/example')).toBe(false);
 
     paths = [];
@@ -102,12 +107,14 @@ describe('Skill package inventory boundaries', () => {
       paths = [join(root, 'SKILL.md')];
     });
     await expect(manager.apply(pending.id)).rejects.toThrow('Host-private locations changed');
+    expect(release).toHaveBeenCalledTimes(2);
     expect(await store.exists('skills/example')).toBe(false);
 
     paths = [];
     const current = await reader.read({ kind: 'local', path: root });
     const allowed = await manager.prepare(location.id, current);
     await expect(manager.apply(allowed.id)).resolves.toMatchObject({ applied: true });
+    expect(release).toHaveBeenCalledTimes(3);
   });
 
   it('rejects a truncated local index before requesting file bodies', async () => {

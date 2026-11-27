@@ -37,6 +37,7 @@ export class SkillPackageSourceReader {
     private readonly metadata: FilesystemMetadata & HostFilesystemAuthority & WorkspacePathAccess,
     private readonly hostWorkspaceRoots: HostWorkspaceRoots = workspaceRoots,
     private readonly accessPolicy = new WorkspaceAccessPolicy(),
+    private readonly acquireLocalSource?: (root: string, signal?: AbortSignal) => Promise<() => void>,
   ) {}
   async read(input: SkillPackageSource, signal?: AbortSignal): Promise<SkillPackageDraft> {
     const source = skillPackageSourceSchema.parse(input);
@@ -103,7 +104,7 @@ export class SkillPackageSourceReader {
             files,
             directories: [...modes].map(([path, mode]) => ({ path, mode })),
           },
-          assertSourceCurrent,
+          { assertCurrent: assertSourceCurrent, acquire: this.acquireLocalSource?.bind(undefined, root) },
         );
       } finally {
         await index.dispose();
