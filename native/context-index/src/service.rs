@@ -665,13 +665,16 @@ impl ContextIndexService {
             .known_paths
             .read()
             .map_err(|_| ServiceError::internal("The known-path set lock is poisoned."))?;
-        Ok(crate::skill_packages::list(
+        let physical = initialized.policy.physical()?;
+        let result = crate::skill_packages::list(
             &paths,
             marker,
             &initialized.root,
             MAX_GLOB_LIMIT as usize,
             initialized.truncated.load(Ordering::Acquire),
-        ))
+            |path| !physical.excludes(&initialized.root.join(path)),
+        );
+        stable_result(&physical, result)
     }
 
     pub(crate) fn glob(&self, params: GlobParams) -> Result<GlobResult, ServiceError> {
