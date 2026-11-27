@@ -213,6 +213,8 @@ mod tests {
         for path in [&named_staging, &library, &ordinary] {
             fs::create_dir_all(path).unwrap();
         }
+        fs::write(library.join("manifest"), "reviewed package").unwrap();
+        fs::write(marker.join("notes"), "ordinary sibling").unwrap();
         let marker_only = project.join("parent-only");
         fs::create_dir(&marker_only).unwrap();
         mount_bind(&marker, &marker_only).unwrap();
@@ -231,6 +233,20 @@ mod tests {
             .protected_paths
             .iter()
             .any(|p| marker_only.join("notes").starts_with(p)));
+        use crate::projection::{MountTrace, WorkspaceView};
+        let plan = WorkspaceView::new(MountTrace::default())
+            .workspace(
+                &project,
+                &marker_view,
+                &marker_view.protected_paths,
+                &marker_view.private_paths,
+            )
+            .unwrap();
+        for (mode, entry) in [("--ro-bind", "skills/manifest"), ("--bind", "notes")] {
+            assert!(plan
+                .windows(3)
+                .any(|args| { args[0] == mode && args[2] == marker_only.join(entry).as_os_str() }));
+        }
         unmount(&marker_only, UnmountFlags::empty()).unwrap();
         for (src, dst) in [&named_staging, &library, &marker, &ordinary]
             .into_iter()
