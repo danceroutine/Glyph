@@ -42,3 +42,15 @@ it('keeps logical aliases and selects the most specific indexed route for each p
   expect(single.legacyPaths('AGENTS.md')).toEqual(['AGENTS.md', 'Outer/AGENTS.md']);
   expect(single.equivalents('AGENTS.md')).toEqual(['AGENTS.md']);
 });
+
+it('compares physical root prefixes using their volume policy and retains exact logical labels', () => {
+  const nfc = 'café';
+  const nfd = nfc.normalize('NFD');
+  const outer = { name: nfc, path: '/work', normalizesUnicode: true };
+  const inner = { name: nfd, path: '/work/' + nfc, normalizesUnicode: true };
+  const routes = new WorkspaceSourceRoutes([outer, inner]);
+  expect(routes.equivalents(nfc + '/' + nfd + '/file')).toEqual([nfd + '/file', nfc + '/' + nfd + '/file']);
+  expect(routes.normalizeName(nfd, nfd)).toBe(nfc);
+  expect(routes.normalizeName('other', nfd)).toBe(nfd);
+  expect(new WorkspaceSourceRoutes([{ ...outer, normalizesUnicode: false }]).normalizeName('relative', nfd)).toBe(nfd);
+});

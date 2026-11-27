@@ -4,8 +4,20 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 /** A physical workspace root can have several editor routes, including routes through an enclosing root. */
 export class WorkspaceSourceRoutes {
   constructor(
-    private readonly roots: readonly { name: string; path: string; caseSensitive?: boolean; uri?: string }[],
+    private readonly roots: readonly {
+      name: string;
+      path: string;
+      caseSensitive?: boolean;
+      normalizesUnicode?: boolean;
+      uri?: string;
+    }[],
   ) {}
+
+  /** Apply only the routed volume's normalization policy. Logical root labels are exact. */
+  normalizeName(route: string, value: string): string {
+    const root = this.roots.length === 1 ? this.roots[0] : this.roots.find(root => root.name === route.split('/')[0]);
+    return root?.normalizesUnicode ? value.normalize('NFC') : value;
+  }
 
   physicalPath(route: string) {
     const parts = route.split('/');
@@ -22,11 +34,13 @@ export class WorkspaceSourceRoutes {
     if (target === undefined || this.roots.length === 1) return [route];
     return this.roots
       .map(root => {
-        const path = relative(
-          root.caseSensitive === false ? root.path.toLowerCase() : root.path,
-          root.caseSensitive === false ? target.toLowerCase() : target,
-        );
-        return { root, path, spelling: target.slice(root.path.length).split(sep).filter(Boolean).join('/') };
+        const key = (value: string) => {
+          const normalized = root.normalizesUnicode ? value.normalize('NFC') : value;
+          return root.caseSensitive === false ? normalized.toLowerCase() : normalized;
+        };
+        const path = relative(key(root.path), key(target));
+        const depth = root.path.split(sep).filter(Boolean).length;
+        return { root, path, spelling: target.split(sep).filter(Boolean).slice(depth).join('/') };
       })
       .filter(({ path }) => contained(path))
       .toSorted((a, b) => b.root.path.length - a.root.path.length)

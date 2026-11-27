@@ -331,6 +331,7 @@ fn decodes_each_method_and_rejects_invalid_parameters_with_the_request_id() {
         "search",
         "assertReplaceableMetadata",
         "filesystemCaseSensitive",
+        "filesystemNamePolicy",
         "filterPaths",
         "glob",
         "contentSearch",
@@ -1034,6 +1035,7 @@ fn checks_direct_file_replacement_metadata_through_the_protocol() {
         (3, Request::AssertReplaceableMetadata("../notes.txt".into()), false),
         (4, Request::AssertReplaceableMetadata("missing".into()), false),
         (5, decode_request(br#"{"version":1,"id":5,"method":"assertReplaceableMetadata","params":"notes.txt"}"#).unwrap().request, true),
+        (7, decode_request(serde_json::json!({"version":1,"id":7,"method":"filesystemNamePolicy","params":project.path()}).to_string().as_bytes()).unwrap().request, true),
         (6, Request::Shutdown, true),
     ] {
         sender.send(work(id,req)).unwrap();
