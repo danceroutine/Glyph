@@ -984,6 +984,29 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(request.mock.lastCall?.[1]).toMatchObject({ mutation: { path: 'one/file.txt' } });
     });
 
+    it('uses selected-file authority for an explicit capture and project authority for automatic expansions', async () => {
+      const fixture = await factoryFixture();
+      const project = await fixture.folder('project', { 'notes.md': 'original' });
+      const personal = join(isolatedUserDirectory, 'rules/personal.md');
+      await mkdir(dirname(personal), { recursive: true });
+      await writeFile(personal, 'reserved user rule');
+      useFilesystemIndex();
+      const runtime = await fixture.create([project, isolatedUserDirectory]);
+      const name = basename(isolatedUserDirectory);
+      const source = { uri: pathToFileURL(personal).href, path: name + '/rules/personal.md', folder: false };
+      const signal = new AbortController().signal;
+      await expect(runtime.attachmentAccess.resolve(source, signal)).resolves.toBeUndefined();
+      await expect(runtime.attachmentAccess.resolve({ ...source, projectFile: true }, signal)).rejects.toThrow(
+        'excluded',
+      );
+      await expect(runtime.attachmentAccess.resolve({ ...source, path: 'project/notes.md' }, signal)).rejects.toThrow(
+        'declared workspace path',
+      );
+      await expect(
+        runtime.attachmentAccess.resolve({ path: 'project', uri: pathToFileURL(project).href, folder: true }, signal),
+      ).resolves.toEqual({ files: ['notes.md'], truncated: false });
+    });
+
     it('lists and canonicalizes editor paths through the workspace index and disk', async () => {
       const fixture = await factoryFixture();
       const root = await fixture.folder('workspace', { 'file.txt': 'disk' });

@@ -2,6 +2,8 @@
 export interface ContextAttachmentSource {
   readonly kind: 'selection' | 'file' | 'folder' | 'diagnostic' | 'symbol' | 'diff' | 'terminal' | 'test';
   readonly uri: string;
+  readonly folderListing?: { readonly files: readonly string[]; readonly truncated: boolean };
+  readonly projectFile?: true;
   readonly version: number;
   readonly revision: string;
   readonly range?: {

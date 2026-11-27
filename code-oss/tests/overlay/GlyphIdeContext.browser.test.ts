@@ -38,10 +38,12 @@ function ideServices() {
   const runs: TestRun[] = [];
   const contextPath = vi.fn((uri: URI) => {
     if (uri.scheme === 'untitled') return uri.path;
+    if (uri.path === '/workspace') return '';
     if (!uri.path.startsWith('/workspace/')) throw new Error('Outside of the workspace');
     return uri.path.slice('/workspace/'.length);
   });
   const services = {
+    resolveResource: vi.fn(async (_resource: { uri: string; path: string; folder: boolean }) => {}),
     models,
     markers,
     choices,
@@ -123,6 +125,7 @@ type IdeServices = ReturnType<typeof ideServices>;
 function createIdeContext(services: IdeServices) {
   return new GlyphIdeContext(
     services.adapter as never,
+    services.resolveResource,
     services.markerService as never,
     services.languages as never,
     services.resolver as never,
@@ -735,6 +738,24 @@ describe(GlyphIdeContext, () => {
   });
 
   describe(GlyphIdeContext.prototype.captureDiff, () => {
+    it('checks the original name in the Git provider query before loading the comparison or reporting its contents', async () => {
+      const services = ideServices();
+      const selected = URI.file('/workspace/a.ts');
+      const before = selected.with({
+        scheme: 'git',
+        query: JSON.stringify({ path: '/workspace/private/old.ts', ref: 'HEAD' }),
+      });
+      services.resolveResource.mockImplementation(async resource => {
+        if (resource.path === 'private/old.ts') throw new Error('private source');
+      });
+      const captured = vi.fn();
+      await expect(
+        createIdeContext(services).captureDiff(selected, before, selected, 'rename', captured),
+      ).rejects.toThrow('private source');
+      expect(services.resolver.createModelReference).not.toHaveBeenCalled();
+      expect(captured).not.toHaveBeenCalled();
+    });
+
     it('captures an added file and reports the compared text', async () => {
       const services = ideServices();
       const after = services.model(URI.file('/workspace/a.ts'), 'one\ntwo\n');
@@ -788,6 +809,14 @@ describe(GlyphIdeContext, () => {
   });
 
   describe(GlyphIdeContext.prototype.captureDiagnostic, () => {
+    it('propagates host denial before opening a diagnostic model', async () => {
+      const services = ideServices();
+      const resource = URI.file('/workspace/private.md');
+      services.resolveResource.mockRejectedValue(new Error('private document'));
+      await expect(createIdeContext(services).captureDiagnostic(marker(resource))).rejects.toThrow('private document');
+      expect(services.resolver.createModelReference).not.toHaveBeenCalled();
+    });
+
     it.each([
       [{ modelVersionId: 9 }, 'stale: diagnostic no longer matches the editor; captured message is historical'],
       [{ modelVersionId: undefined }, 'freshness unknown: provider did not report a model version'],

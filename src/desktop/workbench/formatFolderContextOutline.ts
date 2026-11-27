@@ -34,3 +34,8 @@ export function formatFolderContextOutline(paths: readonly string[], truncated =
   if (truncated) lines.push('… Tree truncated at the search limit.');
   return lines.join('\n');
 }
+
+/** Render the selected directory with its captured, policy-visible filenames. */
+export function formatFolderAttachment(path: string, files: readonly string[], truncated: boolean): string {
+  return `Directory tree: ${path}\n(Search-visible paths; file contents are not included.)\n\n${formatFolderContextOutline(files, truncated)}`;
+}

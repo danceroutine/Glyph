@@ -1,6 +1,7 @@
 import { UserSkillDirectory } from '#src/skills/UserSkillDirectory.js';
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { WorkspaceRootSelections } from '#src/workspace/WorkspaceRootSelections.js';
+import { DesktopAttachmentAccess } from './DesktopAttachmentAccess.ts';
 import { readSourcePathAliases } from '#src/workspace/SourcePathAliases.js';
 import { readDirectoryNamePolicies } from '#src/workspace/readDirectoryNamePolicies.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
@@ -319,7 +320,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           ? { ...dirty[0]!, snapshot: { ...dirty[0]!.snapshot!, path: request.path } }
           : responses[0]!;
       });
-      return { name: workspaceRoot.name, workspace, selectedFiles, catalog, disk, index };
+      return { name: workspaceRoot.name, workspace, selectedFiles, selectedDisk, catalog, disk, index };
     });
     const routes = new WorkspaceSourceRoutes(
       parts.map((part, index) => ({
@@ -330,7 +331,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         caseSensitive: part.disk.caseSensitive,
         normalizesUnicode: namePolicies[index]!.normalizesUnicode,
         foldsUnicode: namePolicies[index]!.foldsUnicode,
-        uri: input.roots[index]!.uri,
+        uri: pathToFileURL(input.roots[index]!.canonicalPath).href,
       })),
       readDirectoryNamePolicies.bind(undefined, indexExecutable),
     );
@@ -807,6 +808,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         selections[Symbol.dispose]();
       },
       glyph,
+      attachmentAccess: new DesktopAttachmentAccess(routes, parts, () => {
+        const project = access.project.beginOperation();
+        const selected = access.selectedFile.beginOperation();
+        return () => {
+          project.assertCurrent();
+          selected.assertCurrent();
+        };
+      }),
       agentReviews,
       interactions,
       shellSessions: shells,

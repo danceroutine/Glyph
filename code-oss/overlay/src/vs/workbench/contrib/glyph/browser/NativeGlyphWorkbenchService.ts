@@ -36,7 +36,11 @@ import { GlyphHostEventType } from '#glyph/protocol/events/GlyphHostEvent.js';
 import { GlyphRunStatus } from '#glyph/protocol/events/GlyphRunProjection.js';
 import { GlyphHostStatus } from '#glyph/protocol/events/GlyphHostStatus.js';
 import { GlyphWorkbenchCommandType, type GlyphWorkbenchCommand } from '#glyph/protocol/GlyphWorkbenchCommand.js';
-import { type GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
+import type {
+  GlyphAttachmentResource,
+  GlyphContextAttachment,
+  GlyphFolderListing,
+} from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import { GlyphDesktopClient } from '#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js';
 import { GlyphProposalEditor } from './GlyphProposalEditor.js';
 import { GlyphEditorAdapter } from './GlyphEditorAdapter.js';
@@ -161,6 +165,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         editor,
         () => this.composer,
         () => this.state.instructionSources ?? [],
+        resource => this.resolveAttachmentResource(resource),
       ),
     );
     this.context.setSkillSources(
@@ -247,8 +252,12 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.client.onDidReceiveEvent(envelope => {
         if (this.invalidateChangedSession()) return;
         const event = envelope.event;
-        if (event.type === GlyphHostEventType.SKILL_REFERENCE_RESOLVED) return;
-        if (event.type === GlyphHostEventType.RULE_REFERENCE_RESOLVED) return;
+        if (
+          event.type === GlyphHostEventType.SKILL_REFERENCE_RESOLVED ||
+          event.type === GlyphHostEventType.RULE_REFERENCE_RESOLVED ||
+          event.type === GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED
+        )
+          return;
         if (event.type === GlyphHostEventType.PROPOSAL_PREVIEW) {
           this.proposalEditor.acceptPreview(event.preview);
           return;
@@ -1166,6 +1175,23 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       !this.projection.state.runs.some(run => run.chatId === this.selectedChatId)
     ) {
       await this.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
+    }
+  }
+
+  private async resolveAttachmentResource(resource: GlyphAttachmentResource): Promise<GlyphFolderListing | undefined> {
+    const revision = this.workspaceRevision;
+    const lookupId = generateUuid();
+    let result: { listing?: GlyphFolderListing } | undefined;
+    const listener = this.client.onDidReceiveEvent(({ event }) => {
+      if (event.type === GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED && event.lookupId === lookupId) result = event;
+    });
+    try {
+      await this.request({ type: GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE, lookupId, resource });
+      this.assertWorkspaceRevision(revision);
+      if (!result) throw new Error('The workspace could not resolve this attachment.');
+      return result.listing;
+    } finally {
+      listener.dispose();
     }
   }
 

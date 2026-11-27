@@ -122,13 +122,12 @@ export async function captureGlyphAgentReview(
         change.originalUri,
         change.modifiedUri,
         label,
-        ...(captured
-          ? [
-              (beforeText: string, after: string) => {
-                captured(change.uri, beforeText, after);
-              },
-            ]
-          : []),
+        captured
+          ? (beforeText, after) => {
+              captured(change.uri, beforeText, after);
+            }
+          : undefined,
+        true,
       ),
     );
   if (attachments.reduce((bytes, item) => bytes + new TextEncoder().encode(item.text).byteLength, 0) > 2 * 1024 * 1024)
@@ -139,7 +138,7 @@ export async function captureGlyphAgentReview(
   if (scope === Scope.STAGED || scope === Scope.ALL_LOCAL) {
     for (let index = 0; index < changes.length; index++) {
       const change = changes[index];
-      const check = await ide.captureDiff(change.uri, change.originalUri, change.modifiedUri, label);
+      const check = await ide.captureDiff(change.uri, change.originalUri, change.modifiedUri, label, undefined, true);
       if (check.contentRevision !== attachments[index].contentRevision)
         throw new Error('A changed file was edited during capture. Start the review again.');
     }

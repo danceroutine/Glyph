@@ -205,6 +205,8 @@ const transcriptTurnSchema = z
             .object({
               kind: z.enum(['selection', 'file', 'folder', 'diagnostic', 'symbol', 'diff', 'terminal', 'test']),
               uri: z.string(),
+              folderListing: z.object({ files: z.array(z.string()).max(1000), truncated: z.boolean() }).optional(),
+              projectFile: z.literal(true).optional(),
               version: z.number(),
               revision: z.string(),
               range: z
@@ -295,6 +297,8 @@ const transcriptTurnSchema = z
                       version: source.version,
                       revision: source.revision,
                       ...(source.range ? { range: source.range } : {}),
+                      ...(source.folderListing ? { folderListing: source.folderListing } : {}),
+                      ...(source.projectFile ? { projectFile: source.projectFile } : {}),
                       ...(source.side ? { side: source.side } : {}),
                     },
                   }),

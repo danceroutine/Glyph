@@ -8,6 +8,7 @@ import type { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
+import type { DesktopAttachmentAccess } from './DesktopAttachmentAccess.ts';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
@@ -119,6 +120,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     private readonly options: {
       readonly glyph: GlyphService;
       readonly releaseWorkspace?: () => void;
+      readonly attachmentAccess: Pick<DesktopAttachmentAccess, 'admit' | 'resolve'>;
       readonly agentReviews?: AgentReviewService;
       readonly interactions: DesktopInteractionBroker;
       readonly shellSessions: Pick<
@@ -326,6 +328,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     return summary.goal!;
   }
 
+  get attachmentAccess() {
+    return this.options.attachmentAccess;
+  }
+
   private restoredRuleOptions(options: ChatTurnOptions): ChatTurnOptions {
     if (!options.manualRuleIds?.length) return options;
     const ids = new Map(options.manualRuleIds.map(id => [id, this.resolveRuleReference(id) ?? id]));
@@ -385,6 +391,18 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         const models = await glyph.listModels(account, this.discovery.signal);
         if (!models.some(model => model.slug === command.model.model))
           throw new Error('The selected review model is unavailable.');
+        await this.options.attachmentAccess.admit(
+          command.review.files.map(file => ({
+            kind: GlyphContextAttachmentKind.DIFF,
+            uri: file.uri,
+            path: file.path,
+            text: file.contextText,
+            contentRevision: file.revision,
+            projectFile: true,
+          })),
+          commandSignal,
+        );
+        commandSignal.throwIfAborted();
         await this.options.agentReviews.start(command.review, command.model);
         return;
       }
@@ -479,13 +497,18 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
                   kind:
                     Object.values(GlyphContextAttachmentKind).find(kind => kind === attachment.source?.kind) ??
                     (attachment.source?.range ? GlyphContextAttachmentKind.SELECTION : GlyphContextAttachmentKind.FILE),
-                  uri: attachment.source?.uri ?? attachment.path,
+                  uri:
+                    attachment.source?.uri && attachment.source.uri !== attachment.path
+                      ? attachment.source.uri
+                      : (this.options.referenceResources?.(attachment.path).at(-1)?.uri ?? attachment.path),
                   path: attachment.path,
                   text: attachment.text,
                   contentRevision: attachment.revision,
                   sourceRevision: attachment.source?.revision ?? attachment.revision,
                   sourceVersion: attachment.source?.version ?? 0,
                   ...(attachment.source?.range ? { range: attachment.source.range } : {}),
+                  ...(attachment.source?.folderListing && { folderListing: attachment.source.folderListing }),
+                  ...(attachment.source?.projectFile && { projectFile: attachment.source.projectFile }),
                   ...(attachment.source?.side ? { side: attachment.source.side } : {}),
                 })),
               },
@@ -568,6 +591,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       }
       case GlyphWorkbenchCommandType.SEND: {
         chatTurnOptionsSchema.parse(command.options ?? {});
+        if (command.attachments.length > 0)
+          await this.options.attachmentAccess.admit(command.attachments, commandSignal);
+        commandSignal.throwIfAborted();
         if (this.active.has(command.chatId) || this.historyChanges.has(command.chatId))
           throw new ProtocolError('This chat already has an active run or history change.');
         if (this.runs.has(command.runId)) throw new Error('This run id has already been used.');
@@ -639,18 +665,21 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         return;
       case GlyphWorkbenchCommandType.STEER: {
         const options = chatTurnOptionsSchema.parse(command.options ?? {});
-        const active = this.active.get(command.chatId);
-        if (active?.runId === command.runId && active.admission) await active.admission;
-        const run = this.runs.get(command.runId);
-        if (!active || active.runId !== command.runId || active.controller.signal.aborted || !run)
-          throw new ProtocolError('There is no active response to steer.');
         if (!command.text.trim()) throw new ProtocolError('Steering instructions cannot be empty.');
         const attachments = command.attachments;
+        const active = this.active.get(command.chatId);
+        if (active?.runId === command.runId && active.admission) await active.admission;
+        if (attachments.length > 0) await this.options.attachmentAccess.admit(attachments, commandSignal);
+        commandSignal.throwIfAborted();
+        const run = this.runs.get(command.runId);
         if (
-          attachments.length > 32 ||
-          attachments.reduce((total, value) => total + Buffer.byteLength(value.text), 0) > 2 * 1024 * 1024
+          !active ||
+          this.active.get(command.chatId) !== active ||
+          active.runId !== command.runId ||
+          active.controller.signal.aborted ||
+          !run
         )
-          throw new ProtocolError('Reduce the selected context to at most 32 attachments and 2 MiB.');
+          throw new ProtocolError('There is no active response to steer.');
         active.steering.add(
           { text: command.text, ...options, attachments: toRequestAttachments(attachments) },
           {
@@ -952,6 +981,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
         signal.throwIfAborted();
       }
+      if (command.attachments.length > 0) await this.options.attachmentAccess.admit(command.attachments, signal);
+      signal.throwIfAborted();
       // Bind tool prompts to this exact run so another chat cannot answer them.
       await this.options.interactions.run(command, () =>
         session.send(
@@ -1448,6 +1479,8 @@ function toRequestAttachments(attachments: readonly GlyphContextAttachment[]): C
         revision: attachment.sourceRevision ?? attachment.contentRevision,
         ...(attachment.range ? { range: attachment.range } : {}),
         ...(attachment.side ? { side: attachment.side } : {}),
+        ...(attachment.folderListing && { folderListing: attachment.folderListing }),
+        ...(attachment.projectFile && { projectFile: attachment.projectFile }),
       },
       byteOrderMark: false,
       byteLength: Buffer.byteLength(attachment.text),
