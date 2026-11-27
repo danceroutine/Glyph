@@ -1166,6 +1166,10 @@ fn poisoned_shared_state_is_reported_as_an_internal_error() {
     let filter = paths_service
         .filter_paths(vec!["main.ts".to_owned()])
         .expect_err("filtering should fail");
+    assert_eq!(
+        paths_service.list_skill_packages(None).unwrap_err().code,
+        "INTERNAL"
+    );
     let glob = paths_service
         .glob(GlobParams {
             root_files_only: false,

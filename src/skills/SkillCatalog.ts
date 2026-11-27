@@ -93,16 +93,37 @@ export class SkillCatalog {
     return source;
   }
 
-  appliesTo(skill: SkillDescriptor, paths: readonly string[]): boolean {
-    if (skill.scope === '.') return true;
-    const provider = this.byId.get(skill.origin.id);
-    const scope = provider?.scopePathKey?.(skill.scope) ?? skill.scope;
-    return paths
-      .flatMap(path => this.workspaceRoutes?.equivalents(path) ?? [path])
-      .some(path => {
-        const key = provider?.scopePathKey?.(path) ?? path;
-        return key === scope || key.startsWith(`${scope}/`);
-      });
+  /** Match one batch of paths against each provider's scope hierarchy, retaining catalog precedence. */
+  applicableSkills(skills: readonly SkillDescriptor[], paths: readonly string[]): readonly SkillDescriptor[] {
+    let routes: Set<string> | undefined;
+    const byOrigin = new Map<string, { ancestors: Set<string>; scopes: Map<string, boolean> }>();
+    return skills.filter(skill => {
+      if (skill.scope === '.') return true;
+      const provider = this.byId.get(skill.origin.id);
+      const key = (path: string) => provider?.scopePathKey?.(path) ?? path;
+      let index = byOrigin.get(skill.origin.id);
+      if (!index) {
+        const ancestors = new Set<string>();
+        routes ??= new Set([...new Set(paths)].flatMap(path => this.workspaceRoutes?.equivalents(path) ?? [path]));
+        for (const route of routes) {
+          let scope = key(route);
+          while (!ancestors.has(scope)) {
+            ancestors.add(scope);
+            const slash = scope.lastIndexOf('/');
+            if (slash < 0) break;
+            scope = scope.slice(0, slash);
+          }
+        }
+        index = { ancestors, scopes: new Map() };
+        byOrigin.set(skill.origin.id, index);
+      }
+      let matches = index.scopes.get(skill.scope);
+      if (matches === undefined) {
+        matches = index.ancestors.has(key(skill.scope));
+        index.scopes.set(skill.scope, matches);
+      }
+      return matches;
+    });
   }
 
   async capture(descriptor: SkillDescriptor, signal?: AbortSignal) {

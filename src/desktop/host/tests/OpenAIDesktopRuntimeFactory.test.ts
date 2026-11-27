@@ -72,6 +72,13 @@ const captured = vi.hoisted(() => ({
 }));
 
 beforeEach(() => {
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'listSkillPackages').mockImplementation(function (
+    this: RustWorkspacePathIndex,
+    marker,
+    signal,
+  ) {
+    return this.glob(marker ? `**/${marker}/skills/**/*` : '**/*', { limit: 10_000, ...(signal ? { signal } : {}) });
+  });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({ files: [], truncated: false });
 });
 

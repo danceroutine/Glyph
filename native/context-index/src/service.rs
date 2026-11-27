@@ -624,6 +624,27 @@ impl ContextIndexService {
         Ok(selected.into_iter().collect())
     }
 
+    pub(crate) fn list_skill_packages(
+        &self,
+        marker: Option<&str>,
+    ) -> Result<GlobResult, ServiceError> {
+        let initialized = self
+            .initialized
+            .as_ref()
+            .ok_or_else(ServiceError::not_initialized)?;
+        let paths = initialized
+            .known_paths
+            .read()
+            .map_err(|_| ServiceError::internal("The known-path set lock is poisoned."))?;
+        Ok(crate::skill_packages::list(
+            &paths,
+            marker,
+            initialized.policy.case_sensitive,
+            MAX_GLOB_LIMIT as usize,
+            initialized.truncated.load(Ordering::Acquire),
+        ))
+    }
+
     pub(crate) fn glob(&self, params: GlobParams) -> Result<GlobResult, ServiceError> {
         if params.limit == 0 || params.limit > MAX_GLOB_LIMIT {
             return Err(ServiceError::invalid_request(format!(

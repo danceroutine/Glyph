@@ -15,7 +15,7 @@ export class SkillContextContributor implements TurnContextContributor {
   async beginTurn(input: TurnContextInput, signal?: AbortSignal): Promise<SkillTurnContext> {
     const sources = await this.catalog.refresh(signal);
     const descriptors = sources.filter(skill => skill.enabled && skill.status === 'active');
-    const candidates = descriptors.filter(skill => this.catalog.appliesTo(skill, input.attachmentPaths));
+    const candidates = this.catalog.applicableSkills(descriptors, input.attachmentPaths);
     const session = new SkillTurnContext(input.turnId, descriptors, candidates, this.catalog, sources);
     try {
       await session.initialize(input.skillIds ?? [], signal);
@@ -57,8 +57,10 @@ export class SkillTurnContext implements TurnContextContribution {
     };
   }
   disclosePaths(paths: readonly string[]): TurnContextEnvelope | undefined {
-    const candidates = this.descriptors.filter(
-      skill => !this.advertised.has(skill.id) && !this.packages.has(skill.id) && this.catalog.appliesTo(skill, paths),
+    if (this.advertised.size >= 50) return undefined;
+    const candidates = this.catalog.applicableSkills(
+      this.descriptors.filter(skill => !this.advertised.has(skill.id) && !this.packages.has(skill.id)),
+      paths,
     );
     const advertised = this.offerCandidates(candidates);
     return advertised.length > 0
