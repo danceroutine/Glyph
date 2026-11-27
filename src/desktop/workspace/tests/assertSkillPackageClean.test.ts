@@ -110,3 +110,39 @@ it('requires a correlated clean response and fails closed on dirty, unavailable,
     ).rejects.toThrow();
   }
 });
+
+it('sends each recipient its physical mount route and rechecks mount changes before returning', async () => {
+  const peer = {
+    identity: { ...identity, windowId: 'peer' },
+    connectionId: 'peer',
+    directoryUri: 'file:///editor/work',
+    physicalPackageUri: 'file:///mount/one',
+  };
+  const registry = vi.fn(() => [peer]);
+  const request = vi.fn<EditorRpcRouter['request']>(async (_identity, input) => ({
+    operationId: 'operationId' in input ? input.operationId : '',
+    ok: true,
+    packageClean: true,
+  }));
+  const intersection = { directoryUri: 'file:///owner/one', physicalPackageUri: 'file:///owner-mount/one' };
+  const check = () =>
+    assertSkillPackageClean(
+      { request, trustedSkillEditors: registry },
+      identity,
+      'project',
+      '/source/one',
+      undefined,
+      [intersection, intersection],
+      undefined,
+      ['/mount/one'],
+    );
+  await check();
+  expect(registry).toHaveBeenCalledWith(identity, '/source/one', ['/mount/one']);
+  expect(request.mock.calls.map(([, cmd]) => cmd)).toMatchObject([
+    { physicalPackageUri: 'file:///source/one' },
+    intersection,
+    { physicalPackageUri: peer.physicalPackageUri },
+  ]);
+  registry.mockReturnValueOnce([peer]).mockReturnValueOnce([{ ...peer, physicalPackageUri: 'file:///other/one' }]);
+  await expect(check()).rejects.toThrow('windows changed');
+});

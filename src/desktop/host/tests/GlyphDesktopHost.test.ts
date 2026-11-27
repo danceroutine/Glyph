@@ -304,6 +304,49 @@ describe(GlyphDesktopHost, () => {
     await fixture.host.disconnect('peer');
     await expect(check()).rejects.toThrow('reconnecting');
   });
+  it('projects a mounted package into a disjoint editor root and keeps its pre-swap route', async () => {
+    const parent = await realpath(await mkdtemp(join(tmpdir(), 'glyph-peer-mount-')));
+    onTestFinished(() => rm(parent, { recursive: true, force: true }));
+    const registered = join(parent, 'peer');
+    const target = join(parent, 'owner', 'package');
+    const alias = join(registered, 'mount');
+    await mkdir(target, { recursive: true });
+    await mkdir(alias, { recursive: true });
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const lookup = vi.fn(() => [target, alias]);
+    Object.assign(fixture.factory, { sourcePathAliases: lookup });
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    for (const [key, identity, path] of [
+      ['owner', owner, join(parent, 'owner')],
+      ['peer', peer, registered],
+    ] as const) {
+      await fixture.receive(key, identity, 'attach-' + key, {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots: [{ name: key, uri: pathToFileURL(path).toString(), canonicalPath: path }],
+        trusted: true,
+      });
+    }
+    const editor = {
+      identity: peer,
+      connectionId: 'peer',
+      directoryUri: pathToFileURL(alias).toString(),
+      physicalPackageUri: pathToFileURL(alias).toString(),
+    };
+    expect(fixture.host.trustedSkillEditors(owner, target)).toEqual([editor]);
+    lookup.mockReturnValue([target]);
+    expect(fixture.host.trustedSkillEditors(owner, target, [alias])).toEqual([editor]);
+    expect(fixture.host.trustedSkillEditors(owner, target)).toEqual([]);
+    await fixture.receive('peer', peer, 'inside', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: [{ name: 'inside', uri: pathToFileURL(alias).toString(), canonicalPath: alias }],
+      trusted: true,
+    });
+    await rm(target, { recursive: true });
+    await rm(alias, { recursive: true });
+    expect(fixture.host.trustedSkillEditors(owner, target, [alias])).toEqual([editor]);
+  });
   it('does not invoke trusted snapshot work for a rejected observer', async () => {
     const fixture = new HostFixture();
     fixture.connect('owner', owner);

@@ -105,6 +105,10 @@ export class SkillPackageDraft {
     if (Buffer.byteLength(manifest.body) > 64 * 1024) throw new Error('Skill instructions exceed 64 KiB.');
     this.revision = packageRevision(this.packageFiles(), this.packageDirectories());
   }
+  *entryPaths(): Iterable<string> {
+    yield* this.contents.keys();
+    yield* this.directoryModes.keys();
+  }
   packageFiles(existing: ReadonlyMap<string, { mode: number }> = new Map()) {
     return new Map(
       [...this.contents].map(([path, bytes]) => {

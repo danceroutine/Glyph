@@ -33,10 +33,10 @@ const parentPort = (process as UtilityProcess).parentPort;
 if (!parentPort) throw new Error('The Glyph desktop host must run as an Electron utility process.');
 
 const editors: EditorRpcRouter = new EditorRpcRouter(
-  (owner, projectDirectory) =>
+  (owner, projectDirectory, retainedAliases) =>
     projectDirectory === undefined
       ? host.trustedSkillEditors(owner)
-      : host.trustedSkillEditors(owner, projectDirectory),
+      : host.trustedSkillEditors(owner, projectDirectory, retainedAliases),
   (owner, sourcePath) => host.trustedUserEditors(owner, sourcePath),
 );
 const transport =

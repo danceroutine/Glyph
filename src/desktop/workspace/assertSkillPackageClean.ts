@@ -13,13 +13,14 @@ export async function assertSkillPackageClean(
   scope: 'project',
   absolutePackageDirectory: string,
   logicalProjectDirectoryUri?: string,
-  ownerIntersections: readonly string[] = [],
+  ownerIntersections: readonly (string | { directoryUri: string; physicalPackageUri: string })[] = [],
   namePolicy?: FilesystemNamePolicy,
+  retainedAliases?: readonly string[],
 ): Promise<void> {
   if (!isAbsolute(absolutePackageDirectory))
     throw new Error('Skill working-copy checks require an absolute package directory.');
   const { CHECK_SKILL_WORKING_COPIES } = GlyphEditorRequestType;
-  const peers = editors.trustedSkillEditors(identity, absolutePackageDirectory);
+  const peers = editors.trustedSkillEditors(identity, absolutePackageDirectory, retainedAliases);
   const physicalPackageUri = pathToFileURL(absolutePackageDirectory).toString();
   const operationId = randomUUID();
   const comparison = namePolicy ? { namePolicy } : {};
@@ -35,15 +36,19 @@ export async function assertSkillPackageClean(
         ...comparison,
       } as const,
     },
-    ...ownerIntersections.map(directoryUri => ({
+    ...[
+      ...new Map(
+        ownerIntersections.map(value => [typeof value === 'string' ? value : value.directoryUri, value]),
+      ).values(),
+    ].map(value => ({
       identity,
       request: {
         type: CHECK_SKILL_WORKING_COPIES,
         operationId: randomUUID(),
         scope: 'project',
         peerWorkspaceIntersection: true,
-        directoryUri,
-        physicalPackageUri,
+        directoryUri: typeof value === 'string' ? value : value.directoryUri,
+        physicalPackageUri: typeof value === 'string' ? physicalPackageUri : value.physicalPackageUri,
         ...comparison,
       } as const,
     })),
@@ -54,7 +59,7 @@ export async function assertSkillPackageClean(
         type: CHECK_SKILL_WORKING_COPIES,
         scope,
         peerWorkspaceIntersection: true,
-        physicalPackageUri,
+        physicalPackageUri: peer.physicalPackageUri ?? physicalPackageUri,
         ...comparison,
         directoryUri:
           peer.directoryUri ??
@@ -72,8 +77,9 @@ export async function assertSkillPackageClean(
       if (!response.packageClean) throw new Error('Save or discard unsaved skill edits before managing the package.');
     }),
   );
-  const current = editors.trustedSkillEditors(identity, absolutePackageDirectory);
-  const peerKey = (peer: (typeof peers)[number]) => JSON.stringify([peer.connectionId, peer.directoryUri]);
+  const current = editors.trustedSkillEditors(identity, absolutePackageDirectory, retainedAliases);
+  const peerKey = (peer: (typeof peers)[number]) =>
+    JSON.stringify([peer.connectionId, peer.directoryUri, peer.physicalPackageUri]);
   const currentKeys = new Set(current.map(peer => peerKey(peer)));
   if (currentKeys.size !== peers.length || peers.some(peer => !currentKeys.has(peerKey(peer))))
     throw new Error('The trusted Glyph windows changed during the working-copy check. Preview the skill change again.');

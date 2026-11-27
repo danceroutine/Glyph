@@ -18,7 +18,13 @@ export class EditorRpcRouter {
     readonly trustedSkillEditors: (
       owner: GlyphConnectionIdentity,
       projectDirectory?: string,
-    ) => readonly { identity: GlyphConnectionIdentity; connectionId: string; directoryUri?: string }[] = () => [],
+      retainedAliases?: readonly string[],
+    ) => readonly {
+      identity: GlyphConnectionIdentity;
+      connectionId: string;
+      directoryUri?: string;
+      physicalPackageUri?: string;
+    }[] = () => [],
     readonly trustedUserEditors: (
       owner: GlyphConnectionIdentity,
       sourcePath?: string,

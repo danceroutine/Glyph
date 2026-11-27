@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { projectIntersection } from '#src/workspace/WorkspaceSourceRoutes.js';
@@ -75,46 +76,71 @@ export class GlyphDesktopHost {
   trustedSkillEditors(
     owner: GlyphConnectionIdentity,
     projectDirectory?: string,
-  ): readonly { identity: GlyphConnectionIdentity; connectionId: string; directoryUri?: string }[] {
+    retainedAliases: readonly string[] = [],
+  ): readonly {
+    identity: GlyphConnectionIdentity;
+    connectionId: string;
+    directoryUri?: string;
+    physicalPackageUri?: string;
+  }[] {
+    const aliases =
+      projectDirectory === undefined
+        ? []
+        : [
+            ...new Set([
+              ...(this.runtimeFactory.sourcePathAliases?.(projectDirectory, true) ?? [projectDirectory]),
+              ...retainedAliases,
+            ]),
+          ];
     const peers = [];
     for (const peer of this.sessions.values()) {
       if (!peer.trusted || connectionKey(peer.identity) === connectionKey(owner)) continue;
-      const directories = new Set<string | undefined>();
+      const directories = new Map<string | undefined, string | undefined>();
       if (projectDirectory === undefined) {
-        directories.add(undefined);
+        directories.set(undefined, undefined);
       } else {
         for (const root of peer.roots) {
           const current = physicalRoot(root);
           const observed = peer.physicalRoots.get(root)!;
           if (current !== undefined) observed.add(current);
           // After removing a package, a peer attached inside it still owns its logical working-copy URIs.
-          if (
-            current === undefined &&
-            !existsSync(projectDirectory) &&
-            [...observed].some(physical => projectIntersection(root, physical, projectDirectory) === root.uri)
-          ) {
-            directories.add(root.uri);
-            continue;
+          if (current === undefined && !existsSync(projectDirectory)) {
+            const previous = aliases.find(alias =>
+              [...observed].some(physical => projectIntersection(root, physical, alias) === root.uri),
+            );
+            if (previous !== undefined) {
+              directories.set(root.uri, previous === projectDirectory ? undefined : pathToFileURL(previous).toString());
+              continue;
+            }
           }
           // A disappearing or retargeted alias can still own dirty working copies under its original URI.
           const lostOverlap = [...observed].some(
-            physical => physical !== current && projectIntersection(root, physical, projectDirectory) !== undefined,
+            physical =>
+              physical !== current && aliases.some(alias => projectIntersection(root, physical, alias) !== undefined),
           );
           if (lostOverlap || observed.size === 0)
             throw new Error(
               'A trusted Glyph window has an unavailable project root. Reconnect it before changing the package.',
             );
           if (current === undefined) continue;
-          const directory = projectIntersection(root, current, projectDirectory);
-          if (directory !== undefined) directories.add(directory);
+          for (const alias of aliases) {
+            const directory = projectIntersection(root, current, alias);
+            if (directory !== undefined && !directories.has(directory))
+              directories.set(directory, alias === projectDirectory ? undefined : pathToFileURL(alias).toString());
+          }
         }
         if (directories.size === 0) continue;
       }
       const connectionId = [...this.connections].find(([, current]) => current === peer)?.[0];
       if (!connectionId || !peer.authorityKnown || peer.pendingAttachments > 0)
         throw new Error('Another trusted Glyph window is reconnecting. Retry the skill change after it reconnects.');
-      for (const directoryUri of directories)
-        peers.push({ identity: peer.identity, connectionId, ...(directoryUri === undefined ? {} : { directoryUri }) });
+      for (const [directoryUri, physicalPackageUri] of directories)
+        peers.push({
+          identity: peer.identity,
+          connectionId,
+          ...(directoryUri === undefined ? {} : { directoryUri }),
+          ...(physicalPackageUri ? { physicalPackageUri } : {}),
+        });
     }
     return peers;
   }

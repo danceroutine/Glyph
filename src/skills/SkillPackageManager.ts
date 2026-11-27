@@ -1,4 +1,5 @@
-import { sameWorkspaceDirectory } from '#src/workspace/sameWorkspaceDirectory.js';
+import type { SourcePathAliases } from '#src/workspace/SourcePathAliases.js';
+import { sameWorkspaceDirectorySpelling } from '#src/workspace/sameWorkspaceDirectory.js';
 import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 import { SkillProjectMutationPolicy } from './SkillProjectMutationPolicy.ts';
 import { pathToFileURL } from 'node:url';
@@ -13,6 +14,7 @@ import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { SkillCatalog } from './SkillCatalog.ts';
 import { SkillPreferenceCommitUncertain, type SkillStateStore } from './SkillStateStore.ts';
 import type { SkillPreview, SkillPreviewFile, SkillPreviewFileInfo } from './SkillLifecycle.ts';
+import { installedPackageModes } from './installedPackageModes.ts';
 import { SkillPackageDraft } from './SkillPackageDraft.ts';
 import type { SkillPackageFile } from './SkillPackage.ts';
 import { packageRevision, fileDirectories } from './skillPackageRevision.ts';
@@ -38,7 +40,9 @@ export interface SkillPackageLocation {
   readonly refreshIndex: () => Promise<void>;
   readonly packageId?: (directory: string) => string;
   readonly updateOnly?: boolean;
-  readonly assertClean?: (absolutePackageDirectory: string) => Promise<void>;
+  readonly admitsPackage?: (absolutePackageDirectory: string) => boolean;
+  readonly sourcePathAliases?: SourcePathAliases;
+  readonly assertClean?: (absolutePackageDirectory: string, retainedAliases?: readonly string[]) => Promise<void>;
 }
 type PackageFiles = ReadonlyMap<string, SkillPackageFile>;
 interface PackageTree {
@@ -287,14 +291,20 @@ export class SkillPackageManager {
     const scope = parent.split('/').slice(0, -location.directory.split('/').length).join('/');
     if (
       (scope !== '' && location.scope !== 'project') ||
-      !sameWorkspaceDirectory(
+      !sameWorkspaceDirectorySpelling(
         join(location.store.root, parent),
         join(location.store.root, scope, location.directory),
         location.store.caseSensitive,
       )
     )
       throw new Error('Skill directory is outside its managed location.');
-    return location.store.resolvePath(directory);
+    const target = await location.store.resolvePath(directory);
+    this.assertAdmitted(location, target);
+    return target;
+  }
+  private assertAdmitted(location: SkillPackageLocation, target: string) {
+    if (location.admitsPackage && !location.admitsPackage(target))
+      throw new Error('This package belongs to the user skill store. Select User skills.');
   }
   private async remember(
     location: SkillPackageLocation,
@@ -305,10 +315,11 @@ export class SkillPackageManager {
     const path = await this.target(location, directory);
     await this.checkPendingOrigin(location, path);
     await location.assertClean?.(path);
-    const after = draft?.packageFiles(before.files);
+    const previous = draft && (await installedPackageModes(path, draft.entryPaths(), before));
+    const after = draft?.packageFiles(previous?.files);
     const parentMode = location.scope === 'project' ? (await optionalStat(dirname(path)))?.mode : 0o700;
     const rootMode = before.rootMode ?? (parentMode ?? (await newDirectoryMode())) & 0o777;
-    const directories = draft?.packageDirectories(before.directories, rootMode) ?? new Map<string, number>();
+    const directories = draft?.packageDirectories(previous?.directories, rootMode) ?? new Map<string, number>();
     const expected = before.files.size > 0 ? packageRevision(before.files, before.directories) : null;
     const expectedMetadata = before.metadata;
     const preview: Pending['preview'] = {
@@ -517,6 +528,7 @@ export class SkillPackageManager {
     const directoryMode = location.scope === 'project' ? (await lstat(dirname(target))).mode & 0o777 : 0o700;
     const relativeStage = '.skill-staging/' + preview.id;
     const stage = join(await privateSkillDirectory(this.state.metadata, location.store.root), preview.id);
+    const retainedAliases = location.sourcePathAliases?.(target, true);
     await location.mutations.createStage(relativeStage);
     await inspectPrivateDirectory(this.state.metadata, stage);
     const entry: SkillTransaction = {
@@ -534,6 +546,7 @@ export class SkillPackageManager {
       retired: false,
     };
     const backup = join(stage, 'previous');
+    let swapStarted = false;
     let preferencesCommitted = false,
       recorded = false;
     try {
@@ -556,7 +569,7 @@ export class SkillPackageManager {
         if ((await diskRevision(join(stage, 'package'), entry.treeVersion)) !== preview.revision)
           throw new Error('The staged skill is unreadable or changed. Preview it again.');
       }
-      await location.assertClean?.(target);
+      await location.assertClean?.(target, retainedAliases);
       signal?.throwIfAborted();
       // The staging directory has its own inheritance. Check the actual destination parent as well as the saved tree.
       if (files)
@@ -568,6 +581,8 @@ export class SkillPackageManager {
           change.expectedMetadata,
           files ? relativeStage + '/package' : undefined,
         );
+        this.assertAdmitted(location, target);
+        swapStarted = true;
         await location.mutations.renameExclusive(directory, relativeStage + '/previous');
         await this.checkMetadata(
           location,
@@ -579,7 +594,11 @@ export class SkillPackageManager {
           throw new Error('The skill changed during replacement. Preview it again.');
       } else if (await optionalStat(target)) throw new Error('A skill appeared at the destination. Preview again.');
       signal?.throwIfAborted();
-      if (files) await location.mutations.renameExclusive(relativeStage + '/package', directory);
+      if (files) {
+        this.assertAdmitted(location, target);
+        swapStarted = true;
+        await location.mutations.renameExclusive(relativeStage + '/package', directory);
+      }
       if ((await diskRevision(target, entry.treeVersion)) !== entry.replacement)
         throw new Error('The skill changed during publication.');
       await location.refreshIndex();
@@ -592,7 +611,7 @@ export class SkillPackageManager {
           [...change.directories.keys()].filter(path => !implicit.has(path)),
         );
       }
-      await location.assertClean?.(target);
+      await location.assertClean?.(target, retainedAliases);
       if (files) await this.checkMetadata(location, directory, entry.replacementMetadata);
       await this.assertBackup(location, entry, stage);
       signal?.throwIfAborted();
@@ -611,8 +630,11 @@ export class SkillPackageManager {
           entry.published = false;
           await this.journal.write(entry);
         }
-        await this.rollback(location, entry, stage, target);
-        await location.refreshIndex();
+        // Before the first rename only our private stage changed. A concurrent save owns the live tree.
+        if (swapStarted) {
+          await this.rollback(location, entry, stage, target);
+          await location.refreshIndex();
+        }
         await this.finish(location, entry);
       } else await location.mutations.removeTree(relativeStage);
       throw error;

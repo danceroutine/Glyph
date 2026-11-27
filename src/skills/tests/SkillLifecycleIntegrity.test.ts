@@ -436,3 +436,58 @@ it('recovers a published package with the file-only revision recorded by an earl
   await manager.recover();
   expect(state.installations.get(skill.id)).toEqual({ source: 'Prior release', revision: legacy });
 });
+
+it('retires an unpublished update after a concurrent save and cancellation before the first rename', async () => {
+  const { root, location, catalog, state, install } = await aSkillLifecycle();
+  const skill = await install();
+  const stop = new AbortController();
+  const assertClean = vi.fn(async (_path: string) => {});
+  const manager = new SkillPackageManager([{ ...location, assertClean }], catalog, state);
+  const change = await manager.prepare(skill.origin.id, aSkillDraft('candidate'), skill.id);
+  const path = join(root, skill.path);
+  const saved = (await readFile(path, 'utf8')).replace('Reviewed instructions', 'Concurrent save');
+  assertClean.mockImplementationOnce(async () => {
+    await writeFile(path, saved);
+    stop.abort();
+  });
+  await expect(manager.apply(change.id, stop.signal)).rejects.toThrow();
+  expect(await readFile(path, 'utf8')).toBe(saved);
+  await expect(stat(join(root, '.skill-staging', change.id))).rejects.toMatchObject({ code: 'ENOENT' });
+  await manager.recover();
+  await expect(manager.prepare(skill.origin.id, aSkillDraft('next candidate'), skill.id)).resolves.toMatchObject({
+    action: 'update',
+  });
+});
+
+it('applies inherited permissions to the destination entry addressed by the proposed spelling', async () => {
+  const { root, manager, install } = await aSkillLifecycle();
+  const skill = await install();
+  const draft = aSkillDraft().toJSON();
+  await chmod(join(root, 'skills/example/assets'), 0o700);
+  await chmod(join(root, 'skills/example/assets/image.bin'), 0o600);
+  const aliases = await stat(join(root, 'skills/example/ASSETS/IMAGE.BIN')).then(
+    () => true,
+    () => false,
+  );
+  const update = new SkillPackageDraft({
+    ...draft,
+    files: draft.files.map(file =>
+      file.path === 'assets/image.bin' ? { ...file, path: 'ASSETS/IMAGE.BIN', mode: 0o755 } : file,
+    ),
+    directories: [{ path: 'ASSETS', mode: 0o755 }],
+  });
+  const change = await manager.prepare(skill.origin.id, update, skill.id);
+  await manager.apply(change.id);
+  expect((await stat(join(root, 'skills/example/ASSETS/IMAGE.BIN'))).mode & 0o777).toBe(aliases ? 0o700 : 0o755);
+  expect((await stat(join(root, 'skills/example/ASSETS'))).mode & 0o777).toBe(aliases ? 0o700 : 0o755);
+});
+
+it('checks physical package ownership again after approving a project preview', async () => {
+  const { location, catalog, state, install } = await aSkillLifecycle();
+  const skill = await install();
+  const admitsPackage = vi.fn(() => true);
+  const manager = new SkillPackageManager([{ ...location, admitsPackage }], catalog, state);
+  const change = await manager.prepare(skill.origin.id, aSkillDraft('update'), skill.id);
+  admitsPackage.mockReturnValue(false);
+  await expect(manager.apply(change.id)).rejects.toThrow('user skill store');
+});
