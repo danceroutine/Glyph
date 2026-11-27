@@ -1500,7 +1500,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         const user = sources.find(source => source.path.endsWith('shared.mdc'))!;
         if (root === second) {
           await runtime.handle({
-            type: GlyphWorkbenchCommandType.SET_SKILL_ENABLED,
+            type: Command.SET_SKILL_ENABLED,
             skillId: snapshot.skills![0]!.id,
             enabled: false,
           });
