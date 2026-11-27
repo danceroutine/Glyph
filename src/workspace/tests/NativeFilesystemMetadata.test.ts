@@ -74,3 +74,20 @@ it('passes physical exclusions and the opened identity to native path admission'
     await handle.close();
   }
 });
+
+it('inspects selected directory routes and distinguishes a removed selection from a live directory', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'glyph-directory-origin-'));
+  const backend = new NativeFilesystemMetadata(join(process.cwd(), 'target/release/glyph-context-index'));
+  const handle = await open(directory);
+  onTestFinished(async () => {
+    await handle.close();
+    await rm(directory, { force: true, recursive: true });
+  });
+  const metadata = await handle.stat({ bigint: true });
+  expect(await backend.sourceOrigins([directory], [], undefined, true)).toEqual([
+    { identity: `${metadata.dev}:${metadata.ino}`, origin: expect.stringMatching(/^[a-f0-9]{64}$/u) },
+  ]);
+  await expect(backend.assertUnlinkedDirectory(handle.fd)).rejects.toThrow('source directory moved');
+  await rm(directory, { recursive: true });
+  await expect(backend.assertUnlinkedDirectory(handle.fd)).resolves.toBeUndefined();
+});

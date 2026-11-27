@@ -27,6 +27,7 @@ the reviewed revision and, for local intake, the source access check. At publica
 the manager checks the source, destination and peer editors again. Ordinary
 project edits consult `SkillProjectMutationPolicy` to reserve this workflow for
 managed paths.
+
 ## Composing a host
 
 Select the consumer's policy through `WorkspaceContentAccess` at the CLI or

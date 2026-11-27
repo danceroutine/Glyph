@@ -96,11 +96,12 @@ pub fn inspect() -> io::Result<()> {
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(&path)?;
         let meta = file.metadata()?;
-        if if req.directories {
-            !meta.is_dir()
+        let admitted = if req.directories {
+            meta.is_dir()
         } else {
-            !meta.is_file() || meta.nlink() != 1
-        } {
+            meta.is_file() && meta.nlink() == 1
+        };
+        if !admitted {
             return Err(denied());
         }
         let (dev, ino) = (meta.dev().to_string(), meta.ino().to_string());
