@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, posix, sep } from 'node:path';
+import { dirname, join, posix, relative, sep } from 'node:path';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
@@ -176,23 +176,34 @@ export class SkillPackageManager {
       uri: pathToFileURL(join(location.store.root, location.directory)).toString(),
     }));
   }
-  async recover(originId?: string, directory?: string): Promise<void> {
+  async recover(originId?: string, directory?: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     for (const location of this.locations) {
       if (originId !== undefined && location.id !== originId) continue;
       const root = await this.journalRoot(location);
       if ((await this.journal.entries(root, location.id)).length > 0)
-        await withSkillLock(this.state.metadata, location.store.root, 'destination', () =>
-          this.recoverLocation(location, root),
+        await withSkillLock(
+          this.state.metadata,
+          location.store.root,
+          'destination',
+          () => this.recoverLocation(location, root),
+          signal,
         );
       if (directory) await this.checkPendingOrigin(location, await this.target(location, directory));
     }
   }
-  async prepare(targetId: string, draft: SkillPackageDraft, replaceId?: string): Promise<SkillPreview> {
+  async prepare(
+    targetId: string,
+    draft: SkillPackageDraft,
+    replaceId?: string,
+    signal?: AbortSignal,
+  ): Promise<SkillPreview> {
+    signal?.throwIfAborted();
     if (this.ensureReady) await this.ensureReady();
     const location = this.location(targetId);
     if (!replaceId && location.updateOnly)
       throw new Error('This installation directory belongs to the user skill store. Select User skills.');
-    await this.recover(location.id);
+    await this.recover(location.id, undefined, signal);
     const existing = replaceId ? this.catalog.skills.find(skill => skill.id === replaceId) : undefined;
     if (replaceId && (!existing?.directory || existing.origin.id !== targetId || existing.name !== draft.name))
       throw new Error('The update must target the selected installed skill.');
@@ -212,17 +223,18 @@ export class SkillPackageManager {
       throw new Error('A directory already occupies this destination. Move it or choose a different package name.');
     }
     if (replaceId && before.files.size === 0) throw new Error('The installed skill is missing. Refresh Settings.');
-    return this.remember(location, directory, before, draft);
+    return this.remember(location, directory, before, draft, signal);
   }
-  async prepareRemoval(id: string): Promise<SkillPreview> {
+  async prepareRemoval(id: string, signal?: AbortSignal): Promise<SkillPreview> {
+    signal?.throwIfAborted();
     if (this.ensureReady) await this.ensureReady();
     const descriptor = this.catalog.skills.find(skill => skill.id === id);
     if (!descriptor?.directory || !descriptor.path) throw new Error('Skill is unavailable. Refresh Settings.');
     const location = this.location(descriptor.origin.id);
-    await this.recover(location.id);
+    await this.recover(location.id, undefined, signal);
     const before = await this.read(location, descriptor.directory);
     if (before.files.size === 0) throw new Error('The installed skill is missing. Refresh Settings.');
-    return this.remember(location, descriptor.directory, before);
+    return this.remember(location, descriptor.directory, before, undefined, signal);
   }
   discard(id: string): void {
     this.pending.get(id)?.sourceAccess?.release();
@@ -340,6 +352,7 @@ export class SkillPackageManager {
     directory: string,
     before: PackageTree,
     draft?: SkillPackageDraft,
+    signal?: AbortSignal,
   ): Promise<SkillPreview> {
     const path = await this.target(location, directory);
     await this.checkPendingOrigin(location, path);
@@ -363,9 +376,11 @@ export class SkillPackageManager {
       files: compareFiles(before.files, after ?? new Map()),
       directories: compareDirectories(before.directories, directories),
     };
+    signal?.throwIfAborted();
     const sourceAccess = await draft?.sourceAccess?.retain();
-    if (this.pending.size >= 32) {
+    if (signal?.aborted || this.pending.size >= 32) {
       sourceAccess?.release();
+      signal?.throwIfAborted();
       throw new Error('Too many pending skill previews. Finish or discard a preview first.');
     }
     this.pending.set(preview.id, {
@@ -422,9 +437,25 @@ export class SkillPackageManager {
     if (inventory.length !== paths.size || inventory.some(path => !paths.has(prefix + path)))
       throw new Error('Package contains unindexed or unauthorized files. Refresh before managing it.');
   }
-  private async persist(entry: SkillTransaction) {
-    if (entry.replacement) await this.state.record(entry.skillId, entry.source!, entry.replacement);
-    else await this.state.forget(entry.skillId);
+  /** Recheck the import and its issuing command together. Invoke the operation in this continuation,
+   * so cancellation during asynchronous source admission wins before a native rename or commit starts. */
+  private async publish<T>(
+    change: Pending,
+    signal: AbortSignal | undefined,
+    relocation: Parameters<PendingSkillSourceAccess['assertCurrent']>[0],
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    await change.sourceAccess?.assertCurrent(relocation);
+    signal?.throwIfAborted();
+    this.assertAdmitted(change.location, change.preview.destination.path);
+    return operation();
+  }
+  /** An acknowledged package commit retires its previous source for every turn sharing this catalog authority. */
+  private async persist(entry: SkillTransaction, signal?: AbortSignal, verifySource?: () => Promise<void>) {
+    if (entry.replacement)
+      await this.state.record(entry.skillId, entry.source!, entry.replacement, signal, verifySource);
+    else await this.state.forget(entry.skillId, signal, verifySource);
+    if (entry.expected) this.catalog.retirements.publish(entry.skillId, entry.id);
   }
   private async recoverLocation(location: SkillPackageLocation, root: string) {
     for (const entry of await this.journal.entries(root, location.id)) {
@@ -498,11 +529,19 @@ export class SkillPackageManager {
       throw new Error('Package recovery is required. Inspect retained staging at ' + stage);
   }
   private async finish(location: SkillPackageLocation, entry: SkillTransaction) {
+    if (!entry.published && entry.createdParents) {
+      for (let i = entry.createdParents.length - 1; i >= 0; i--)
+        await location.mutations.rollbackParent(
+          entry.createdParents[i]!,
+          '.skill-staging/' + entry.id + '/parent-' + i,
+        );
+    }
     // Record the decision before cleanup so an interruption can finish deleting only our private staging.
     await this.journal.write({ ...entry, retired: true });
     return this.cleanup(location, entry);
   }
   private async cleanup(location: SkillPackageLocation, entry: SkillTransaction) {
+    this.catalog.retirements.settled(entry.id);
     try {
       await location.mutations.removeTree('.skill-staging/' + entry.id);
       await this.journal.finish(entry.id);
@@ -562,17 +601,10 @@ export class SkillPackageManager {
     if (preview.destination.path !== target) throw new Error('The skill destination changed after preview.');
     if (JSON.stringify(await missingParents(target)) !== JSON.stringify(preview.createdParentDirectories))
       throw new Error('Installation directories changed after preview. Preview the change again.');
-    // mkdir applies the process umask to newly created project parents. The published tree
-    // then inherits the actual parent permissions, including a checkout's deliberate sharing settings.
-    await location.mutations.ensureDirectory(
-      posix.dirname(directory),
-      location.scope === 'project' ? 0o777 : 0o700,
-      preview.createdParentDirectories.length,
-    );
-    const directoryMode = location.scope === 'project' ? (await lstat(dirname(target))).mode & 0o777 : 0o700;
     const relativeStage = '.skill-staging/' + preview.id;
     const stage = join(await privateSkillDirectory(this.state.metadata, location.store.root), preview.id);
     const retainedAliases = location.sourcePathAliases?.(target, true);
+    signal?.throwIfAborted();
     await location.mutations.createStage(relativeStage);
     await inspectPrivateDirectory(this.state.metadata, stage);
     const entry: SkillTransaction = {
@@ -596,9 +628,21 @@ export class SkillPackageManager {
     try {
       await this.journal.write(entry);
       recorded = true;
+      const mode = location.scope === 'project' ? 0o777 : 0o700;
+      for (const parent of preview.createdParentDirectories) {
+        signal?.throwIfAborted();
+        const slot = relativeStage + '/parent-' + (entry.createdParents?.length ?? 0);
+        const receipt = await location.mutations.stageParent(relative(location.store.root, parent), mode, slot);
+        (entry.createdParents ??= []).push(receipt);
+        await this.journal.write(entry);
+        await this.publish(change, signal, undefined, () => location.mutations.renameExclusive(slot, receipt.relative));
+      }
+      // Reopen the reviewed parent chain without creating a directory that disappeared after preview.
+      await location.mutations.ensureDirectory(posix.dirname(directory), mode, 0);
       if (files) {
         signal?.throwIfAborted();
         const installed = await optionalStat(target);
+        const directoryMode = location.scope === 'project' ? (await lstat(dirname(target))).mode & 0o777 : 0o700;
         const modes = new Map<string, number>([
           ['', installed?.isDirectory() ? installed.mode & 0o777 : directoryMode],
           ...change.directories,
@@ -625,10 +669,10 @@ export class SkillPackageManager {
           change.expectedMetadata,
           files ? relativeStage + '/package' : undefined,
         );
-        this.assertAdmitted(location, target);
-        await change.sourceAccess?.assertCurrent();
-        swapStarted = true;
-        await location.mutations.renameExclusive(directory, relativeStage + '/previous');
+        await this.publish(change, signal, undefined, () => {
+          swapStarted = true;
+          return location.mutations.renameExclusive(directory, relativeStage + '/previous');
+        });
         await this.checkMetadata(
           location,
           relativeStage + '/previous',
@@ -640,11 +684,11 @@ export class SkillPackageManager {
       } else if (await optionalStat(target)) throw new Error('A skill appeared at the destination. Preview again.');
       signal?.throwIfAborted();
       const relocation = expected ? { source: target, backup } : undefined;
-      await change.sourceAccess?.assertCurrent(relocation);
       if (files) {
-        this.assertAdmitted(location, target);
-        swapStarted = true;
-        await location.mutations.renameExclusive(relativeStage + '/package', directory);
+        await this.publish(change, signal, relocation, () => {
+          swapStarted = true;
+          return location.mutations.renameExclusive(relativeStage + '/package', directory);
+        });
       }
       if ((await diskRevision(target, entry.treeVersion)) !== entry.replacement)
         throw new Error('The skill changed during publication.');
@@ -661,11 +705,12 @@ export class SkillPackageManager {
       await location.assertClean?.(target, retainedAliases);
       if (files) await this.checkMetadata(location, directory, entry.replacementMetadata);
       await this.assertBackup(location, entry, stage);
-      signal?.throwIfAborted();
-      await change.sourceAccess?.assertCurrent(relocation);
-      entry.published = true;
-      await this.journal.write(entry);
-      await this.persist(entry);
+      await this.publish(change, signal, relocation, () => {
+        entry.published = true;
+        return this.journal.write(entry, signal);
+      });
+      const source = change.sourceAccess;
+      await this.persist(entry, signal, source && (() => source.assertCurrent(relocation)));
       preferencesCommitted = true;
       if ((await diskRevision(target, entry.treeVersion)) !== entry.replacement)
         throw new Error('Published files changed. Package recovery is required at ' + target);

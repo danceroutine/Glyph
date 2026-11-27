@@ -22,6 +22,7 @@ import type { AgentInstructionContext } from '#src/instructions/AgentInstruction
 import { AgentInstructionSourceKind, AgentInstructionSourceStatus } from '#src/instructions/AgentInstructionSource.js';
 import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
 import { SkillLifecycleToolRuntime } from '#src/skills/SkillLifecycleToolRuntime.js';
 import { SkillToolRuntime } from '#src/skills/SkillToolRuntime.js';
@@ -146,6 +147,57 @@ const toolCompleted = {
 };
 
 describe(OpenAIProvider, () => {
+  it('continues two active chats after Settings replaces a package shared by their workspaces', async () => {
+    const authority = new NativePinnedSourceAuthority(testFilesystemMetadata, new WorkspaceAccessPolicy(), () => {});
+    const {
+      catalog,
+      state,
+      provider: discovery,
+      manager,
+      install,
+    } = await aSkillLifecycle(undefined, undefined, authority);
+    const skill = await install();
+    const peerCatalog = new SkillCatalog([discovery], { profile: state });
+    let announceArrival!: () => void;
+    let resumeChats!: () => void;
+    const arrived = new Promise<void>(resolve => {
+      announceArrival = resolve;
+    });
+    const completedChange = new Promise<void>(resolve => {
+      resumeChats = resolve;
+    });
+    let waiting = 0;
+    const tools = waitTools(async () => {
+      if (++waiting === 2) announceArrival();
+      await completedChange;
+      return 'Work complete';
+    });
+    const chats = [catalog, peerCatalog].map(source =>
+      harness(
+        [() => sse([toolCompleted]), () => sse([completed])],
+        tools,
+        new TurnContextCoordinator([new SkillContextContributor(source)]),
+      ),
+    );
+    const replies = chats.map(({ provider }) =>
+      provider.send({ text: 'Use the selected workflow', attachments: [], skillIds: [skill.id] }, options()),
+    );
+    await arrived;
+    try {
+      const preview = await manager.prepare(skill.origin.id, aSkillDraft('Updated instructions'), skill.id);
+      await manager.apply(preview.id);
+    } finally {
+      resumeChats();
+    }
+    const results = await Promise.all(replies);
+    for (const { requests } of chats) {
+      expect(requests).toHaveLength(2);
+      expect(JSON.stringify(requests[0]!.input)).toContain('Reviewed instructions');
+      expect(JSON.stringify(requests[1]!.input)).not.toContain('Reviewed instructions');
+      expect(JSON.stringify(requests[1]!.input)).not.toContain('Updated instructions');
+    }
+    for (const result of results) expect(result.context?.skills?.[0]?.body).toBe('Reviewed instructions');
+  });
   it.each(['update', 'remove', 'unrelated revocation'] as const)(
     'uses the remaining authorized instructions after a managed skill change (%s)',
     async action => {

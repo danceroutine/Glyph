@@ -251,12 +251,22 @@ describe(AgentRuntime, () => {
   });
   it('projects retired context from a Claude-shaped live tool result while preserving the call and signed reasoning', async () => {
     const adapter = new ClaudeShapedAdapter();
-    const contexts = new TurnContextCoordinator([new SkillContextContributor(new SkillCatalog([]))]);
+    const retired = aSkillDescriptor({ id: 'retired-skill' });
+    const catalog = new SkillCatalog([
+      {
+        id: retired.origin.id,
+        origin: retired.origin,
+        discover: async () => [retired],
+        capture: async () => aSkillPackage(retired),
+        refreshIndex: async () => {},
+      },
+    ]);
+    const contexts = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
     const runtime = new AgentRuntime(
       adapter,
       { timeoutMs: 10000 },
       mockTools(async () => {
-        contexts.contribution('retired', 'skills')!.retireSource!('retired-skill');
+        catalog.retirements.publish(retired.id, 'retired-update');
         return JSON.stringify({
           content: 'tool result',
           instructionContext: {

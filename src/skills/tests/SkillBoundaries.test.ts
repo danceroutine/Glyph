@@ -324,16 +324,7 @@ it('keeps the preferred provider when an older catalog finishes its preference m
       started();
       await blocked;
     });
-  const catalog = new SkillCatalog(
-    [provider],
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    migrate,
-  );
+  const catalog = new SkillCatalog([provider], { migratePreferences: migrate });
   const first = catalog.refresh();
   await waiting;
   await catalog.refresh();

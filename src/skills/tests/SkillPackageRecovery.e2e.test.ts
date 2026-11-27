@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
-import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { it, expect, onTestFinished, vi } from 'vitest';
 import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
 import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
@@ -76,6 +76,38 @@ it('preserves the approved existing installation directory boundary if a parent 
   await expect(stat(join(root, '.glyph'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
+it.each(['empty', 'populated', 'replaced'] as const)(
+  'rolls back a cancelled project install and preserves an independently %s parent',
+  async stateOfParent => {
+    const { root, location, catalog, state } = await aSkillLifecycle(openMutations);
+    const manager = new SkillPackageManager(
+      [{ ...location, directory: '.glyph/skills', scope: 'project' }],
+      catalog,
+      state,
+    );
+    const controller = new AbortController();
+    const preview = await manager.prepare(location.id, aSkillDraft());
+    const parents = join(root, '.glyph/skills');
+    const stage = location.mutations.stagePackage.bind(location.mutations);
+    vi.spyOn(location.mutations, 'stagePackage').mockImplementationOnce(async (...args) => {
+      await stage(...args);
+      if (stateOfParent === 'populated') await writeFile(join(parents, 'peer'), 'Keep');
+      if (stateOfParent === 'replaced') {
+        await rename(parents, join(root, 'moved'));
+        await mkdir(parents);
+      }
+      controller.abort(new Error('Disconnected'));
+    });
+    await expect(manager.apply(preview.id, controller.signal)).rejects.toThrow('Disconnected');
+    if (stateOfParent === 'empty') await expect(stat(join(root, '.glyph'))).rejects.toMatchObject({ code: 'ENOENT' });
+    if (stateOfParent === 'populated') expect(await readFile(join(parents, 'peer'), 'utf8')).toBe('Keep');
+    if (stateOfParent === 'replaced') {
+      expect(await readdir(parents)).toEqual([]);
+      expect(await readdir(join(root, 'moved'))).toEqual([]);
+    }
+    expect(state.installations.size).toBe(0);
+  },
+);
 it('refuses a different directory mounted at the same configured path and preserves an occupied destination', async () => {
   const { root, location } = await aSkillLifecycle(openMutations);
   const { mutations } = location;

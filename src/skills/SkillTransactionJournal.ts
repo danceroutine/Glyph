@@ -19,6 +19,7 @@ const entrySchema = z
     expectedMetadata: z.hash('sha256').optional(),
     replacementMetadata: z.hash('sha256').optional(),
     source: z.string().nullable(),
+    createdParents: z.array(z.strictObject({ relative: z.string(), identity: z.hash('sha256') })).optional(),
     published: z.boolean(),
     retired: z.boolean().default(false),
   })
@@ -54,12 +55,16 @@ export class SkillTransactionJournal {
         }),
     );
   }
-  async write(entry: SkillTransaction): Promise<void> {
-    await this.use(db =>
-      db
-        .prepare('INSERT OR REPLACE INTO transactions VALUES (?, ?, ?, ?)')
-        .run(entry.id, entry.root, entry.location, JSON.stringify(entry)),
-    );
+  async write(entry: SkillTransaction, signal?: AbortSignal): Promise<void> {
+    await this.use(db => {
+      signal?.throwIfAborted();
+      db.prepare('INSERT OR REPLACE INTO transactions VALUES (?, ?, ?, ?)').run(
+        entry.id,
+        entry.root,
+        entry.location,
+        JSON.stringify(entry),
+      );
+    });
   }
   async finish(id: string): Promise<void> {
     await this.use(db => db.prepare('DELETE FROM transactions WHERE id = ?').run(id));

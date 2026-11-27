@@ -317,7 +317,7 @@ it('keeps ordinary saved chat visible after trust revocation without privileged 
 it('releases the profile subscription of its skill catalog on disposal', async () => {
   const unsubscribe = vi.fn();
   const subscribe = vi.fn(() => unsubscribe);
-  const catalog = new SkillCatalog([], undefined, undefined, undefined, undefined, subscribe);
+  const catalog = new SkillCatalog([], { profile: { onDidChange: subscribe } });
   const harness = await fixture(async () => {}, 'owner', undefined, { skillCatalog: catalog });
   expect(subscribe).toHaveBeenCalledOnce();
   expect(unsubscribe).not.toHaveBeenCalled();
@@ -5055,6 +5055,31 @@ describe('Skill lifecycle host commands', () => {
     await runtime.handle({ type: Command.APPLY_SKILL, previewId: preview.id });
     expect((await runtime.snapshot()).skillManagementMessage).toBe('Refresh Skills');
     await expect(runtime.handle({ type: Command.APPLY_SKILL, previewId: preview.id })).rejects.toThrow('expired');
+  });
+  it('discards a preview completed after its renderer disconnected and keeps the previously delivered token', async () => {
+    const { runtime, provider, manager, events } = await setup();
+    const command = { type: Command.PREVIEW_SKILL, targetId: provider.id, draft: aSkillDraft().toJSON() } as const;
+    await runtime.handle(command);
+    const delivered = (await runtime.snapshot()).skillPreview!;
+    const delayed = await manager.prepare(provider.id, aSkillDraft('Pending preview'));
+    const started = deferredVoid();
+    const resume = deferredVoid();
+    vi.spyOn(manager, 'prepare').mockImplementationOnce(async () => {
+      started.resolve();
+      await resume.promise;
+      return delayed;
+    });
+    const rejected = expect(runtime.handle(command)).rejects.toThrow('disconnected');
+    await started.promise;
+    await runtime.connectionLost('owner');
+    resume.resolve();
+    await rejected;
+    expect(manager.hasPreview(delayed.id)).toBe(false);
+    expect(events.filter(event => event.type === GlyphHostEventType.SKILL_MANAGEMENT_CHANGED)).toHaveLength(1);
+    expect((await runtime.snapshot()).skillPreview?.id).toBe(delivered.id);
+    await runtime.handle(command);
+    expect(manager.hasPreview(delivered.id)).toBe(false);
+    expect((await runtime.snapshot()).skillPreview?.id).not.toBe(delivered.id);
   });
   it('discards an older preview that finishes after its replacement', async () => {
     const { runtime, provider, manager } = await setup();

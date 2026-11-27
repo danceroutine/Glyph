@@ -1,5 +1,6 @@
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
+import { withSkillLock } from '#src/skills/SkillPackageStorage.js';
 import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
@@ -21,6 +22,115 @@ import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
 import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 
 describe(SkillPackageManager, () => {
+  it.each(['backup', 'replace', 'commit'] as const)(
+    'honors a disconnect during the last source check before %s',
+    async boundary => {
+      const { root, location, state, manager, install } = await aSkillLifecycle();
+      const skill = await install();
+      const original = (await state.preferences.read())!.text;
+      const controller = new AbortController();
+      let stage: string | undefined;
+      const draft = new SkillPackageDraft(aSkillDraft('Replacement').toJSON(), {
+        retain: async () => ({
+          release() {},
+          assertCurrent: async () => {
+            if (!stage) return;
+            const names: string[] = await readdir(stage).catch(() => []);
+            const reached =
+              boundary === 'backup'
+                ? names.includes('package') && !names.includes('previous')
+                : boundary === 'replace'
+                  ? names.includes('previous') && names.includes('package')
+                  : names.includes('previous') && !names.includes('package');
+            if (reached) controller.abort(new Error('Disconnected during admission'));
+          },
+        }),
+      });
+      const update = await manager.prepare(location.id, draft, skill.id);
+      stage = join(root, '.skill-staging', update.id);
+      const moves = vi.spyOn(location.mutations, 'renameExclusive');
+      const persist = vi.spyOn(state, 'record');
+      await expect(manager.apply(update.id, controller.signal)).rejects.toThrow('Disconnected during admission');
+      const sourcePaths = moves.mock.calls.map(([from]) => from);
+      if (boundary === 'backup') expect(sourcePaths).not.toContain(skill.directory);
+      if (boundary !== 'commit') expect(sourcePaths).not.toContain('.skill-staging/' + update.id + '/package');
+      expect(persist).not.toHaveBeenCalled();
+      expect((await state.preferences.read())!.text).toBe(original);
+      expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
+    },
+  );
+  it('rolls back an update waiting for its profile publication when its window disconnects', async () => {
+    const { root, location, state, manager, install } = await aSkillLifecycle();
+    const skill = await install();
+    const original = (await state.preferences.read())!.text;
+    const update = await manager.prepare(location.id, aSkillDraft('Replacement'), skill.id);
+    const controller = new AbortController();
+    const persist = vi.spyOn(state, 'record');
+    await withSkillLock(state.metadata, state.userDirectory, 'preferences', async () => {
+      const rejected = expect(manager.apply(update.id, controller.signal)).rejects.toMatchObject({
+        name: 'AbortError',
+      });
+      await vi.waitFor(() => {
+        expect(persist).toHaveBeenCalled();
+      });
+      controller.abort(new Error('Disconnected'));
+      await rejected;
+    });
+    expect((await state.preferences.read())!.text).toBe(original);
+    expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
+  });
+  it('rechecks a selected package after waiting for the profile lock to commit', async () => {
+    const { root, state, location, install, manager } = await aSkillLifecycle();
+    const skill = await install();
+    let authorized = true;
+    const update = await manager.prepare(
+      location.id,
+      new SkillPackageDraft(aSkillDraft('Updated').toJSON(), {
+        retain: async () => ({
+          release() {},
+          assertCurrent: async () => {
+            if (!authorized) throw new Error('Import moved');
+          },
+        }),
+      }),
+      skill.id,
+    );
+    const persist = vi.spyOn(state, 'record');
+    let rejected!: Promise<void>;
+    await withSkillLock(state.metadata, state.userDirectory, 'preferences', async () => {
+      rejected = expect(manager.apply(update.id)).rejects.toThrow('Import moved');
+      await vi.waitFor(() => {
+        expect(persist).toHaveBeenCalled();
+      });
+      authorized = false;
+    });
+    await rejected;
+    expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
+    expect(state.installations.get(skill.id)?.revision).toBe(skill.packageRevision);
+  });
+  it('cancels an initial install during index refresh before creating the destination parents', async () => {
+    const { root, location, manager } = await aSkillLifecycle();
+    const preview = await manager.prepare(location.id, aSkillDraft());
+    const controller = new AbortController();
+    location.refreshIndex.mockImplementationOnce(async () => {
+      controller.abort(new Error('Disconnected'));
+    });
+    await expect(manager.apply(preview.id, controller.signal)).rejects.toThrow('Disconnected');
+    await expect(readdir(join(root, 'skills'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('releases imported source authority if the owner disconnects while preparing its preview', async () => {
+    const { manager, location } = await aSkillLifecycle();
+    const controller = new AbortController();
+    const release = vi.fn();
+    const draft = new SkillPackageDraft(aSkillDraft().toJSON(), {
+      retain: async () => {
+        controller.abort(new Error('Disconnected'));
+        return { assertCurrent: async () => {}, release };
+      },
+    });
+    await expect(manager.prepare(location.id, draft, undefined, controller.signal)).rejects.toThrow('Disconnected');
+    expect(release).toHaveBeenCalledOnce();
+  });
   it('releases each selected source when a preview is discarded, cancelled or its runtime stops', async () => {
     const { manager, location } = await aSkillLifecycle();
     const release = vi.fn();
@@ -51,7 +161,7 @@ describe(SkillPackageManager, () => {
     const profile = await realpath(await mkdtemp(join(tmpdir(), 'glyph-readonly-skill-profile-')));
     onTestFinished(() => removeDirectory(profile, { recursive: true, force: true }));
     const state = new SkillStateStore(profile, testFilesystemMetadata);
-    const catalog = new SkillCatalog([provider], state.enabled, state.installations, () => state.initialize());
+    const catalog = new SkillCatalog([provider], { profile: state, ensureReady: () => state.initialize() });
     await catalog.refresh();
     const skill = catalog.skills[0]!;
     const manager = new SkillPackageManager([{ ...location, scope: 'project' }], catalog, state);

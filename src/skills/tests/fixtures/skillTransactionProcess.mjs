@@ -30,7 +30,7 @@ const provider = new FileSkillDiscoveryProvider({
   binaryStore: store,
   uriForPath: path => path,
 });
-const catalog = new SkillCatalog([provider], state.enabled, state.installations);
+const catalog = new SkillCatalog([provider], { profile: state });
 const manager = new SkillPackageManager([location], catalog, state);
 await catalog.refresh();
 const installed = catalog.skills[0];

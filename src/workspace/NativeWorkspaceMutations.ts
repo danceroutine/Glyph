@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
 import { z } from 'zod';
-import type { WorkspaceDirectoryMutations } from './WorkspaceDirectoryMutations.ts';
+import type { CreatedWorkspaceDirectory, WorkspaceDirectoryMutations } from './WorkspaceDirectoryMutations.ts';
 
 const replySchema = z.discriminatedUnion('ok', [
   z.strictObject({ ok: z.literal(true), digest: z.string().optional() }),
@@ -14,8 +14,10 @@ type MetadataInspection = {
   recursive: boolean;
   ownershipReference?: string;
 };
+type ParentCreation = { operation: 'stage_parent'; mode: number; stagingSlot: string };
 type Operation =
   | { operation: 'ensure_directory'; relative: string; mode?: number; createSuffixLength?: number }
+  | { operation: 'rollback_parent'; relative: string; identity: string; stagingSlot: string }
   | { operation: 'remove_tree' | 'create_stage'; relative: string }
   | {
       operation: 'stage_package';
@@ -62,6 +64,13 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
       ...(createSuffixLength === undefined ? {} : { createSuffixLength }),
     });
   }
+  async stageParent(relative: string, mode: number, stagingSlot: string): Promise<CreatedWorkspaceDirectory> {
+    const identity = await this.run({ operation: 'stage_parent', mode, stagingSlot });
+    return { relative, identity };
+  }
+  rollbackParent(created: CreatedWorkspaceDirectory, stagingSlot: string): Promise<void> {
+    return this.run({ operation: 'rollback_parent', ...created, stagingSlot });
+  }
   createStage(relative: string): Promise<void> {
     return this.run({ operation: 'create_stage', relative });
   }
@@ -87,9 +96,9 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
   removeTree(relative: string): Promise<void> {
     return this.run({ operation: 'remove_tree', relative });
   }
-  private run(operation: MetadataInspection): Promise<string>;
+  private run(operation: MetadataInspection | ParentCreation): Promise<string>;
   private run(operation: Operation): Promise<void>;
-  private async run(operation: Operation | MetadataInspection): Promise<string | void> {
+  private async run(operation: Operation | MetadataInspection | ParentCreation): Promise<string | void> {
     const request = JSON.stringify({ ...operation, root: this.root, rootIdentity: this.rootIdentity });
     const maxBytes = operation.operation === 'stage_package' ? 24 * 1024 * 1024 : 32 * 1024;
     if (Buffer.byteLength(request) > maxBytes)
@@ -108,6 +117,7 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
     });
     const reply = replySchema.parse(JSON.parse(stdout));
     if (!reply.ok) throw Object.assign(new Error(reply.message), { code: reply.code });
-    if (operation.operation === 'assert_replaceable_metadata') return z.hash('sha256').parse(reply.digest);
+    if (operation.operation === 'assert_replaceable_metadata' || operation.operation === 'stage_parent')
+      return z.hash('sha256').parse(reply.digest);
   }
 }

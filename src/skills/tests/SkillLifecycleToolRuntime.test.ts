@@ -193,7 +193,7 @@ describe(SkillLifecycleToolRuntime, () => {
     ).rejects.toThrow('Choose');
     approve.mockRejectedValueOnce(new Error('Cancelled'));
     await expect(tool.execute(input, signal, context)).rejects.toThrow('Cancelled');
-    expect(manager.prepareRemoval).toHaveBeenCalledWith('existing');
+    expect(manager.prepareRemoval).toHaveBeenCalledWith('existing', signal);
     expect(manager.apply).not.toHaveBeenCalled();
     expect(manager.discard).toHaveBeenCalled();
   });
