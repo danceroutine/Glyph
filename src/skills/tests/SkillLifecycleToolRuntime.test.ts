@@ -30,7 +30,10 @@ function fixture(allowed = true) {
   };
   const approve = vi.fn(async () => allowed);
   const descriptor = aSkillDescriptor();
-  const catalog = { capture: vi.fn(async () => aSkillPackage(descriptor)) };
+  const catalog = {
+    capture: vi.fn(async () => aSkillPackage(descriptor)),
+    resolveReference: vi.fn((id: string) => (id === descriptor.id ? descriptor : undefined)),
+  };
   const session = new SkillTurnContext('turn', [descriptor], [descriptor], catalog as never);
   const turns = { contribution: vi.fn(() => session), disclosePaths: vi.fn<TurnContextCoordinator['disclosePaths']>() };
   const runner = { run: vi.fn(async () => ({ output: 'Done', exitCode: 0 })) };
