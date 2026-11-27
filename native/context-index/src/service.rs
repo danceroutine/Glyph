@@ -1248,6 +1248,7 @@ fn default_ignored_directories() -> Vec<String> {
         ".git",
         ".next",
         ".skill-staging",
+        ".glyph-skill-run",
         "coverage",
         "dist",
         "node_modules",

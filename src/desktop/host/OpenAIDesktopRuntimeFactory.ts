@@ -154,6 +154,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     const filesystemMetadata = new NativeFilesystemMetadata(indexExecutable);
     const sandboxExecutable = join(native, `glyph-shell-sandbox${suffix}`);
     const workspaceMutationsExecutable = join(native, `glyph-workspace-mutations${suffix}`);
+    const openMutations = (physicalRoot: string) =>
+      NativeWorkspaceMutations.open(workspaceMutationsExecutable, physicalRoot);
     assertShellRuntimePathIsolation(
       roots.map(workspaceRoot => workspaceRoot.path),
       configuration.stateDirectory,
@@ -326,8 +328,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const mutationRoots = new Map(
         await Promise.all(
           [...new Set(parts.map(part => part.disk.root))].map(
-            async physicalRoot =>
-              [physicalRoot, await NativeWorkspaceMutations.open(workspaceMutationsExecutable, physicalRoot)] as const,
+            async physicalRoot => [physicalRoot, await openMutations(physicalRoot)] as const,
           ),
         ),
       );
@@ -447,10 +448,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const ensureSkillsReady = async () => {
         if (!userMutations) {
           await mkdir(userRuleRoot, { recursive: true });
-          userMutations = await (openingUserMutations ??= NativeWorkspaceMutations.open(
-            workspaceMutationsExecutable,
-            userRuleRoot,
-          ).catch(error => {
+          userMutations = await (openingUserMutations ??= openMutations(userRuleRoot).catch(error => {
             openingUserMutations = undefined;
             throw error;
           }));
@@ -716,6 +714,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                     ),
                   })),
                   filesystemMetadata,
+                  openMutations,
                 ),
               ),
             ]

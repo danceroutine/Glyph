@@ -1,11 +1,14 @@
 import { trustedHostExecutable, type HostExecutable } from '#src/shell/TrustedHostExecutable.js';
 import { ShellProgram } from '#src/shell/ShellProgram.js';
-import { chmod, mkdir, mkdtemp, realpath, open, rm } from 'node:fs/promises';
-import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
+import { constants } from 'node:fs';
+import { mkdir, mkdtemp, realpath, open, type FileHandle } from 'node:fs/promises';
+import { basename, dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import type { SkillPackage } from './SkillPackage.ts';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
+import { skillExecutionDirectory } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
 import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 
 /** A host-authorized project root and the discovery origins whose scripts it owns. */
@@ -23,6 +26,7 @@ export class SkillScriptRunner {
     private readonly shells: Pick<ShellSessionManager, 'executeProgram'>,
     private readonly roots: readonly SkillExecutionRoot[],
     private readonly metadata: FilesystemMetadata,
+    private readonly openCleanup: (root: string) => Promise<Pick<WorkspaceDirectoryMutations, 'removeTree'>>,
     private readonly stagingRoot = tmpdir(),
   ) {}
 
@@ -79,10 +83,13 @@ export class SkillScriptRunner {
       interpreter,
       this.roots.map(candidate => candidate.directory),
     );
-    const directory = await mkdtemp(join(stagingRoot, 'glyph-skill-run-'));
-    const stagedDirectories: string[] = [];
+    const cleanup = await this.openCleanup(stagingRoot);
+    const allocation = await mkdtemp(join(stagingRoot, 'glyph-skill-run-'));
+    const directory = join(allocation, skillExecutionDirectory);
+    const unreadableDirectories: FileHandle[] = [];
     try {
-      await chmod(directory, 0o700);
+      await inspectPrivateDirectory(this.metadata, allocation);
+      await mkdir(directory, { mode: 0o700 });
       await inspectPrivateDirectory(this.metadata, directory);
       const stagePath = (entry: string) => {
         signal.throwIfAborted();
@@ -92,7 +99,6 @@ export class SkillScriptRunner {
       };
       for (const folder of skill.packageDirectories().keys()) {
         await mkdir(stagePath(folder), { recursive: true, mode: 0o700 });
-        stagedDirectories.push(folder);
       }
       for (const [file, content] of files) {
         const destination = stagePath(file);
@@ -107,10 +113,22 @@ export class SkillScriptRunner {
         }
       }
       // Populate through private, writable ancestors, then retain the reviewed directory modes.
-      for (const [folder, mode] of [...skill.packageDirectories()].sort(
+      for (const [folder, mode] of [...skill.packageDirectories()].toSorted(
         (a, b) => b[0].split('/').length - a[0].split('/').length,
-      ))
-        await chmod(stagePath(folder), mode);
+      )) {
+        const handle = await open(stagePath(folder), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+        if ((mode & 0o400) === 0) {
+          // Hold the original directory while its reviewed mode prevents a cleanup walker from opening it.
+          unreadableDirectories.push(handle);
+          await handle.chmod(mode);
+        } else {
+          try {
+            await handle.chmod(mode);
+          } finally {
+            await handle.close();
+          }
+        }
+      }
       const description = `# Skill ${skill.descriptor.name}, revision ${skill.revision}\n# Interpreter: ${executable}\n# Compatibility: ${(skill.descriptor.compatibility ?? 'No requirements declared').replaceAll('\n', '\n# ')}\n${source
         .split('\n')
         .map(line => `# ${line}`)
@@ -138,10 +156,19 @@ export class SkillScriptRunner {
         ...result,
       };
     } finally {
-      // Restore traversal from the private root before removing a reviewed read-only scaffold.
-      for (const folder of stagedDirectories.sort((a, b) => a.split('/').length - b.split('/').length))
-        await chmod(join(directory, folder), 0o700).catch(() => {});
-      await rm(directory, { recursive: true, force: true });
+      try {
+        await Promise.all(
+          unreadableDirectories.map(async handle => {
+            try {
+              await handle.chmod(0o700);
+            } finally {
+              await handle.close();
+            }
+          }),
+        );
+      } finally {
+        await cleanup.removeTree(basename(allocation));
+      }
     }
   }
 }

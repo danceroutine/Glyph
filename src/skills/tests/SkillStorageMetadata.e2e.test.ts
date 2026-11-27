@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
+import { SkillPackage } from '#src/skills/SkillPackage.js';
 import { SkillScriptRunner } from '#src/skills/SkillScriptRunner.js';
 import { aSkillPackage } from './fixtures/aSkillDescriptor.ts';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
@@ -39,8 +40,8 @@ it.skipIf(process.platform !== 'darwin')(
   async () => {
     const base = await mkdtemp(join(tmpdir(), 'glyph-run-inheritance-'));
     onTestFinished(() => rm(base, { recursive: true, force: true }));
-    const workspace = join(base, 'workspace'),
-      temporary = join(base, 'temporary');
+    const workspace = join(base, 'workspace');
+    const temporary = join(base, 'temporary');
     await mkdir(workspace);
     await mkdir(temporary);
     chmodAcl(temporary, '+a', 'everyone allow list,search,file_inherit,directory_inherit');
@@ -49,6 +50,7 @@ it.skipIf(process.platform !== 'darwin')(
       { executeProgram: execute },
       [{ id: 'project', label: 'Project', directory: workspace, workingDirectory: '.', originIds: ['project'] }],
       metadata,
+      openMutations,
       temporary,
     );
     const skill = aSkillPackage(undefined, undefined, { 'scripts/task.sh': Buffer.from('echo should-not-run') });
@@ -163,5 +165,56 @@ it.skipIf(process.platform !== 'darwin')(
         chmodAcl(path, '-N');
       }
     }
+  },
+);
+
+it.skipIf(process.platform === 'win32')(
+  'retires script resources through pinned directories after a full-access run changes its own scaffold',
+  async () => {
+    const base = await mkdtemp(join(tmpdir(), 'glyph-run-retirement-'));
+    onTestFinished(() => rm(base, { recursive: true, force: true }));
+    const workspace = join(base, 'project');
+    const temporary = join(base, 'runs');
+    const external = join(base, 'ordinary');
+    for (const directory of [workspace, temporary, external]) await mkdir(directory);
+    await mkdir(join(external, 'leaf'));
+    await chmod(external, 0o751);
+    await chmod(join(external, 'leaf'), 0o750);
+    await writeFile(join(external, 'leaf', 'record'), 'intact');
+    const initial = aSkillPackage(undefined, undefined, { 'scripts/task.sh': Buffer.from('echo pinned') });
+    const skill = new SkillPackage(
+      initial.descriptor,
+      initial.body,
+      initial.packageFiles(),
+      new Map([
+        ['templates', 0o750],
+        ['templates/leaf', 0o700],
+        ['locked', 0],
+      ]),
+    );
+    const runner = new SkillScriptRunner(
+      {
+        executeProgram: async (_program, options) => {
+          const directory = options.readOnlyPaths![0]!;
+          for (const entry of ['templates', 'locked']) {
+            await rename(join(directory, entry), join(directory, entry + '-moved'));
+            await symlink(external, join(directory, entry), 'dir');
+          }
+          await symlink(join(external, 'leaf'), join(directory, 'templates-moved', 'leaf-link'), 'dir');
+          return { terminalId: 'fixture', status: 'completed', exitCode: 0, output: '' };
+        },
+      },
+      [{ id: 'project', label: 'Project', directory: workspace, workingDirectory: '.', originIds: ['project'] }],
+      metadata,
+      openMutations,
+      temporary,
+    );
+    await expect(runner.run(skill, 'scripts/task.sh', [], 'chat', new AbortController().signal)).resolves.toMatchObject(
+      { exitCode: 0 },
+    );
+    expect(await readdir(temporary)).toEqual([]);
+    expect((await stat(external)).mode & 0o777).toBe(0o751);
+    expect((await stat(join(external, 'leaf'))).mode & 0o777).toBe(0o750);
+    expect(await readFile(join(external, 'leaf', 'record'), 'utf8')).toBe('intact');
   },
 );

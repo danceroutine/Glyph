@@ -265,7 +265,7 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
             .workspace_roots
             .iter()
             .any(|root| path.starts_with(root) || root.starts_with(path))
-            || private_component(path)
+            || (private_component(path) && !execution_root(path))
             || path.starts_with(&request.state_directory)
             || request.state_directory.starts_with(path)
             || request
@@ -332,9 +332,24 @@ fn managed_directory(path: &Path) -> bool {
             })
 }
 
+const SKILL_EXECUTION_DIRECTORY: &str = ".glyph-skill-run";
+
+fn private_name(name: &OsStr) -> bool {
+    name.eq_ignore_ascii_case(".skill-staging")
+        || name.eq_ignore_ascii_case(SKILL_EXECUTION_DIRECTORY)
+}
+
 fn private_component(path: &Path) -> bool {
-    path.iter()
-        .any(|name| name.eq_ignore_ascii_case(".skill-staging"))
+    path.iter().any(private_name)
+}
+
+/// A host-admitted script run can expose its own files. Any surrounding transaction or run remains private.
+fn execution_root(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(SKILL_EXECUTION_DIRECTORY))
+        && path
+            .parent()
+            .is_some_and(|parent| !private_component(parent))
 }
 
 fn is_unsafe_workspace_root(root: &Path, home_directory: Option<&Path>) -> bool {
@@ -748,6 +763,21 @@ pub mod macos {
         policy.push_str(r#"(deny file-read* file-write* file-test-existence (regex #"/\.[sS][kK][iI][lL][lL]-[sS][tT][aA][gG][iI][nN][gG](/|$)"))
 (deny file-write* (regex #"/\.([gG][lL][yY][pP][hH]|[cC][uU][rR][sS][oO][rR])(/[sS][kK][iI][lL][lL][sS](/|$)|$)"))
 "#);
+        // All concurrent runs use a reserved directory. Only the one-shot host admission opens its tree for reading.
+        let run = r#"(regex #"/\.[gG][lL][yY][pP][hH]-[sS][kK][iI][lL][lL]-[rR][uU][nN](/|$)")"#;
+        policy.push_str(&format!("(deny file-write* {run})\n"));
+        let mut restrictions = vec![run.to_owned()];
+        for path in request
+            .read_only_paths
+            .iter()
+            .filter(|path| super::execution_root(path))
+        {
+            restrictions.push(format!("(require-not (subpath {}))", seatbelt_string(path)));
+        }
+        policy.push_str(&format!(
+            "(deny file-read* file-test-existence (require-all {}))\n",
+            restrictions.join(" ")
+        ));
         // An independently opened workspace can install a skill below any previously ordinary directory.
         // Seatbelt evaluates rename at the directory being moved, so guard directory identities directly.
         for root in &request.workspace_roots {

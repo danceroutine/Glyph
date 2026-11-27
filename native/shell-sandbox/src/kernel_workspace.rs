@@ -104,6 +104,9 @@ impl Mounts for &mut KernelWorkspace {
         private: &[PathBuf],
     ) -> Result<Vec<OsString>, super::SandboxError> {
         let source = source.canonicalize()?;
+        if super::private_component(&source) && !request.read_only_paths.contains(&source) {
+            return Ok(Vec::new());
+        }
         let ancestor = if let Some(root) = self
             .runtime_views
             .keys()
@@ -458,6 +461,14 @@ mod tests {
         );
         assert!((&mut view)
             .runtime(&child, &child, &request, &[])
+            .unwrap()
+            .is_empty());
+        let reserved = dir.join(".GlYpH-SkIlL-RuN");
+        fs::create_dir(&reserved).unwrap();
+        let alias = base.path().join("toolchain-alias");
+        std::os::unix::fs::symlink(&reserved, &alias).unwrap();
+        assert!((&mut view)
+            .runtime(&alias, &alias, &request, &[])
             .unwrap()
             .is_empty());
         let backing = base.path().join("view");

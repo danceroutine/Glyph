@@ -1,3 +1,4 @@
+import { testPackageMutations } from './fixtures/testPackageMutations.ts';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
@@ -52,6 +53,7 @@ it('runs secondary-root packages in their owning root using private, immutable r
     { executeProgram: execute },
     f.roots,
     testFilesystemMetadata,
+    async root => testPackageMutations(root),
     join(f.directory, 'private'),
   );
   expect(runner.targets).toEqual([
@@ -84,6 +86,7 @@ it('requires an explicit root for multi-root user skills and rejects staging ins
     { executeProgram: execute },
     f.roots,
     testFilesystemMetadata,
+    async root => testPackageMutations(root),
     join(f.directory, 'private'),
   );
   await expect(runner.run(skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('explicit root');
@@ -92,6 +95,7 @@ it('requires an explicit root for multi-root user skills and rejects staging ins
     { executeProgram: execute },
     [f.roots[0]!],
     testFilesystemMetadata,
+    async root => testPackageMutations(root),
     join(f.directory, 'private'),
   );
   await single.run(skill, 'scripts/task.sh', [], 'chat', f.signal);
@@ -99,6 +103,7 @@ it('requires an explicit root for multi-root user skills and rejects staging ins
     { executeProgram: execute },
     f.roots,
     testFilesystemMetadata,
+    async root => testPackageMutations(root),
     join(f.roots[1]!.directory, 'staged'),
   );
   await expect(unsafe.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B')).rejects.toThrow('outside every');
@@ -106,6 +111,7 @@ it('requires an explicit root for multi-root user skills and rejects staging ins
     { executeProgram: execute },
     f.roots,
     testFilesystemMetadata,
+    async root => testPackageMutations(root),
     f.roots[1]!.directory,
   );
   await expect(same.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B')).rejects.toThrow('outside every');
@@ -123,6 +129,7 @@ it('cleans failed staging and does not record a disclosure when approval is deni
     { executeProgram: execute },
     f.roots,
     testFilesystemMetadata,
+    async root => testPackageMutations(root),
     join(f.directory, 'private'),
   );
   await expect(runner.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('Denied');
@@ -141,7 +148,13 @@ it('rejects inherited access controls before exposing a pinned file or requestin
       throw new Error('Inherited ACL');
     }),
   };
-  const runner = new SkillScriptRunner({ executeProgram: execute }, f.roots, metadata, join(f.directory, 'private'));
+  const runner = new SkillScriptRunner(
+    { executeProgram: execute },
+    f.roots,
+    metadata,
+    async root => testPackageMutations(root),
+    join(f.directory, 'private'),
+  );
   await expect(runner.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('Inherited ACL');
   expect(execute).not.toHaveBeenCalled();
   const handle = metadata.inspect.mock.calls[0]![0];
@@ -170,6 +183,7 @@ it('closes a rejected script inode and cleans a scaffold whose reviewed director
     { executeProgram: execute },
     f.roots,
     testFilesystemMetadata,
+    async root => testPackageMutations(root),
     join(f.directory, 'private'),
   );
   await runner.run(skill, 'scripts/task.sh', [], 'chat', f.signal);
@@ -180,6 +194,7 @@ it('closes a rejected script inode and cleans a scaffold whose reviewed director
     { executeProgram: execute },
     f.roots,
     { inspect },
+    async root => testPackageMutations(root),
     join(f.directory, 'private'),
   );
   await expect(rejected.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('File ACL');

@@ -11,6 +11,7 @@ it('keeps host state and transaction files private across containing, overlappin
   const project = join(base, 'work');
   const profile = join(project, 'Profile');
   const stagedRoot = join(profile, '.Skill-Staging', 'transaction');
+  const run = join(project, 'runtime', '.glyph-skill-run');
   const privateFile = join(profile, 'skill-state.json');
   const publicPath = 'src/skill-state.json';
   const privateName = 'journal.json';
@@ -24,6 +25,7 @@ it('keeps host state and transaction files private across containing, overlappin
   for (const [path, content] of [
     [privateFile, privateContent],
     [join(project, publicPath), 'project data'],
+    [join(run, 'script.sh'), privateContent],
     [join(stagedRoot, privateName), privateContent],
     [join(project, 'temporary/.skill-staging'), 'ordinary file with reserved name'],
   ] as const) {
@@ -34,11 +36,19 @@ it('keeps host state and transaction files private across containing, overlappin
   for (const [root, blocked, expected] of [
     [
       project,
-      ['Profile/skill-state.json', 'Profile/.Skill-Staging/transaction/journal.json', 'temporary/.skill-staging'],
+      [
+        'Profile/skill-state.json',
+        'Profile/.Skill-Staging/transaction/journal.json',
+        'temporary/.skill-staging',
+        'runtime/.glyph-skill-run/script.sh',
+        'runtime/.glyph-ſkill-run/script.sh',
+        'runtime/.glyph-ſkill-run/future.md',
+      ],
       [publicPath],
     ],
     [profile, ['SKILL-STATE.JSON', '.Skill-Staging/transaction/journal.json'], []],
     [stagedRoot, [privateName, 'future.md'], []],
+    [run, ['script.sh', 'future.md'], []],
   ] as const) {
     const store = new FileSystemWorkspaceTextStore(root, { caseSensitive: false, accessPolicy: policy });
     const index = new RustWorkspacePathIndex({ root, binaryPath, caseSensitive: false, accessPolicy: policy });

@@ -361,8 +361,12 @@ fn assert_denied(output: &Output, description: &str) {
 #[ignore = "requires the host sandbox backend; run with pnpm test:security:native"]
 fn security_admitted_package_is_readable_but_immutable_outside_the_workspace() {
     let fixture = Fixture::new();
-    let package = fixture.outside.join("pinned-package");
-    fs::create_dir(&package).unwrap();
+    let toolchain = fixture.home.join(".cargo/bin");
+    let package = toolchain.join("first/.glyph-skill-run");
+    let sibling = toolchain.join("other/.glyph-skill-run");
+    fs::create_dir_all(&package).unwrap();
+    fs::create_dir_all(&sibling).unwrap();
+    fs::write(sibling.join("unrelated"), "other run").unwrap();
     let script = package.join("task.sh");
     fs::write(&script, "echo pinned").unwrap();
     #[cfg(target_os = "linux")]
@@ -399,6 +403,15 @@ fn security_admitted_package_is_readable_but_immutable_outside_the_workspace() {
             .env("HOME", &fixture.home)
             .env("PATH", "/usr/bin:/bin")
             .env("GLYPH_RESOURCE", &script)
+            .env("GLYPH_SIBLING", sibling.join("unrelated"))
+            .env(
+                "GLYPH_FOLDED",
+                toolchain.join("other/.glyph-ſkill-run/unrelated"),
+            )
+            .env(
+                "GLYPH_UPPER",
+                toolchain.join("other/.GLYPH-SKILL-RUN/unrelated"),
+            )
             .env("GLYPH_OUTPUT", fixture.workspace.join("result.txt"))
             .output()
             .unwrap()
@@ -407,6 +420,30 @@ fn security_admitted_package_is_readable_but_immutable_outside_the_workspace() {
         &run(false, "cat \"$GLYPH_RESOURCE\""),
         "unadmitted package read",
     );
+    assert_denied(
+        &run(true, r#"cat "$GLYPH_SIBLING""#),
+        "another pending run in the same toolchain",
+    );
+    #[cfg(target_os = "macos")]
+    {
+        for (spelling, variable) in [
+            (".glyph-ſkill-run", "GLYPH_FOLDED"),
+            (".GLYPH-SKILL-RUN", "GLYPH_UPPER"),
+        ] {
+            let alias = toolchain.join("other").join(spelling).join("unrelated");
+            if alias.exists() {
+                use std::os::unix::fs::MetadataExt;
+                assert_eq!(
+                    fs::metadata(&alias).unwrap().ino(),
+                    fs::metadata(sibling.join("unrelated")).unwrap().ino()
+                );
+                assert_denied(
+                    &run(true, &format!(r#"cat "${variable}""#)),
+                    "another run through an equivalent filesystem spelling",
+                );
+            }
+        }
+    }
     #[cfg(target_os = "linux")]
     fs::write(fixture.workspace.join("result.txt"), "initial").unwrap();
     #[cfg(target_os = "linux")]
@@ -416,7 +453,12 @@ fn security_admitted_package_is_readable_but_immutable_outside_the_workspace() {
             r#"dir=${GLYPH_RESOURCE%/*}/templates; stat -c '%a' "$dir" "$dir/example" "$GLYPH_RESOURCE"; printf changed >"$dir/example""#,
         );
         assert!(!modes.status.success());
-        assert_eq!(String::from_utf8(modes.stdout).unwrap(), "750\n640\n755\n");
+        assert_eq!(
+            String::from_utf8(modes.stdout).unwrap(),
+            "750\n640\n755\n",
+            "{}",
+            String::from_utf8_lossy(&modes.stderr)
+        );
         assert!(String::from_utf8_lossy(&modes.stderr)
             .to_lowercase()
             .contains("read-only"));

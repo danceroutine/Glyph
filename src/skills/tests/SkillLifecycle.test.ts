@@ -1,3 +1,4 @@
+import { testPackageMutations } from './fixtures/testPackageMutations.ts';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import type { ShellProgram } from '#src/shell/ShellProgram.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
@@ -150,6 +151,7 @@ describe(SkillScriptRunner, () => {
       { executeProgram: execute },
       [{ id: 'project', label: 'Project', directory: root, workingDirectory: 'project', originIds: ['project'] }],
       testFilesystemMetadata,
+      async physicalRoot => testPackageMutations(physicalRoot),
     );
     expect(await runner.run(skill, 'scripts/task.sh', ["argument'with quote"], 'chat', signal)).toMatchObject({
       packageRevision: skill.revision,
@@ -164,7 +166,9 @@ describe(SkillScriptRunner, () => {
   });
   it('rejects undeclared execution, missing resources, traversal, binary scripts, and unsupported interpreters', async () => {
     const execute = vi.fn();
-    const runner = new SkillScriptRunner({ executeProgram: execute }, [], testFilesystemMetadata);
+    const runner = new SkillScriptRunner({ executeProgram: execute }, [], testFilesystemMetadata, async root =>
+      testPackageMutations(root),
+    );
     const signal = new AbortController().signal;
     const skill = aSkillPackage(aSkillDescriptor({ allowedTools: ['project.read_file'] }), 'Body', {
       'scripts/task.sh': Buffer.from('echo nope'),
@@ -191,6 +195,7 @@ it('rejects malformed paths in a pinned package before running a script and clea
     { executeProgram: execute },
     [{ id: 'project', label: 'Project', directory: root, workingDirectory: '.', originIds: ['project'] }],
     testFilesystemMetadata,
+    async physicalRoot => testPackageMutations(physicalRoot),
   );
   const skill = aSkillPackage(undefined, undefined, {
     'scripts/task.sh': Buffer.from('echo valid'),
@@ -224,6 +229,7 @@ it('runs supported Python and Node scripts with visible compatibility guidance',
     { executeProgram: execute },
     [{ id: 'project', label: 'Project', directory: root, workingDirectory: '.', originIds: ['project'] }],
     testFilesystemMetadata,
+    async physicalRoot => testPackageMutations(physicalRoot),
   );
   const skill = aSkillPackage(aSkillDescriptor({ compatibility: 'Requires Python or Node' }), 'Body', {
     'scripts/task.py': Buffer.from('print("hello")'),

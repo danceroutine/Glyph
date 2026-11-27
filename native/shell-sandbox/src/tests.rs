@@ -1240,6 +1240,25 @@ fn shell_roots_and_resources_within_private_storage_are_rejected() {
     admitted.private_paths = vec![outside.clone()];
     admitted.read_only_paths = vec![outside.clone()];
     assert!(prepare_request(admitted).is_err());
+    let run = dir.path().join("allocation/.glyph-skill-run");
+    let within_run = run.join("assets");
+    let internal = dir.path().join(".skill-staging/.glyph-skill-run");
+    fs::create_dir_all(&within_run).unwrap();
+    fs::create_dir_all(&internal).unwrap();
+    for resource in [&within_run, &internal] {
+        let mut candidate = request(SandboxProfile::ReadOnly, &workspace, &state);
+        candidate.read_only_paths.push(resource.clone());
+        assert!(prepare_request(candidate).is_err());
+    }
+    let mut candidate = request(SandboxProfile::ReadOnly, &workspace, &state);
+    candidate.read_only_paths.push(run.clone());
+    let prepared = prepare_request(candidate).unwrap();
+    let policy = macos::seatbelt_policy(&prepared, dir.path(), None).unwrap();
+    assert!(policy.contains(&format!(
+        r#"(require-not (subpath "{}"))"#,
+        run.canonicalize().unwrap().display()
+    )));
+    assert!(prepare_request(request(SandboxProfile::ReadOnly, &within_run, &state)).is_err());
     let outside_file = dir.path().join("private-file");
     fs::write(&outside_file, "state").unwrap();
     let mut masked = request(SandboxProfile::ReadOnly, &workspace, &state);

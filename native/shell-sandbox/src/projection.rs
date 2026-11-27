@@ -1,7 +1,7 @@
 //! A Bubblewrap workspace is a read-only directory snapshot with descriptor-pinned file mounts.
 //! New host directory entries, including transactions opened by other windows, cannot appear mid-command.
 use super::{
-    is_sensitive_workspace_file, private_component, SandboxError, SandboxProfile, SandboxRequest,
+    is_sensitive_workspace_file, private_name, SandboxError, SandboxProfile, SandboxRequest,
     MAX_WORKSPACE_SCAN_DEPTH, MAX_WORKSPACE_SCAN_ENTRIES,
 };
 use rustix::fd::OwnedFd;
@@ -210,8 +210,15 @@ impl<M: Mounts> WorkspaceView<M> {
                 ));
             }
             let child = path.join(name);
-            if private_component(&child)
-                || access.private.iter().any(|p| child.starts_with(p))
+            if private_name(name) {
+                // Bubblewrap needs a mount point in the sealed parent for this invocation's resource.
+                // Its contents come only from the separately verified read-only snapshot.
+                if access.request.read_only_paths.contains(&child) {
+                    self.mounts.directory(&child)?;
+                }
+                continue;
+            }
+            if access.private.iter().any(|p| child.starts_with(p))
                 || is_sensitive_workspace_file(&child, &access.request.workspace_policy)
             {
                 continue;
@@ -404,7 +411,18 @@ mod tests {
         assert!(!external_plan
             .iter()
             .any(|arg| arg == root.join("multiple-links").as_os_str()));
+        let admitted = root.join(".glyph-skill-run");
+        std::fs::create_dir(&admitted).unwrap();
+        let resource_file = admitted.join("script");
+        std::fs::write(&resource_file, "reviewed").unwrap();
+        request.read_only_paths.push(admitted.clone());
         let mut optional = WorkspaceView::runtime(MountTrace::default());
+        let parent = optional.workspace(&root, &request, &[], &[]).unwrap();
+        assert!(parent
+            .windows(2)
+            .any(|arg| arg[0] == "--dir" && arg[1] == admitted));
+        assert!(!parent.contains(&resource_file.into_os_string()));
+        request.read_only_paths.clear();
         use std::os::unix::fs::PermissionsExt;
         let inaccessible_dir = root.join("no-search");
         std::fs::create_dir(&inaccessible_dir).unwrap();
