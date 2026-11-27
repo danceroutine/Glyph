@@ -20,7 +20,13 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
     dispose: vi.fn(async () => {}),
   };
   const editors = {
-    constructed: vi.fn<({ trustedUserEditors }: { trustedUserEditors: (identity: unknown) => unknown }) => void>(),
+    constructed:
+      vi.fn<
+        (
+          router: { trustedUserEditors: (identity: unknown, sourcePath?: string) => unknown },
+          projectPeers: (owner: GlyphConnectionIdentity, projectDirectory?: string) => unknown,
+        ) => void
+      >(),
     connect: vi.fn(),
     receive: vi.fn(),
     disconnect: vi.fn(),
@@ -57,7 +63,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   vi.doMock('#src/desktop/workspace/EditorRpcRouter.js', () => ({
     EditorRpcRouter: class {
       constructor(
-        peers: (owner: GlyphConnectionIdentity) => unknown,
+        peers: (owner: GlyphConnectionIdentity, projectDirectory?: string) => unknown,
         readonly trustedUserEditors: (identity: unknown, sourcePath?: string) => unknown,
       ) {
         editors.constructed(this, peers);
@@ -290,10 +296,7 @@ describe('utilityMain', () => {
   it('wires user package checks to the live host trust registry', async () => {
     const { loaded, editors, host } = startUtilityHost();
     await loaded;
-    const peers = editors.constructed.mock.calls[0]![1] as (
-      owner: GlyphConnectionIdentity,
-      projectDirectory?: string,
-    ) => unknown;
+    const peers = editors.constructed.mock.calls[0]![1];
     expect(peers(identity)).toEqual([]);
     expect(host.trustedSkillEditors).toHaveBeenCalledExactlyOnceWith(identity);
     expect(peers(identity, '/workspace/.glyph/skills/example')).toEqual([]);

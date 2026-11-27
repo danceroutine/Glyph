@@ -10,6 +10,8 @@ import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 /** Low-level model/agent adapter. Hosts consume GlyphService instead. */
 export interface ChatProvider {
   readonly model: string;
+  /** Providers with a context-preparation phase acknowledge only after admitting the complete prompt. */
+  readonly reportsTurnAdmission?: boolean;
   /** Commits host context immediately and ignores event IDs already present. */
   recordContext(events: readonly ChatContextEvent[]): void;
   exportState(): ChatProviderState;
@@ -19,6 +21,7 @@ export interface ChatProvider {
     request: ChatRequestInput,
     options: {
       signal: AbortSignal;
+      onTurnAdmitted?: () => void;
       onText: (delta: string) => void;
       /** Drain accepted instructions at a safe boundary; close acceptance when a final step has none. */
       takeSteering?: (finishing: boolean) => readonly ChatRequest[];

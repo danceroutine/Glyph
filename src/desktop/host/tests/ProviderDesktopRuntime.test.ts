@@ -82,6 +82,7 @@ async function fixture(
   reviews?: ProposalReviewManager,
   extras: {
     readonly skills?: SkillCatalog;
+    readonly reportsTurnAdmission?: boolean;
     readonly agentReviews?: AgentReviewService;
     readonly trusted?: boolean;
     readonly skillManager?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skillManager'];
@@ -150,6 +151,7 @@ async function fixture(
           context.splice(0, context.length, ...(states.get(JSON.stringify(state.data)) ?? []));
         },
         reset: () => {},
+        ...(extras.reportsTurnAdmission ? { reportsTurnAdmission: true } : {}),
         send: async (_request, options) => {
           const reported = await send(options, interactions);
           return { usage: reported === undefined ? usage : reported, responseId: 'response' };
@@ -335,6 +337,7 @@ it('projects instruction catalog snapshots and live changes without exposing fil
   const sources: readonly AgentInstructionSource[] = [
     {
       id: 'agents_md:AGENTS.md',
+      references: ['a.md'],
       kind: AgentInstructionSourceKind.AGENTS_MD,
       label: 'AGENTS.md',
       path: 'AGENTS.md',
@@ -386,7 +389,6 @@ it('projects instruction catalog snapshots and live changes without exposing fil
       return unsubscribe;
     }),
   };
-  sources[0] = { ...sources[0]!, references: ['a.md'] };
   const historical = chatRecord({
     transcript: [
       {
@@ -1392,21 +1394,24 @@ describe(ProviderDesktopRuntime, () => {
       await originalSave(record);
     };
     try {
-      await harness.runtime.handle({
-        type: Command.SEND,
-        chatId: harness.chatId,
-        runId: 'cancelled',
-        text: 'First',
-        attachments: [],
-      });
+      const notAdmitted = expect(
+        harness.runtime.handle({
+          type: Command.SEND,
+          chatId: harness.chatId,
+          runId: 'cancelled',
+          text: 'First',
+          attachments: [],
+        }),
+      ).rejects.toThrow();
       await vi.waitFor(() => {
         expect(attempts).toBe(1);
       });
       await harness.runtime.handle({ type: Command.CANCEL_RUN, chatId: harness.chatId, runId: 'cancelled' });
+      await notAdmitted;
       await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
       });
-      await harness.runtime.handle({
+      const retry = harness.runtime.handle({
         type: Command.SEND,
         chatId: harness.chatId,
         runId: 'retry',
@@ -1415,6 +1420,7 @@ describe(ProviderDesktopRuntime, () => {
       });
       expect(send).not.toHaveBeenCalled();
       release();
+      await retry;
       await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs[1]?.status).toBe(GlyphRunStatus.COMPLETED);
       });
@@ -1531,17 +1537,20 @@ describe(ProviderDesktopRuntime, () => {
     const close = vi.spyOn(harness.store, 'dispose');
     let stopping: Promise<void> | undefined;
     try {
-      await harness.runtime.handle({
-        type: Command.SEND,
-        chatId: harness.chatId,
-        runId: 'run',
-        text: 'Continue',
-        attachments: [],
-      });
+      const notAdmitted = expect(
+        harness.runtime.handle({
+          type: Command.SEND,
+          chatId: harness.chatId,
+          runId: 'run',
+          text: 'Continue',
+          attachments: [],
+        }),
+      ).rejects.toThrow();
       await vi.waitFor(() => {
         expect(saving).toBe(true);
       });
       await harness.runtime.handle({ type: Command.CANCEL_RUN, chatId: harness.chatId, runId: 'run' });
+      await notAdmitted;
       await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
       });
@@ -1576,14 +1585,17 @@ describe(ProviderDesktopRuntime, () => {
     store.save.mockImplementation(async () => gate);
     const rejecting = reviews.rejectInReview(proposal.proposalId, proposal.itemId);
     try {
-      await harness.runtime.handle({
-        type: Command.SEND,
-        chatId: harness.chatId,
-        runId: 'run',
-        text: 'Continue',
-        attachments: [],
-      });
+      const notAdmitted = expect(
+        harness.runtime.handle({
+          type: Command.SEND,
+          chatId: harness.chatId,
+          runId: 'run',
+          text: 'Continue',
+          attachments: [],
+        }),
+      ).rejects.toThrow();
       await harness.runtime.handle({ type: Command.CANCEL_RUN, chatId: harness.chatId, runId: 'run' });
+      await notAdmitted;
       await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
       });

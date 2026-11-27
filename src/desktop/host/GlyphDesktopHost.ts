@@ -181,7 +181,6 @@ export class GlyphDesktopHost {
       };
       this.sessions.set(key, connection);
     }
-    connection.authorityKnown = false;
     connection.send = send;
     clearTimeout(this.disconnectTimers.get(connection));
     this.disconnectTimers.delete(connection);

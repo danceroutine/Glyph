@@ -1,6 +1,5 @@
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
-import { WorkspaceTextDecodingError } from '#src/workspace/WorkspaceTextDecodingError.js';
-import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
+import { workspaceReadFailureBytes } from '#src/workspace/WorkspaceReadFailure.js';
 import { posix } from 'node:path';
 import { lstat } from 'node:fs/promises';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
@@ -123,11 +122,7 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
         if (maxBytes <= 0) throw new Error('Skill metadata exceeds the 8 MiB discovery budget.');
         remainingBytes -= maxBytes;
         const snapshot = await this.location.workspace.read(path, { maxBytes }).catch((error: unknown) => {
-          const bytesRead =
-            error instanceof WorkspaceTextDecodingError || error instanceof WorkspaceReadLimitError
-              ? error.bytesRead
-              : 0;
-          remainingBytes += Math.max(0, maxBytes - bytesRead);
+          remainingBytes += maxBytes - workspaceReadFailureBytes(error);
           throw error;
         });
         remainingBytes += maxBytes - snapshot.byteLength;

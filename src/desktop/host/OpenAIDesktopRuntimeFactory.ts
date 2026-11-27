@@ -406,7 +406,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         matchesLegacyId: (directory, previousId, budget) =>
           userSkillDirectory.matchesProjectReference(directory, previousId, budget),
         captureFiles: (directory, signal) =>
-          listSkillPackageFiles(userInstructionStore, directory, indexExecutable, false, signal),
+          listSkillPackageFiles(userInstructionStore, directory, indexExecutable, false, signal, userInstructionPolicy),
         workspace: userInstructionStore,
         binaryStore: userInstructionStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),

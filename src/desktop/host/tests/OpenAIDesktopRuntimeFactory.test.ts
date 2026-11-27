@@ -1298,6 +1298,35 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(await readFile(join(rules, 'public.mdc'), 'utf8')).toContain('enabled: false');
     });
 
+    it('pins public user skill resources while excluding host state and traces within the same package', async () => {
+      const packageRoot = join(isolatedUserDirectory, 'skills', 'workflow');
+      const privateState = join(packageRoot, 'host-state');
+      await mkdir(privateState, { recursive: true });
+      const alias = join(isolatedUserDirectory, 'state-alias');
+      const traceFile = join(packageRoot, 'trace.log');
+      await symlink(privateState, alias);
+      await writeFile(join(privateState, 'secret.txt'), 'PRIVATE STATE CONTENT');
+      await writeFile(traceFile, 'PRIVATE TRACE CONTENT');
+      await writeFile(
+        join(packageRoot, 'SKILL.md'),
+        '---\nname: workflow\ndescription: Run a workflow\n---\nPublic instructions',
+      );
+      await writeFile(join(packageRoot, 'reference.txt'), 'Public reference');
+      const fixture = await factoryFixture({ userDirectory: isolatedUserDirectory, stateDirectory: alias, traceFile });
+      useFilesystemIndex();
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({ truncated: false } as never);
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const catalog = vi.spyOn(SkillCatalog.prototype, 'refresh');
+      const runtime = await fixture.create([await fixture.folder('public-project')]);
+      const [skill] = (await runtime.snapshot()).skills!;
+      expect(skill).toMatchObject({ name: 'workflow', status: 'active' });
+      const active = await (catalog.mock.contexts[0] as SkillCatalog).capture(skill!);
+      expect(active.body).toContain('Public instructions');
+      expect(active.readResource('reference.txt').content).toBe('Public reference');
+      expect(() => active.readResource('host-state/secret.txt')).toThrow('missing or unavailable');
+      expect(() => active.readResource('trace.log')).toThrow('missing or unavailable');
+    });
+
     it('keeps an unavailable user rule location separate and retries after repair', async () => {
       const fixture = await factoryFixture();
       const root = await fixture.folder('project');
@@ -1389,7 +1418,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         expect.objectContaining({ referenceResources: [{ uri: 'file://' + root + '/guide.md', caseSensitive: true }] }),
       );
       await runtime.handle({
-        type: GlyphWorkbenchCommandType.CREATE_USER_RULE,
+        type: Command.CREATE_USER_RULE,
         name: 'New rule',
         activation: 'manual',
       });
@@ -2043,7 +2072,10 @@ function useFilesystemIndex(): void {
     this: RustWorkspacePathIndex,
   ) {
     const config = captured.indexOptions[captured.indexes.indexOf(this)]!;
-    return (await inventoryPackage(config.root)).directories;
+    const directories = (await inventoryPackage(config.root)).directories;
+    return directories.filter(
+      path => !config.accessPolicy?.exclusionsFor(join(config.root, path), config.caseSensitive ?? true).privateRoot,
+    );
   });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
     this: RustWorkspacePathIndex,
@@ -2051,7 +2083,10 @@ function useFilesystemIndex(): void {
     options,
   ) {
     const configuration = captured.indexOptions[captured.indexes.indexOf(this)]!;
-    const store = new FileSystemWorkspaceTextStore(configuration.root);
+    const store = new FileSystemWorkspaceTextStore(configuration.root, {
+      accessPolicy: configuration.accessPolicy,
+      caseSensitive: configuration.caseSensitive,
+    });
     if (!options.rootFilesOnly) return store.list(options.limit, pattern);
     const listed = await store.list(10_000, pattern);
     const direct = listed.files.filter(path => !path.includes('/'));

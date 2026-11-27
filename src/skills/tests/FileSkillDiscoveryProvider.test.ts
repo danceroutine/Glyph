@@ -1,3 +1,4 @@
+import { WorkspaceReadFailure } from '#src/workspace/WorkspaceReadFailure.js';
 import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -34,6 +35,16 @@ describe(FileSkillDiscoveryProvider, () => {
     const found = await fixture.provider([...paths, missing, '.glyph/skills/deleted/SKILL.md', good]).discover();
     expect(found.filter(skill => skill.status === 'active').map(skill => skill.name)).toEqual(['example']);
     expect(found.filter(skill => skill.message?.includes('8 MiB'))).toEqual([]);
+  });
+  it('charges both completed disk reads when editor snapshot validation rejects a skill manifest', async () => {
+    const fixture = await skillFixture();
+    const paths = Array.from({ length: 17 }, (_, i) => '.glyph/skills/p-' + i + '/SKILL.md');
+    const read = vi
+      .spyOn(fixture.store, 'read')
+      .mockRejectedValue(new WorkspaceReadFailure(new Error('Editor conflict'), 512 * 1024));
+    const sources = await fixture.provider(paths).discover();
+    expect(read).toHaveBeenCalledTimes(16);
+    expect(sources.filter(source => source.message?.includes('8 MiB'))).toHaveLength(1);
   });
   it('folds single-root scope keys independently of the platform running the tests', async () => {
     const fixture = await skillFixture();
