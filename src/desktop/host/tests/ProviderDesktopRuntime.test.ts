@@ -803,6 +803,57 @@ describe(ProviderDesktopRuntime, () => {
     }
   });
 
+  it.each([false, true])('restores canonical manual rule references and optional spans (%s)', async withSpans => {
+    const checkpoint = {
+      providerState: { provider: 'fixture', version: 1, data: [] },
+      plans: [],
+      todos: [],
+      mode: AgentModeID.AGENT,
+    };
+    const span = { kind: 'rule' as const, sourceId: 'old', label: 'Old', revision: '1', from: 0, to: 1 };
+    const options = {
+      turnId: 'selected',
+      manualRuleIds: ['old', 'current', 'gone'],
+      ...(withSpans ? { referenceSpans: [span, { ...span, sourceId: 'other' }] } : {}),
+    };
+    const record = chatRecord({
+      transcript: [
+        {
+          userText: 'Old',
+          attachmentPaths: [],
+          assistantText: 'Done',
+          reasoningSummary: '',
+          createdAt: '2026-10-01T00:00:00.000Z',
+          checkpoints: { before: checkpoint, after: checkpoint },
+          options,
+        },
+      ],
+    });
+    const harness = await fixture(async () => {}, 'owner', undefined, { records: [record] });
+    vi.spyOn(harness.runtime, 'resolveRuleReference').mockImplementation(id => (id === 'old' ? 'current' : undefined));
+    try {
+      await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'selected' });
+      expect(harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)).toMatchObject({
+        draft: {
+          options: {
+            ...options,
+            manualRuleIds: ['current', 'gone'],
+            ...(withSpans
+              ? {
+                  referenceSpans: [
+                    { ...span, sourceId: 'current' },
+                    { ...span, sourceId: 'other' },
+                  ],
+                }
+              : {}),
+          },
+        },
+      });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
   it('publishes independent branches and replaces stale runs on restore, including after reopening', async () => {
     const harness = await fixture(async options => {
       options.onText('Answer');

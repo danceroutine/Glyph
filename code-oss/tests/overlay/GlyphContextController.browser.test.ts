@@ -1210,7 +1210,12 @@ describe(GlyphContextController, () => {
       isSymbolicLink: uri.path === '/workspace',
     }));
     services.files.realpath.mockResolvedValue(physical);
+    const history = vi.fn(async (id: string) => (id === 'old' ? 'guidance' : undefined));
+    controller.setInstructionRefresh(undefined, undefined, history);
+    await controller.openInstruction('old');
+    await expect(controller.openInstruction('gone')).rejects.toThrow('unavailable');
     await controller.openInstruction('guidance');
+    expect(history.mock.calls).toEqual([['old'], ['gone']]);
     expect(services.editors.openEditor).toHaveBeenCalledWith({
       resource: expect.objectContaining({ path: '/workspace/AGENTS.md' }),
       options: { pinned: true },

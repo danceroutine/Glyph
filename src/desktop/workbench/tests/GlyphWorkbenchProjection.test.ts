@@ -362,6 +362,7 @@ describe(GlyphWorkbenchProjection, () => {
     it('ignores command results', () => {
       const projection = new GlyphWorkbenchProjection();
       const before = projection.state;
+      projection.accept({ type: GlyphHostEventType.RULE_REFERENCE_RESOLVED, lookupId: 'private', ruleId: 'canonical' });
       projection.accept({ type: GlyphHostEventType.COMMAND_RESULT, requestId: 'request', ok: true });
       expect(projection.state).toBe(before);
       expect(projection.diagnostics).toEqual([]);

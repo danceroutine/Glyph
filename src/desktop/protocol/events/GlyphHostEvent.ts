@@ -34,12 +34,14 @@ export enum GlyphHostEventType {
   RUN_STATE = 'run_state',
   CHAT_RESTORED = 'chat_restored',
   HOST_STATUS = 'host_status',
+  RULE_REFERENCE_RESOLVED = 'rule_reference_resolved',
   INSTRUCTION_SOURCES_CHANGED = 'instruction_sources_changed',
   ERROR = 'error',
 }
 
 /** Closed event union used to keep every host-to-renderer transition exhaustively typed. */
 export type GlyphHostEvent =
+  | { readonly type: GlyphHostEventType.RULE_REFERENCE_RESOLVED; readonly lookupId: string; readonly ruleId?: string }
   | {
       readonly type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED;
       readonly sources: readonly GlyphInstructionSource[];

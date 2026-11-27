@@ -74,7 +74,13 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     for (const editor of codeEditors.listCodeEditors()) watch(editor);
     this._register(codeEditors.onCodeEditorAdd(watch));
   }
-  setInstructionRefresh(refresh?: (invalidate?: boolean) => Promise<void>, roots?: () => readonly string[]): void {
+  private resolveHistoricalRule?: (id: string) => Promise<string | undefined>;
+  setInstructionRefresh(
+    refresh?: (invalidate?: boolean) => Promise<void>,
+    roots?: () => readonly string[],
+    resolver?: (id: string) => Promise<string | undefined>,
+  ): void {
+    this.resolveHistoricalRule = resolver;
     this.instructionRoots = roots ?? (() => []);
     this.rootWatches.clearAndDisposeAll();
     this.refreshInstructionSources = refresh;
@@ -405,8 +411,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       this.assertTrusted();
       await this.refreshInstructionSources?.();
       this.assertTrusted();
-      const rule = resolveInstructionId(
-        this.instructionSources(),
+      const rule = await this.ruleSource(
         attachment.ruleId ?? decodeURIComponent(attachment.uri.slice('glyph-rule:'.length)),
       );
       if (!rule || !isManualRule(rule))
@@ -415,7 +420,13 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
           'Selected manual rule is unavailable. Choose it again.',
         );
       const { unavailable: _, ...reference } = attachment;
-      return { ...reference, path: rule.name ?? attachment.path, contentRevision: rule.revision ?? rule.id };
+      return {
+        ...reference,
+        ruleId: rule.id,
+        uri: `glyph-rule:${encodeURIComponent(rule.id)}`,
+        path: rule.name ?? attachment.path,
+        contentRevision: rule.revision ?? rule.id,
+      };
     }
     if (!['file', 'selection', 'folder'].includes(attachment.kind))
       throw new GlyphContextError(
@@ -436,8 +447,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   async checkAttachment(attachment: GlyphContextAttachment): Promise<string | undefined> {
     if (attachment.unavailable !== undefined && attachment.unavailable !== '') return attachment.unavailable;
     if (attachment.kind === GlyphContextAttachmentKind.RULE) {
-      const rule = resolveInstructionId(
-        this.instructionSources(),
+      const rule = await this.ruleSource(
         attachment.ruleId ?? decodeURIComponent(attachment.uri.slice('glyph-rule:'.length)),
       );
       if (!rule || !isManualRule(rule)) return 'Selected manual rule is unavailable. Remove it or choose it again.';
@@ -540,7 +550,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     this.assertTrusted();
     await this.refreshInstructionSources?.(true);
     this.assertTrusted();
-    const source = resolveInstructionId(this.instructionSources(), id);
+    const source = await this.ruleSource(id);
     if (!source || (source.status === 'error' && !source.revision && !source.managementRevision))
       throw unavailableInstruction();
 
@@ -577,8 +587,20 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       current = dirname(current);
     }
     this.assertTrusted();
-    if (!stillOwned() || resolveInstructionId(this.instructionSources(), id) !== source) throw unavailableInstruction();
+    if (!stillOwned() || this.instructionSources().find(current => current.id === source.id) !== source)
+      throw unavailableInstruction();
     await this.editors.openEditor({ resource, options: { pinned: true } });
+  }
+
+  private async ruleSource(id: string): Promise<GlyphInstructionSource | undefined> {
+    const sources = this.instructionSources();
+    if (!this.resolveHistoricalRule) return resolveInstructionId(sources, id);
+    const exact = sources.find(source => source.id === id);
+    if (exact) return exact;
+    this.assertTrusted();
+    const current = await this.resolveHistoricalRule(id);
+    this.assertTrusted();
+    return this.instructionSources().find(source => source.id === current);
   }
 
   private async matchesPhysicalSource(resource: URI, expected: string, caseSensitive?: boolean) {

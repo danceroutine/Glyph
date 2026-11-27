@@ -20,7 +20,7 @@ import { HostEventJournal } from './HostEventJournal.ts';
 import { RequestDeduplicator } from './RequestDeduplicator.ts';
 import { getWorkspaceKey, WorkspaceOwnershipRegistry } from './WorkspaceOwnershipRegistry.ts';
 
-import type { GlyphDesktopWorkspaceRuntime, GlyphRuntimeCommand } from './GlyphDesktopWorkspaceRuntime.ts';
+import type { GlyphDesktopWorkspaceRuntime, GlyphAttachedCommand } from './GlyphDesktopWorkspaceRuntime.ts';
 import type { GlyphDesktopWorkspaceRuntimeFactory } from './GlyphDesktopWorkspaceRuntimeFactory.ts';
 import { isGlyphRequestEnvelope } from '#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.js';
 import { isMutationCommand } from '#src/desktop/host/typeguards/isMutationCommand.js';
@@ -361,7 +361,7 @@ export class GlyphDesktopHost {
   private async dispatch(
     connection: Connection,
     requestId: string,
-    command: GlyphRuntimeCommand,
+    command: GlyphAttachedCommand,
   ): Promise<readonly GlyphHostEvent[]> {
     if (!connection.attached || !connection.ready || connection.pendingAttachments > 0) {
       return [
@@ -372,7 +372,10 @@ export class GlyphDesktopHost {
         }),
       ];
     }
-    if (!connection.trusted && isMutationCommand(command)) {
+    if (
+      !connection.trusted &&
+      (isMutationCommand(command) || command.type === GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE)
+    ) {
       return [
         toErrorGlyphHostEvent({
           requestId: requestId,
@@ -402,6 +405,24 @@ export class GlyphDesktopHost {
           code: GlyphDesktopErrorCode.HOST_UNAVAILABLE,
         }),
       ];
+    if (command.type === GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE) {
+      if (
+        typeof command.lookupId !== 'string' ||
+        !command.lookupId ||
+        command.lookupId.length > 64 ||
+        typeof command.ruleId !== 'string' ||
+        !command.ruleId ||
+        command.ruleId.length > 500
+      )
+        throw new Error('Invalid rule reference lookup.');
+      const ruleId = record.runtime.resolveRuleReference?.(command.ruleId);
+      this.send(connection, {
+        type: GlyphHostEventType.RULE_REFERENCE_RESOLVED,
+        lookupId: command.lookupId,
+        ...(ruleId ? { ruleId } : {}),
+      });
+      return [toCommandResultGlyphHostEvent(requestId)];
+    }
     const controller = new AbortController();
     await record.runtime.handle(command, {
       windowId: connection.identity.windowId,

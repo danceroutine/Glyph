@@ -1,4 +1,5 @@
 import { Deferred } from '#src/shared/Deferred.js';
+import { resolveInstructionId } from '#src/instructions/resolveInstructionId.js';
 import { isReviewItemPending } from '#src/editing/reviews/isReviewItemPending.js';
 import type { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
@@ -12,6 +13,7 @@ import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.j
 import { toToolActivityPreview } from '#src/chat/toToolActivityPreview.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
 import { GlyphContextAttachmentKind } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import type { ChatTurnOptions } from '#src/chat/ChatTurnOptions.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
 import type { ShellCommandSummary } from '#src/shell/ShellCommandSummary.js';
 import { toShellCommandSummary } from '#src/shell/toShellCommandSummary.js';
@@ -163,6 +165,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     });
   }
 
+  resolveRuleReference(id: string): string | undefined {
+    return resolveInstructionId(this.options.instructionCatalog?.sources ?? [], id)?.id;
+  }
+
   /** Rebuild reconnect state from live reviews so missed notifications cannot leave stale decisions. */
   async snapshot(): Promise<GlyphRuntimeSnapshot> {
     const instructionSources = this.options.instructionCatalog
@@ -298,6 +304,22 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     return summary.goal!;
   }
 
+  private restoredRuleOptions(options: ChatTurnOptions): ChatTurnOptions {
+    if (!options.manualRuleIds?.length) return options;
+    const ids = new Map(options.manualRuleIds.map(id => [id, this.resolveRuleReference(id) ?? id]));
+    return {
+      ...options,
+      manualRuleIds: [...new Set(ids.values())],
+      ...(options.referenceSpans
+        ? {
+            referenceSpans: options.referenceSpans.map(span =>
+              ids.has(span.sourceId) ? { ...span, sourceId: ids.get(span.sourceId)! } : span,
+            ),
+          }
+        : {}),
+    };
+  }
+
   private async dispatch(command: GlyphRuntimeCommand): Promise<void> {
     if (this.disposed) throw new Error('The workspace runtime has stopped.');
     const glyph = this.options.glyph;
@@ -413,7 +435,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
               runs: [...this.runs.values()].filter(run => run.chatId === source.id),
               draft: {
                 text: turn.userText,
-                ...(turn.options ? { options: turn.options } : {}),
+                ...(turn.options ? { options: this.restoredRuleOptions(turn.options) } : {}),
                 attachments: (turn.attachments ?? []).map(attachment => ({
                   kind:
                     Object.values(GlyphContextAttachmentKind).find(kind => kind === attachment.source?.kind) ??
@@ -1394,7 +1416,9 @@ function toInstructionSources(
   return sources.map(source => ({
     id: source.id,
     kind: source.kind,
-    ...(source.legacyIds ? { legacyIds: source.legacyIds } : {}),
+    ...(source.legacyIds && source.kind !== AgentInstructionSourceKind.GLYPH_USER_RULE
+      ? { legacyIds: source.legacyIds }
+      : {}),
     label: source.label,
     path: source.path,
     scope: source.scope,

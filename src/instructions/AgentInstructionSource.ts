@@ -36,6 +36,13 @@ export interface AgentInstructionSource {
   readonly id: string;
   /** Former path-based IDs used to resolve existing selections and historical navigation. */
   readonly legacyIds?: readonly string[];
+  /** Project identity of a user-owned rule during discovery. Composition consumes this metadata. */
+  readonly projectAlias?: {
+    readonly kind: AgentInstructionSourceKind;
+    readonly id: string;
+    readonly legacyIds?: readonly string[];
+    readonly scope: string;
+  };
   /** Source family that determines discovery and precedence semantics. */
   readonly kind: AgentInstructionSourceKind;
   /** Human-readable source type shown in settings. */
