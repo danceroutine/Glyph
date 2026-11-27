@@ -1,3 +1,4 @@
+import { resolveAvailableIdentity } from '#src/shell/ShellRuntimePathPolicy.js';
 import { escapeDisplayControls } from '#src/shared/presentation/escapeDisplayControls.js';
 import type { HostExecutable } from '#src/shell/TrustedHostExecutable.js';
 import { HostExecutionAuthority, type HostWorkspaceRoots } from '#src/shell/HostExecutionAuthority.js';
@@ -78,7 +79,8 @@ export class SkillScriptRunner {
     await mkdir(this.stagingRoot, { recursive: true, mode: 0o700 });
     const stagingRoot = await realpath(this.stagingRoot);
     for (const candidate of this.roots) {
-      const directory = await realpath(candidate.directory);
+      const directory =
+        candidate === root ? await realpath(root.directory) : resolveAvailableIdentity(candidate.directory);
       const from = relative(directory, stagingRoot);
       if (from === '' || (!isAbsolute(from) && from !== '..' && !from.startsWith(`..${sep}`)))
         throw new Error('Skill execution staging must be outside every workspace root.');
