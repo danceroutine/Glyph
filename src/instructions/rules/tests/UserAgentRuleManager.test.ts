@@ -27,6 +27,22 @@ describe(UserAgentRuleManager, () => {
     expect(await readFile(join(root, 'rules/full.mdc'))).toEqual(original);
   });
 
+  it.each(['create', 'remove', 'disable'])('rechecks working copies before publishing %s', async action => {
+    const workspace = new FileSystemWorkspaceTextStore(root);
+    const check = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('unsaved editor'));
+    const manager = new UserAgentRuleManager(workspace, { refresh: async () => [] }, files, check);
+    const file = 'rules/demo.mdc';
+    const before = action === 'create' ? undefined : await workspace.create(file, 'body', false);
+    const operation =
+      action === 'create'
+        ? manager.create('Demo', 'manual')
+        : action === 'remove'
+          ? manager.remove(file, before!.revision)
+          : manager.setEnabled(file, before!.revision, false);
+    await expect(operation).rejects.toThrow('unsaved editor');
+    expect(check.mock.calls).toEqual([['demo.mdc'], ['demo.mdc']]);
+    expect((await workspace.readOptional(file))?.revision).toEqual(before?.revision);
+  });
   it('rejects an ACL change between preflight and publication while preserving the current rule', async () => {
     const workspace = new FileSystemWorkspaceTextStore(root);
     const original = await workspace.create('rules/secure.mdc', 'Protected', false);
@@ -126,6 +142,8 @@ describe(UserAgentRuleManager, () => {
       'rules/typescript-safety.mdc',
       expect.stringContaining('activation: model'),
       false,
+      undefined,
+      undefined,
     );
     expect(refresh).toHaveBeenCalledOnce();
   });
@@ -198,7 +216,7 @@ describe(UserAgentRuleManager, () => {
       beforeReplace: expect.any(Function),
     });
     await manager.remove('rules/test.mdc', 'one');
-    expect(remove).toHaveBeenCalledWith('rules/test.mdc', 'one');
+    expect(remove).toHaveBeenCalledWith('rules/test.mdc', 'one', undefined);
     expect(refresh).toHaveBeenCalledTimes(2);
 
     await expect(manager.setEnabled('rules/test.mdc', 'stale', true)).rejects.toThrow('The rule changed');
@@ -217,7 +235,7 @@ describe(UserAgentRuleManager, () => {
       if (caseSensitive) await expect(operation).rejects.toThrow('Only user rules');
       else {
         await operation;
-        expect(remove).toHaveBeenCalledWith('RULES/STYLE.MDC', 'one');
+        expect(remove).toHaveBeenCalledWith('RULES/STYLE.MDC', 'one', undefined);
       }
     }
   });

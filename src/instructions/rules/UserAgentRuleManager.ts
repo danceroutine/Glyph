@@ -22,6 +22,7 @@ export class UserAgentRuleManager {
     >,
     private readonly catalog: Pick<AgentInstructionCatalog, 'refresh'>,
     private readonly files: UserRuleFileAuthority,
+    private readonly assertClean?: (filename: string) => Promise<void>,
   ) {}
 
   get directoryUri(): string {
@@ -54,20 +55,29 @@ export class UserAgentRuleManager {
     const text = ['---', ...metadata, '---', '', 'Describe the rule here.', ''].join('\n');
     if (Buffer.byteLength(text) > MAX_AGENT_RULE_BYTES) throw new Error('User rules can contain at most 64 KiB.');
     parseAgentRuleFile(text);
-    await this.mutate(() => this.workspace.create(path, text, false));
+    await this.mutate(async () => {
+      const check = this.workingCopyCheck(path);
+      await check?.beforePublish();
+      return this.workspace.create(path, text, false, undefined, check);
+    });
     await this.refreshDiscovery();
   }
 
   async setEnabled(path: string, expectedRevision: string, enabled: boolean): Promise<void> {
     const normalized = this.rulePath(path);
     await this.mutate(async () => {
+      const filename = normalized.slice('rules/'.length);
+      await this.assertClean?.(filename);
       const current = await this.workspace.read(normalized, { maxBytes: MAX_AGENT_RULE_BYTES });
       if (current.revision !== expectedRevision) throw new Error('The rule changed. Refresh Settings and try again.');
       const text = withRuleEnabled(current.text, enabled);
       if (Buffer.byteLength(text) + (current.byteOrderMark ? 3 : 0) > MAX_AGENT_RULE_BYTES)
         throw new Error('User rules can contain at most 64 KiB. Shorten the rule before changing its enablement.');
-      const beforeReplace = () => this.files.assertReplaceableMetadata(normalized.slice('rules/'.length));
-      await beforeReplace();
+      await this.files.assertReplaceableMetadata(filename);
+      const beforeReplace = async () => {
+        await this.assertClean?.(filename);
+        await this.files.assertReplaceableMetadata(filename);
+      };
       await this.workspace.replace(normalized, expectedRevision, text, current.byteOrderMark, { beforeReplace });
     });
     await this.refreshDiscovery();
@@ -75,8 +85,17 @@ export class UserAgentRuleManager {
 
   async remove(path: string, expectedRevision: string): Promise<void> {
     const normalized = this.rulePath(path);
-    await this.mutate(() => this.workspace.delete(normalized, expectedRevision));
+    await this.mutate(async () => {
+      const check = this.workingCopyCheck(normalized);
+      await check?.beforePublish();
+      await this.workspace.delete(normalized, expectedRevision, check);
+    });
     await this.refreshDiscovery();
+  }
+
+  private workingCopyCheck(path: string) {
+    const check = this.assertClean;
+    return check ? { beforePublish: () => check(path.slice('rules/'.length)) } : undefined;
   }
 
   private mutate<T>(work: () => Promise<T>): Promise<T> {

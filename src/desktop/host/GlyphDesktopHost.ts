@@ -28,6 +28,7 @@ interface Connection {
   readonly journal: HostEventJournal;
   readonly requests: RequestDeduplicator<readonly GlyphHostEvent[]>;
   send: ((event: ReturnType<HostEventJournal['append']>) => void) | undefined;
+  authorityKnown: boolean;
   attached: boolean;
   ready: boolean;
   canReplay: boolean;
@@ -66,6 +67,21 @@ export class GlyphDesktopHost {
     this.generation = generation;
   }
 
+  /** A trusted editor may still own user-file buffers while reconnecting or sharing another runtime. */
+  trustedUserEditors(
+    owner: GlyphConnectionIdentity,
+  ): readonly { identity: GlyphConnectionIdentity; connectionId: string }[] {
+    const peers = [];
+    for (const peer of this.sessions.values()) {
+      if (connectionKey(peer.identity) === connectionKey(owner) || !peer.trusted) continue;
+      const connectionId = [...this.connections].find(([, current]) => current === peer)?.[0];
+      if (!connectionId || !peer.authorityKnown || peer.pendingAttachments > 0)
+        throw new Error('Another trusted Glyph window is reconnecting. Retry the change after it reconnects.');
+      peers.push({ identity: peer.identity, connectionId });
+    }
+    return peers;
+  }
+
   connect(connectionId: string, identity: GlyphConnectionIdentity, send: Exclude<Connection['send'], undefined>): void {
     if (this.disposed) throw new Error('The Glyph desktop host has stopped.');
     if (this.connections.has(connectionId)) throw new Error(`Connection ${connectionId} is already registered.`);
@@ -78,6 +94,7 @@ export class GlyphDesktopHost {
         send: undefined,
         journal: new HostEventJournal(this.generation),
         requests: new RequestDeduplicator(),
+        authorityKnown: false,
         attached: false,
         ready: false,
         canReplay: false,
@@ -89,6 +106,7 @@ export class GlyphDesktopHost {
       };
       this.sessions.set(key, connection);
     }
+    connection.authorityKnown = false;
     connection.send = send;
     clearTimeout(this.disconnectTimers.get(connection));
     this.disconnectTimers.delete(connection);
@@ -244,6 +262,8 @@ export class GlyphDesktopHost {
     const stopping = this.runtimeStops.get(key);
     if (stopping) await stopping;
     this.assertCurrentConnection(connection);
+    connection.authorityKnown = true;
+    connection.trusted = command.trusted;
     const ownership = this.ownership.acquire(connection.identity, command.roots);
     let record = this.runtimes.get(key);
     if (!record) {

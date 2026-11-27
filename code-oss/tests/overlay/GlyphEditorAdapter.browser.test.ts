@@ -149,7 +149,10 @@ function editorServices() {
       getModels: () => models,
       getModel: vi.fn((resource: URI) => find(resource) ?? null),
     },
+    workingCopyService: { dirtyWorkingCopies: [] as { resource: URI }[] },
+    pathService: { userHome: () => URI.file('/home/test') },
     textFileService: {
+      untitled: { isUntitledWithAssociatedResource: (resource: URI) => resource.path.startsWith('/') },
       isDirty: vi.fn((resource: URI) => dirty.has(resource.path)),
       files: {
         resolve: vi.fn(async (resource: URI) => {
@@ -198,6 +201,8 @@ function createAdapter(services: EditorServices) {
     services.uriIdentityService as never,
     services.userDataProfileService as never,
     services.instantiationService as never,
+    services.workingCopyService as never,
+    services.pathService as never,
   );
   onTestFinished(() => {
     adapter.dispose();
@@ -1601,4 +1606,54 @@ it('reads consistent dirty catalog snapshots from logical and physical buffers a
   expect((await adapter.handle(command)).ok).toBe(false);
   services.dirty.clear();
   expect(await adapter.handle(command)).toEqual({ operationId: 'source', ok: true });
+});
+
+it('checks exact rules and complete skill packages across configured, physical, attached and associated-untitled routes', async () => {
+  const services = editorServices();
+  const adapter = createAdapter(services);
+  const copies = services.workingCopyService.dirtyWorkingCopies;
+  services.fileService.realpath.mockImplementation(async resource => {
+    if (resource.path === '/home/test/.glyph') return URI.file('/volume/profile');
+    if (resource.path === '/workspace') return URI.file('/volume');
+    return undefined;
+  });
+  const check = (kind: 'rule' | 'skill', name: string, caseSensitive = true) =>
+    adapter.handle({
+      operationId: 'check',
+      type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES,
+      kind,
+      name,
+      caseSensitive,
+    });
+  expect((await check('rule', 'one.mdc')).workingCopiesClean).toBe(true);
+  for (const value of ['', '.', '..', 'test/one.mdc', 'one.txt']) expect((await check('rule', value)).ok).toBe(false);
+  for (const path of [
+    '/home/test/.glyph/rules/one.mdc',
+    '/volume/profile/rules/one.mdc',
+    '/workspace/profile/rules/one.mdc',
+  ]) {
+    copies.splice(0, copies.length, { resource: URI.file(path).with({ scheme: 'untitled' }) });
+    expect((await check('rule', 'one.mdc')).workingCopiesClean).toBe(false);
+    expect((await check('rule', 'ONE.MDC')).workingCopiesClean).toBe(true);
+    expect((await check('rule', 'ONE.MDC', false)).workingCopiesClean).toBe(false);
+  }
+  copies.splice(0, copies.length, { resource: URI.file('/workspace/profile/skills/pkg/a/b') });
+  expect((await check('skill', 'pkg')).workingCopiesClean).toBe(false);
+  expect((await check('skill', 'other')).workingCopiesClean).toBe(true);
+  copies.splice(
+    0,
+    copies.length,
+    { resource: URI.parse('untitled:Untitled-1') },
+    { resource: URI.parse('memfs:/workspace/note') },
+  );
+  expect((await check('skill', 'pkg')).workingCopiesClean).toBe(true);
+  copies.push({ resource: URI.file('/workspace/other') });
+  services.workspace.folders.unshift(
+    { name: 'remote', uri: URI.parse('remote:/workspace') },
+    { name: 'another', uri: URI.file('/other') },
+  );
+  services.fileService.realpath.mockResolvedValueOnce(undefined);
+  expect((await check('skill', 'pkg')).ok).toBe(false);
+  services.fileService.realpath.mockResolvedValueOnce(URI.file('/volume/profile')).mockResolvedValueOnce(undefined);
+  expect((await check('skill', 'pkg')).ok).toBe(false);
 });

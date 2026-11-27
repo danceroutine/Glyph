@@ -1,4 +1,5 @@
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
+import { assertUserWorkingCopiesClean } from '#src/desktop/workspace/assertUserWorkingCopiesClean.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import { SqliteAgentReviewStore } from '#src/reviewing/SqliteAgentReviewStore.js';
@@ -323,7 +324,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         paths,
       );
       turnContexts = new TurnContextCoordinator(instructionCatalog);
-      userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex);
+      userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex, filename =>
+        assertUserWorkingCopiesClean(this.editors, input.identity, 'rule', filename, userRuleStore.caseSensitive),
+      );
     }
     const reviews = new ProposalReviewManager(
       workspace,
