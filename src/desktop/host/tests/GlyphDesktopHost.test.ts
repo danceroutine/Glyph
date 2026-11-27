@@ -17,6 +17,8 @@ import type { GlyphRequestEnvelope } from '#src/desktop/protocol/GlyphRequestEnv
 import type { GlyphWorkbenchCommand } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
 import { assertSkillPackageClean } from '#src/desktop/workspace/assertSkillPackageClean.js';
 import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
+import { Deferred } from '#src/shared/Deferred.js';
+import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
 import { GlyphDesktopHost } from '#src/desktop/host/GlyphDesktopHost.js';
 import {
   type GlyphDesktopWorkspaceRuntime,
@@ -81,6 +83,78 @@ describe(GlyphDesktopHost, () => {
     expect(next.aborted).toBe(true);
     expect(first.aborted).toBe(true);
   });
+  it.each([false, true])(
+    'drains conflicting repository children before publishing a live peer attachment (disconnected %s)',
+    async disconnected => {
+      const fixture = new HostFixture();
+      onTestFinished(() => fixture.host.dispose());
+      fixture.connect('first', owner);
+      const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+      await fixture.receive('first', owner, 'owner', attach);
+      const input = fixture.factory.create.mock.calls[0]![0] as Parameters<
+        GlyphDesktopWorkspaceRuntimeFactory['create']
+      >[0];
+      const helper = '/host/credential-helper';
+      const alias = '/mounted-tools';
+      // The production native authority can recognize an overlapping bind mount with a different spelling.
+      const native = {
+        assertHostPaths: async (paths: readonly string[], proposed: readonly string[]) => {
+          if (paths.includes(helper) && proposed.includes(alias)) throw new Error('Mounted host input');
+        },
+      };
+      const authority = new HostExecutionAuthority(input.repositoryProcesses!, native);
+      authority.admit(helper);
+      const close = new Deferred<void>();
+      const started = new Deferred<void>();
+      const cancelled = new Deferred<void>();
+      const signal = new AbortController().signal;
+      const child = authority.run(signal, processSignal => {
+        started.resolve();
+        processSignal.addEventListener(
+          'abort',
+          () => {
+            cancelled.resolve();
+          },
+          { once: true },
+        );
+        return close.promise;
+      });
+      const rejected = expect(child).rejects.toThrow('workspace is attaching');
+      await started.promise;
+      const open = (path: string) => {
+        const identity = { ...peer, windowId: path, workspaceId: path };
+        fixture.connect(path, identity);
+        return fixture.receive(path, identity, 'attach', {
+          ...attach,
+          trusted: false,
+          roots: [{ name: 'peer', canonicalPath: path, uri: pathToFileURL(path).toString() }],
+        });
+      };
+      await open('/unrelated');
+      expect(input.hostWorkspaceRoots!()).toContain('/unrelated');
+      const admission = open(alias);
+      await cancelled.promise;
+      expect(input.hostWorkspaceRoots!()).not.toContain(alias);
+      if (disconnected) await fixture.host.disconnect(alias);
+      const retry = vi.fn(async () => 'started');
+      await expect(authority.run(signal, retry)).rejects.toThrow('Mounted host input');
+      expect(retry).not.toHaveBeenCalled();
+      const other = new HostExecutionAuthority(input.repositoryProcesses!, native);
+      other.admit('/host/unrelated');
+      await expect(other.run(signal, retry)).resolves.toBe('started');
+      close.resolve();
+      await rejected;
+      await admission;
+      if (disconnected) {
+        expect(input.hostWorkspaceRoots!()).not.toContain(alias);
+        await expect(authority.run(signal, retry)).resolves.toBe('started');
+        return;
+      }
+      expect(input.hostWorkspaceRoots!()).toContain(alias);
+      await expect(authority.run(signal, retry)).rejects.toThrow('Mounted host input');
+      expect(retry).toHaveBeenCalledOnce();
+    },
+  );
 
   it('returns rule identity lookups only to their authorized attached window', async () => {
     const fixture = new HostFixture();

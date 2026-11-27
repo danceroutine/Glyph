@@ -1,7 +1,8 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { basename, join } from 'node:path';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { captureRepositoryEnvironment } from '#src/skills/SkillRepositoryConfiguration.js';
 import { trustedHostExecutable } from '#src/shell/TrustedHostExecutable.js';
@@ -183,4 +184,35 @@ it('retains credential reset entries and blocks command-valued transport overrid
     await writeFile(f.global, `[${section}]\n${key} = arbitrary-command\n`);
     await expect(f.capture()).rejects.toThrow('command-valued Git transport');
   }
+});
+
+it('uses trusted HTTPS-to-file mirrors and rejects SSH rewrites when the SSH client lacks authority', async () => {
+  const f = await fixture();
+  const git = trustedHostExecutable('git', []);
+  const mirror = join(f.home, 'mirror.git');
+  execFileSync(git, ['init', '--bare', '--quiet', '--template=', mirror]);
+  await writeFile(
+    f.global,
+    [
+      '[url "' + pathToFileURL(mirror).toString() + '"]',
+      'insteadOf = https://mirror.invalid/fixture',
+      '[url "ssh://127.0.0.1:1/fixture"]',
+      'insteadOf = https://ssh.invalid/fixture',
+      '[protocol "ssh"]',
+      'allow = always',
+    ].join('\n'),
+  );
+  // A host can have Git installed while SSH is unavailable or belongs to a peer workspace.
+  const metadata = {
+    ...testFilesystemMetadata,
+    assertHostPaths: async (paths: readonly string[]) => {
+      if (paths.length === 1 && ['ssh', 'ssh.exe'].includes(basename(paths[0]!).toLowerCase()))
+        throw new Error('SSH unavailable');
+    },
+  };
+  const env = await captureRepositoryEnvironment([f.project], f.preview, new AbortController().signal, metadata);
+  expect(env.GIT_ALLOW_PROTOCOL).toBe('https:file');
+  const lsRemote = (url: string) => spawnSync(git, ['ls-remote', url], { env, cwd: f.preview, encoding: 'utf8' });
+  expect(lsRemote('https://mirror.invalid/fixture').status).toBe(0);
+  expect(lsRemote('https://ssh.invalid/fixture').stderr).toContain("transport 'ssh' not allowed");
 });

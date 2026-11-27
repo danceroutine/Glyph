@@ -15,6 +15,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile, realpath, sta
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { OpenAIDesktopRuntimeFactory, userRuleUri } from '#src/desktop/host/OpenAIDesktopRuntimeFactory.js';
 import { EditorRpcRouter } from '#src/desktop/workspace/EditorRpcRouter.js';
@@ -936,6 +937,18 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       turns!.discardTurn(userTurn);
       expect((await runtime.snapshot()).skills!.some(skill => skill.id === installed.id)).toBe(true);
       turns!.discardTurn(turnId);
+    });
+    it('uses the desktop workspace admission lease when previewing a repository package', async () => {
+      const leases = new HostProcessLeases([tmpdir()]);
+      const fixture = await factoryFixture({ repositoryProcesses: leases });
+      const runtime = await fixture.create([await fixture.folder('project')]);
+      await expect(
+        runtime.handle({
+          type: Command.PREVIEW_SKILL,
+          targetId: 'user',
+          source: { kind: 'repository', url: 'https://127.0.0.1:1/fixture', revision: 'main', directory: '' },
+        }),
+      ).rejects.toThrow('outside writable workspaces');
     });
     it('wires isolated user and project package management, pinned activation, approvals, and shared enablement into production runtimes', async () => {
       const fixture = await factoryFixture();
@@ -2259,6 +2272,7 @@ function useFilesystemIndex(): void {
 async function factoryFixture(
   options: {
     readonly transport?: typeof fetch;
+    readonly repositoryProcesses?: HostProcessLeases;
     readonly stateDirectory?: string;
     readonly traceFile?: string;
     readonly userDirectory?: string;
@@ -2295,6 +2309,7 @@ async function factoryFixture(
       const runtime = await factory.create({
         identity: factoryIdentity,
         roots: paths.map(path => ({ name: basename(path), canonicalPath: path, uri: `file://${path}` })),
+        ...(options.repositoryProcesses ? { repositoryProcesses: options.repositoryProcesses } : {}),
         trusted,
         assertTrusted: () => {},
         emit,

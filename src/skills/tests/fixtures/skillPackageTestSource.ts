@@ -5,7 +5,7 @@ import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspace
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { SkillPackageSourceReader } from '../../SkillPackageSource.ts';
 import type { OpenSkillIndex } from '../../listSkillPackageFiles.ts';
-import type { HostWorkspaceRoots } from '#src/shell/HostExecutionAuthority.js';
+import { HostProcessLeases, type HostWorkspaceRoots } from '#src/shell/HostProcessLeases.js';
 import type { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 
 export function testPackageIndex(binaryPath: string, accessPolicy = new WorkspaceAccessPolicy()): OpenSkillIndex {
@@ -26,7 +26,7 @@ export function testSkillSource(
     'assertWorkspacePath' | 'assertHostPaths' | 'inspect' | 'sourceOrigins' | 'assertUnlinkedDirectory'
   >,
   policy: WorkspaceAccessPolicy,
-  hostWorkspaceRoots: HostWorkspaceRoots = workspaceRoots,
+  workspace: HostWorkspaceRoots | HostProcessLeases = workspaceRoots,
 ): SkillPackageSourceReader {
   return new SkillPackageSourceReader(
     root => {
@@ -39,6 +39,6 @@ export function testSkillSource(
     },
     metadata,
     policy,
-    hostWorkspaceRoots,
+    workspace instanceof HostProcessLeases ? workspace : new HostProcessLeases(workspace),
   );
 }

@@ -14,6 +14,7 @@ import { SkillScriptRunner } from '#src/skills/SkillScriptRunner.js';
 import { SkillLifecycleToolRuntime } from '#src/skills/SkillLifecycleToolRuntime.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
 import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
+import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
@@ -1019,7 +1020,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               },
               filesystemMetadata,
               access.selectedFile,
-              input.hostWorkspaceRoots ?? roots.map(workspaceRoot => workspaceRoot.path),
+              input.repositoryProcesses ??
+                new HostProcessLeases(input.hostWorkspaceRoots ?? roots.map(workspaceRoot => workspaceRoot.path)),
             ),
           }
         : {}),

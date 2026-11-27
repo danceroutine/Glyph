@@ -19,6 +19,7 @@ import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.j
 import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { GlyphHostStatus } from '#src/desktop/protocol/events/GlyphHostStatus.js';
 import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
+import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import { HostEventJournal } from './HostEventJournal.ts';
 import { RequestDeduplicator } from './RequestDeduplicator.ts';
 import { getWorkspaceKey, WorkspaceOwnershipRegistry } from './WorkspaceOwnershipRegistry.ts';
@@ -65,6 +66,7 @@ export class GlyphDesktopHost {
   private readonly runtimes = new Map<string, WorkspaceRuntimeRecord>();
   private readonly runtimeCreations = new Map<string, Promise<WorkspaceRuntimeRecord>>();
   private readonly runtimeStops = new Map<string, Promise<void>>();
+  private readonly repositoryProcesses = new HostProcessLeases(() => this.workspacePaths());
   private readonly ownership = new WorkspaceOwnershipRegistry();
   private readonly disconnectTimers = new Map<Connection, ReturnType<typeof setTimeout>>();
 
@@ -273,6 +275,12 @@ export class GlyphDesktopHost {
     }
   }
 
+  private workspacePaths(): readonly string[] {
+    return [
+      ...new Set([...this.sessions.values()].flatMap(peer => observedWorkspacePaths(peer.roots, peer.physicalRoots))),
+    ];
+  }
+
   private async execute(connection: Connection, request: GlyphRequestEnvelope): Promise<readonly GlyphHostEvent[]> {
     const authorityError = this.validateAuthority(connection, request);
     if (authorityError !== undefined && authorityError !== '') {
@@ -358,6 +366,11 @@ export class GlyphDesktopHost {
     requestId: string,
     command: Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE }>,
   ): Promise<readonly GlyphHostEvent[]> {
+    const transport = connection.send;
+    const assertTransport = () => {
+      this.assertCurrentConnection(connection);
+      if (connection.send !== transport || !transport) throw new Error('Reconnect before attaching the workspace.');
+    };
     const key = getWorkspaceKey(connection.identity);
     if (command.trusted !== connection.trusted || JSON.stringify(command.roots) !== JSON.stringify(connection.roots)) {
       connection.commands.revoke();
@@ -377,15 +390,21 @@ export class GlyphDesktopHost {
     // Editor working-copy authority also exists in a window whose Glyph session
     // cannot acquire overlapping runtime ownership. Remember its negotiated
     // roots and trust so package publication still checks that editor.
-    connection.trusted = command.trusted;
-    connection.roots = command.roots;
-    connection.physicalRoots = new Map(
-      command.roots.map(root => {
-        const physical = physicalRoot(root);
-        return [root, new Set(physical === undefined ? [] : [physical])];
-      }),
+    const physicalRoots = new Map(command.roots.map(root => [root, new Set<string>()]));
+    const admission = this.repositoryProcesses.admitWorkspace(
+      () => observedWorkspacePaths(command.roots, physicalRoots),
+      () => {
+        assertTransport();
+        connection.trusted = command.trusted;
+        connection.roots = command.roots;
+        connection.physicalRoots = physicalRoots;
+        connection.authorityKnown = true;
+      },
     );
-    connection.authorityKnown = true;
+    if (admission) {
+      await admission;
+      assertTransport();
+    }
     const ownership = this.ownership.acquire(connection.identity, command.roots);
     let record = this.runtimes.get(key);
     if (!record) {
@@ -400,18 +419,8 @@ export class GlyphDesktopHost {
             identity: connection.identity,
             roots: command.roots,
             trusted: command.trusted,
-            hostWorkspaceRoots: () => {
-              const roots = new Set<string>();
-              for (const peer of this.sessions.values()) {
-                for (const root of peer.roots) {
-                  roots.add(root.canonicalPath);
-                  for (const observed of peer.physicalRoots.get(root)!) roots.add(observed);
-                  const current = physicalRoot(root);
-                  if (current !== undefined) roots.add(current);
-                }
-              }
-              return [...roots];
-            },
+            repositoryProcesses: this.repositoryProcesses,
+            hostWorkspaceRoots: () => this.workspacePaths(),
             assertTrusted: () => {
               this.assertCurrentConnection(connection);
               if (
@@ -675,6 +684,22 @@ export class GlyphDesktopHost {
     if (!connection) throw new Error(`Unknown desktop connection: ${connectionId}`);
     return connection;
   }
+}
+
+/** Retain the physical selections used by admission and use those same selections when publishing the roots. */
+function observedWorkspacePaths(
+  roots: readonly GlyphWorkspaceRoot[],
+  physical: Map<GlyphWorkspaceRoot, Set<string>>,
+): string[] {
+  const paths = new Set<string>();
+  for (const root of roots) {
+    const observed = physical.get(root)!;
+    const current = physicalRoot(root);
+    if (current !== undefined) observed.add(current);
+    paths.add(root.canonicalPath);
+    for (const path of observed) paths.add(path);
+  }
+  return [...paths];
 }
 
 function physicalRoot(root: GlyphWorkspaceRoot): string | undefined {

@@ -60,6 +60,27 @@ it.each(['linux', 'win32'])('initializes a bare store without external Git confi
   });
   for (const call of io.spawn.mock.calls) expect(call[2]).toEqual(options);
 });
+it('rechecks the workspace admission immediately before spawning a transport', async () => {
+  let roots: string[] = [];
+  let nativeChecked = false;
+  const readRoots = () => {
+    if (nativeChecked) {
+      nativeChecked = false;
+      queueMicrotask(() => {
+        roots = ['/temporary'];
+      });
+    }
+    return roots;
+  };
+  const transport = new SkillRepositoryGit('/temporary', new AbortController().signal, readRoots, {
+    ...testFilesystemMetadata,
+    assertHostPaths: async () => {
+      nativeChecked = true;
+    },
+  });
+  await expect(transport.run(['fetch'])).rejects.toThrow('workspace authority changed');
+  expect(io.spawn).not.toHaveBeenCalled();
+});
 it('counts directories and disappearing loose objects against the shared storage budget', async () => {
   const missing = Object.assign(new Error('gone'), { code: 'ENOENT' });
   io.list
@@ -148,6 +169,7 @@ it.each(['win32', 'linux'])('falls back to closing the direct child when group t
     io.spawn.mockImplementationOnce(() => {
       queueMicrotask(() => {
         killer.emit('error', new Error('taskkill unavailable'));
+        killer.emit('close', -1);
       });
       return killer;
     });
@@ -157,4 +179,25 @@ it.each(['win32', 'linux'])('falls back to closing the direct child when group t
     });
   await expect(git().run(['fetch'])).rejects.toThrow('diagnostics exceed');
   expect(active.kill).toHaveBeenCalledWith('SIGKILL');
+});
+
+it('retains a Windows transport lease until the process tree termination command closes', async () => {
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+  const active = child(123),
+    killer = child(456);
+  io.spawn.mockReturnValueOnce(active).mockReturnValueOnce(killer);
+  const cancel = new AbortController();
+  const completed = vi.fn();
+  const result = git(cancel.signal).run(['fetch']).finally(completed);
+  const rejected = expect(result).rejects.toThrow('cancel');
+  await vi.waitFor(() => {
+    expect(io.spawn).toHaveBeenCalledOnce();
+  });
+  cancel.abort(new Error('cancel'));
+  active.emit('close', 1);
+  await Promise.resolve();
+  expect(completed).not.toHaveBeenCalled();
+  killer.emit('close', 0);
+  await rejected;
+  expect(active.kill).not.toHaveBeenCalled();
 });
