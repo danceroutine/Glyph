@@ -60,7 +60,7 @@ export class UserAgentRuleManager {
     await this.mutate(async () => {
       const check = this.workingCopyCheck(path);
       await check?.beforePublish();
-      return this.workspace.create(path, text, false, undefined, check);
+      return this.workspace.create(path, text, false, 0o600, check);
     });
     await this.refreshDiscovery();
   }
