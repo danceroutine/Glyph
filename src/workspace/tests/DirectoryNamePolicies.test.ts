@@ -148,3 +148,32 @@ it('releases old directory metadata after a large catalog batch', async () => {
   expect(policies.get('5')).toBe(sensitive);
   expect(read).toHaveBeenCalledTimes(2);
 });
+
+it('prepares the ancestors above an overlapping inner attachment in the same native batch', () => {
+  const root = directory();
+  const middle = join(root, 'a', 'b');
+  const inner = join(middle, 'c');
+  mkdirSync(inner, { recursive: true });
+  const stat = fs.statSync;
+  vi.spyOn(fs, 'statSync').mockImplementation(((path: string, options: fs.StatSyncOptions) => {
+    const info = stat(path, options);
+    if (info && typeof info.dev === 'bigint' && path.startsWith(root + '/')) {
+      const depth = path.slice(root.length + 1).split('/').length;
+      Object.assign(info, { dev: info.dev + BigInt(depth) });
+    }
+    return info;
+  }) as typeof fs.statSync);
+  const read = vi.fn((parents: readonly string[]) => parents.map(() => sensitive));
+  const routes = new WorkspaceSourceRoutes(
+    [
+      { name: 'Outer', path: root, ...insensitive },
+      { name: 'Inner', path: inner, ...insensitive },
+    ],
+    read,
+  );
+  routes.prepare(['Inner/file']);
+  expect(read).toHaveBeenCalledOnce();
+  expect(new Set(read.mock.calls[0]![0])).toEqual(new Set([middle, join(root, 'a')]));
+  expect(routes.scopeKey('Outer/a/b/c/FILE', false)).toBe('Outer/a/b/c/file');
+  expect(read).toHaveBeenCalledOnce();
+});

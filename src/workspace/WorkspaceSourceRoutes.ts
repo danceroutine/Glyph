@@ -40,13 +40,16 @@ export class WorkspaceSourceRoutes {
   prepare(routes: readonly string[]): void {
     if (!this.directories) return;
     const parents = new Set<string>();
-    for (const route of routes) {
-      const physical = this.physicalPath(route);
-      if (!physical) continue;
-      const root = this.rootFor(route)!;
-      for (let dir = dirname(physical); dir.length >= root.path.length && !parents.has(dir); dir = dirname(dir)) {
-        parents.add(dir);
-        if (dir === root.path) break;
+    for (const input of routes) {
+      for (const route of this.equivalents(input)) {
+        const physical = this.physicalPath(route);
+        if (!physical) continue;
+        const root = this.rootFor(route)!;
+        // An enclosing attachment can add parents above the first, more specific logical root.
+        for (let dir = dirname(physical); dir.length >= root.path.length; dir = dirname(dir)) {
+          parents.add(dir);
+          if (dir === root.path) break;
+        }
       }
     }
     this.directories.prepare(parents);
