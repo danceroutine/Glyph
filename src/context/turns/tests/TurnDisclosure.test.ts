@@ -1,4 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { tmpdir } from 'node:os';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleInstructionProvider.js';
+import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
+import { TurnContextSession } from '../TurnContextSession.ts';
+import { onTestFinished, describe, expect, it, vi } from 'vitest';
 import { TurnContextCoordinator } from '../TurnContextCoordinator.ts';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import {
@@ -69,6 +77,51 @@ describe(TurnContextCoordinator, () => {
     await expect(coordinator.authorizeDisclosure('t')).rejects.toThrow('Source unavailable');
     coordinator.discardTurn('t');
     expect(() => coordinator.authorizeDisclosure('t')).toThrow('ended');
+  });
+
+  it('enrolls guidance and rule references together with the disk identities from their own stores', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'glyph-disclosure-'));
+    onTestFinished(async () => {
+      await rm(root, { recursive: true, force: true });
+    });
+    await mkdir(join(root, '.glyph', 'rules'), { recursive: true });
+    await writeFile(join(root, 'AGENTS.md'), 'root guidance');
+    await writeFile(join(root, 'guide.md'), 'reference');
+    await writeFile(join(root, '.glyph', 'rules', 'one.mdc'), '---\nreferences: [guide.md]\n---\nrule');
+    const store = new FileSystemWorkspaceTextStore(root);
+    const authority = {
+      capture: vi.fn(async (paths: readonly string[]) =>
+        Promise.all(
+          paths.map(async path => {
+            const file = await stat(path);
+            return { path, origin: path, identity: file.dev + ':' + file.ino };
+          }),
+        ),
+      ),
+      authorize: async () => () => {},
+    };
+    const options = { authority, uriForPath: (path: string) => pathToFileURL(join(root, path)).href };
+    const catalog = new AgentInstructionCatalog([
+      new AgentsMdInstructionProvider(store, options),
+      new AgentRuleInstructionProvider(store, {
+        ...options,
+        directory: '.glyph',
+        kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+        projectAlias: () => ({ kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, id: 'alias', scope: '.' }),
+      }),
+    ]);
+    const coordinator = new TurnContextCoordinator(catalog);
+    const session = await coordinator.beginTurn({ turnId: 't', attachmentPaths: [] });
+    expect(session.initialEnvelope().sources[0]?.content).toBe('root guidance');
+    expect(authority.capture).toHaveBeenCalledTimes(1);
+    expect(authority.capture.mock.calls[0]![0]).toHaveLength(3);
+    const guard = await coordinator.authorizeDisclosure('t');
+    const pending = coordinator.disclosePaths('t', ['file']);
+    coordinator.discardTurn('t');
+    expect(guard).toThrow('ended');
+    await expect(pending).rejects.toThrow('ended');
+    const planner = new TurnContextSession({ turnId: 'test', sources: [], attachmentPaths: [], manualRuleIds: [] });
+    expect(planner.disclosurePins()).toEqual([]);
   });
 
   it('rejects a changed read identity before admitting the turn', async () => {
