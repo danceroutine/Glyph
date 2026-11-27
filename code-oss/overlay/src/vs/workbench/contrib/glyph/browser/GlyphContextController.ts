@@ -41,6 +41,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   );
   private readonly instructionWatchers = this._register(new DisposableStore());
   private readonly rootWatches = this._register(new DisposableMap<string>());
+  private resolveHistoricalRule?: (id: string) => Promise<string | undefined>;
   private instructionRoots: () => readonly string[] = () => [];
   private watchInstructionModel: ((model: ITextModel) => void) | undefined;
   private instructionFingerprint = '';
@@ -74,7 +75,6 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     for (const editor of codeEditors.listCodeEditors()) watch(editor);
     this._register(codeEditors.onCodeEditorAdd(watch));
   }
-  private resolveHistoricalRule?: (id: string) => Promise<string | undefined>;
   setInstructionRefresh(
     refresh?: (invalidate?: boolean) => Promise<void>,
     roots?: () => readonly string[],
@@ -587,7 +587,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       current = dirname(current);
     }
     this.assertTrusted();
-    if (!stillOwned() || this.instructionSources().find(current => current.id === source.id) !== source)
+    if (!stillOwned() || this.instructionSources().find(candidate => candidate.id === source.id) !== source)
       throw unavailableInstruction();
     await this.editors.openEditor({ resource, options: { pinned: true } });
   }

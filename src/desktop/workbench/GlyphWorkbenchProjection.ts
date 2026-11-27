@@ -35,8 +35,6 @@ export class GlyphWorkbenchProjection {
   /** A snapshot replaces old collections so removed or completed work cannot linger. */
   accept(event: GlyphHostEvent): void {
     switch (event.type) {
-      case GlyphHostEventType.RULE_REFERENCE_RESOLVED:
-        return;
       case GlyphHostEventType.AGENT_REVIEW_CHANGED:
         this.snapshot = {
           ...this.snapshot,
@@ -130,6 +128,7 @@ export class GlyphWorkbenchProjection {
         if (event.requestId === undefined || event.requestId === '') this.diagnostics.push(event.error.message);
         break;
       }
+      case GlyphHostEventType.RULE_REFERENCE_RESOLVED:
       case GlyphHostEventType.COMMAND_RESULT:
       case GlyphHostEventType.PROPOSAL_PREVIEW:
         return;
