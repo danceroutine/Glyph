@@ -652,20 +652,34 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     const source = this.referenceSkill(reference);
     if (!source?.uri) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
     const selectedUri = source.uri;
-    const resource = URI.parse(selectedUri);
-    if (resource.scheme !== 'file')
+    const physical = URI.parse(selectedUri);
+    if (physical.scheme !== 'file')
       throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
     // The host authorized the indexed manifest. Recheck its file and directory chain at editor-open time.
     const depthToRoot = source.path.split('/').length;
+    const project = source.origin.scope === 'project';
+    const segments = source.path.split('/');
+    if (project && this.workspace.getWorkspace().folders.filter(folder => folder.uri.scheme === 'file').length > 1)
+      segments.unshift(source.scope.split('/')[0]);
+    const root = project ? this.projectSourceRoot(segments) : undefined;
+    const resource = root ? URI.joinPath(root, ...segments) : physical;
     let current = resource;
     for (let depth = 0; depth <= depthToRoot; depth++) {
       const stat = await this.files.stat(current);
-      if (stat.isSymbolicLink || (depth === 0 ? !stat.isFile : !stat.isDirectory))
+      const anchor = root && depth === depthToRoot;
+      if (
+        (stat.isSymbolicLink && !anchor) ||
+        (anchor && !(await this.matchesPhysicalSource(resource, selectedUri))) ||
+        (depth === 0 ? !stat.isFile : !stat.isDirectory)
+      )
         throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
       current = dirname(current);
     }
     this.assertTrusted();
-    if (this.referenceSkill(reference)?.uri !== selectedUri)
+    if (
+      (root && !this.workspace.getWorkspace().folders.some(folder => folder.uri.toString() === root.toString())) ||
+      this.referenceSkill(reference)?.uri !== selectedUri
+    )
       throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
     await this.editors.openEditor({ resource, options: { pinned: true } });
   }

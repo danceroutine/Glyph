@@ -1,3 +1,4 @@
+import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
@@ -382,30 +383,31 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       skills = new SkillCatalog(
         [
           userSkills,
-          ...parts.flatMap(part =>
-            ['.glyph', '.cursor'].map(
-              location =>
-                new FileSkillDiscoveryProvider({
-                  origin: {
-                    id: `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:${location}`,
-                    label: `${part.name} ${location} skill`,
-                    scope: 'project',
-                    compatibility: location.slice(1),
-                  },
-                  directory: `${location}/skills`,
-                  captureFiles: (directory, signal) =>
-                    listSkillPackageFiles(part.disk, directory, indexExecutable, true, signal),
-                  workspace: part.catalog,
-                  binaryStore: part.disk,
-                  ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
-                  uriForPath: path => userRuleUri(part.disk.root, path),
-                  listFiles: signal =>
-                    part.index.glob(`**/${location}/skills/**/*`, { limit: 10_000, ...(signal ? { signal } : {}) }),
-                  refreshIndex: async () => {
-                    await part.index.refresh();
-                  },
-                }),
-            ),
+          ...physicalParts.flatMap(part =>
+            ['.glyph', '.cursor'].map(location => {
+              const identity = new ProjectSkillIdentity(part.disk.root, location);
+              return new FileSkillDiscoveryProvider({
+                packageId: directory => identity.forDirectory(directory),
+                origin: {
+                  id: identity.originId,
+                  label: `${part.name} ${location} skill`,
+                  scope: 'project',
+                  compatibility: location.slice(1),
+                },
+                directory: `${location}/skills`,
+                captureFiles: (directory, signal) =>
+                  listSkillPackageFiles(part.disk, directory, indexExecutable, true, signal),
+                workspace: part.catalog,
+                binaryStore: part.disk,
+                ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
+                uriForPath: path => userRuleUri(part.disk.root, path),
+                listFiles: signal =>
+                  part.index.glob(`**/${location}/skills/**/*`, { limit: 10_000, ...(signal ? { signal } : {}) }),
+                refreshIndex: async () => {
+                  await part.index.refresh();
+                },
+              });
+            }),
           ),
         ],
         skillState.enabled,
@@ -413,6 +415,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         ensureSkillsReady,
         originId => skillManager!.recover(originId),
         skillState.onDidChange.bind(skillState),
+        routes,
       );
       skillManager = new SkillPackageManager(
         [

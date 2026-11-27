@@ -16,6 +16,7 @@ export class SkillCatalog {
     private readonly ensureReady?: () => Promise<void>,
     private readonly ensureLocation?: (originId: string) => Promise<void>,
     observePreferences?: (listener: () => void) => () => void,
+    private readonly workspaceRoutes?: { equivalents(path: string): string[] },
   ) {
     if (new Set(providers.map(provider => provider.id)).size !== providers.length)
       throw new Error('Skill provider IDs must be unique.');
@@ -76,8 +77,14 @@ export class SkillCatalog {
       .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     signal?.throwIfAborted();
     if (generation < this.published) return this.current;
+    // A package indexed through overlapping roots belongs to the most specific provider that found it.
+    const unique = new Map<string, SkillDescriptor>();
+    for (const skill of discovered) {
+      const previous = unique.get(skill.id);
+      if (!previous || skill.directory.length < previous.directory.length) unique.set(skill.id, skill);
+    }
     this.published = generation;
-    this.discovered = discovered;
+    this.discovered = [...unique.values()];
     this.refreshPreferences();
     return this.current;
   }
@@ -85,10 +92,12 @@ export class SkillCatalog {
     if (skill.scope === '.') return true;
     const provider = this.providers.find(candidate => candidate.id === skill.origin.id);
     const scope = provider?.scopePathKey?.(skill.scope) ?? skill.scope;
-    return paths.some(path => {
-      const key = provider?.scopePathKey?.(path) ?? path;
-      return key === scope || key.startsWith(`${scope}/`);
-    });
+    return paths
+      .flatMap(path => this.workspaceRoutes?.equivalents(path) ?? [path])
+      .some(path => {
+        const key = provider?.scopePathKey?.(path) ?? path;
+        return key === scope || key.startsWith(`${scope}/`);
+      });
   }
 
   async capture(descriptor: SkillDescriptor, signal?: AbortSignal) {

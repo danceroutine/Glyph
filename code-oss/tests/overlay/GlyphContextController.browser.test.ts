@@ -416,6 +416,45 @@ describe(GlyphContextController, () => {
     controller.dispose();
   });
 
+  it('opens user skills at their authorized URI and routes project references in multi-root workspaces', async () => {
+    const services = controllerServices();
+    const controller = createController(services);
+    services.folders.push({ name: 'subproject', uri: URI.file('/sub') });
+    const skill = {
+      id: 'example',
+      name: 'example',
+      description: 'fixture',
+      directory: '.glyph/skills/example',
+      path: '.glyph/skills/example/SKILL.md',
+      scope: 'subproject',
+      uri: 'file:///sub/.glyph/skills/example/SKILL.md',
+      status: 'active' as const,
+      enabled: true,
+      allowedTools: [],
+      origin: { id: 'project', label: 'Project', scope: 'project' as const, compatibility: 'glyph' },
+    };
+    controller.setSkillSources(() => [skill]);
+    services.files.stat.mockImplementation(async uri => ({
+      isFile: uri.path.endsWith('.md'),
+      isDirectory: !uri.path.endsWith('.md'),
+    }));
+    const attachment = { uri: 'glyph-skill:example', path: 'example' };
+    await controller.openAttachment(attachment);
+    expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(skill.uri);
+    controller.setSkillSources(() => [
+      {
+        ...skill,
+        uri: 'file:///profile/skills/example/SKILL.md',
+        path: 'skills/example/SKILL.md',
+        origin: { ...skill.origin, scope: 'user' },
+      },
+    ]);
+    await controller.openAttachment(attachment);
+    expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(
+      'file:///profile/skills/example/SKILL.md',
+    );
+  });
+
   it('opens workspace rule references without direct URIs and refreshes an unversioned reference by ID', async () => {
     const services = controllerServices();
     services.instructionSources.push({
