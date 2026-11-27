@@ -7,7 +7,6 @@ import { GlyphService } from '#src/application/GlyphService.js';
 import type { ChatBackend } from '#src/chat/ChatBackend.js';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { EditReviewResult } from '#src/editing/reviews/EditReviewResult.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';

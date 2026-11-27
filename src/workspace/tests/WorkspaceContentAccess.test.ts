@@ -14,8 +14,7 @@ describe(WorkspaceContentAccess, () => {
   it('admits a selected personal file for one attachment while project reads and search keep their own scope', async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-content-access-')));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
-    const profile = new StartupUserProfile(join(root, 'personal'));
-    onTestFinished(() => profile.dispose());
+    using profile = new StartupUserProfile(join(root, 'personal'));
     const state = join(root, 'personal/state.json');
     for (const file of [
       'personal/rules/selected.mdc',
@@ -36,6 +35,7 @@ describe(WorkspaceContentAccess, () => {
       access: new WorkspaceRootAccess(policy.selectedFile, root, true),
       physicalAccess,
     });
+    expect(await project.canonicalPath('other/NewSource.mdc')).toBe(join(root, 'other/NewSource.mdc'));
     const attachments = new ContextAttachmentService(selected);
     const index = new RustWorkspacePathIndex({ access, binaryPath });
     onTestFinished(() => index.dispose());

@@ -12,7 +12,6 @@ import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationCo
 import { ContextAttachmentError } from '#src/context/attachments/ContextAttachmentError.js';
 import { ContextAttachmentFailureReason } from '#src/context/attachments/ContextAttachmentFailureReason.js';
 import { ContextAttachmentService } from '#src/context/attachments/ContextAttachmentService.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 
 class MutableWorkspaceTextStore implements WorkspaceTextStore {
   readonly root = '/workspace';

@@ -10,7 +10,6 @@ import { GlyphService } from '#src/application/GlyphService.js';
 import type { ChatBackend } from '#src/chat/ChatBackend.js';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import type { Logger } from '#src/observability/Logger.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceMutationOptions } from '#src/workspace/WorkspaceMutationOptions.js';
 import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';

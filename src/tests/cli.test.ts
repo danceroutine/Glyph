@@ -190,6 +190,10 @@ describe('glyph command line', () => {
   });
 
   it('accepts a workspace file written as a single argument', async () => {
+    vi.stubEnv('GLYPH_USER_DIRECTORY', undefined);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const cli = prepareCli({ argv: ['--workspace=team.code-workspace'] });
 
     await cli.start();
@@ -245,7 +249,7 @@ describe('glyph command line', () => {
 
     const [workspace] = cli.instances('FileSystemWorkspaceTextStore');
     const options = (
-      workspace?.args[1] as { access: import('#src/workspace/policy/WorkspaceRootAccess.js').WorkspaceRootAccess }
+      workspace!.args[1] as { access: import('#src/workspace/policy/WorkspaceRootAccess.js').WorkspaceRootAccess }
     ).access.beginOperation();
     expect(options.excludedPaths).toContain('logs/trace.log');
     expect(options.excludedPaths.some(path => path.includes('glyph') && path.includes('state'))).toBe(false);

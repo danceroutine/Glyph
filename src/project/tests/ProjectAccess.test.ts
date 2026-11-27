@@ -12,7 +12,6 @@ import type { AgentInstructionContext } from '#src/instructions/AgentInstruction
 import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { ProjectAccess } from '#src/project/ProjectAccess.js';
 

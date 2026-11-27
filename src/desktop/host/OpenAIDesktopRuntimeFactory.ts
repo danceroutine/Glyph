@@ -448,7 +448,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           ),
         ],
         paths,
-        () => userRuleDirectory.refresh(),
+        () => {
+          userRuleDirectory.refresh();
+        },
       );
       const userSkillDirectory = new UserSkillDirectory(userRuleRoot, userRuleStore.caseSensitive, sourcePathAliases);
       const skillRoot = userSkillDirectory.path;
@@ -571,7 +573,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             join(userRuleRoot, 'rules', filename),
             this.profile.path,
           ),
-        () => this.profile.ensureDirectory(),
+        () => {
+          this.profile.ensureDirectory();
+        },
       );
     }
     const reviews = new ProposalReviewManager(

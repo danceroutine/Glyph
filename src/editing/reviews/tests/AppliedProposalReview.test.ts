@@ -1,14 +1,12 @@
 import { fixtureWorkspace, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
 import { ProjectToolName } from '#src/project/ProjectToolName.js';
-import { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';

@@ -3,10 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { ContextAttachmentService } from '#src/context/attachments/ContextAttachmentService.js';
 import { ContextAttachmentFailureReason } from '#src/context/attachments/ContextAttachmentFailureReason.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 
 type ProjectOutput = { error: unknown };
 

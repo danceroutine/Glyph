@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import type { WorkspaceAccessPolicy } from './WorkspaceAccessPolicy.ts';
+import { WorkspaceAccessPolicy } from './WorkspaceAccessPolicy.ts';
 
 /**
  * Projects a host's reservations into one attached root for its store and native index. Bind once per root and
@@ -15,6 +15,11 @@ export class WorkspaceRootAccess {
     readonly caseSensitive: boolean,
     private readonly excludedPaths: readonly string[] = [],
   ) {}
+
+  /** A filesystem metadata probe may examine the root's naming behavior. Its content reservation covers the entire root. */
+  static forMetadataProbe(root: string): WorkspaceRootAccess {
+    return new WorkspaceRootAccess(new WorkspaceAccessPolicy({}, [root]), root, true);
+  }
 
   beginOperation() {
     const revision = this.policy.revision;

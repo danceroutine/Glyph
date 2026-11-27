@@ -14,15 +14,16 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+#[derive(Default)]
 pub(super) struct KernelWorkspace {
-    scratch: PathBuf,
+    scratch: Option<PathBuf>,
     root: PathBuf,
     target: PathBuf,
     next: usize,
 }
 
 impl KernelWorkspace {
-    pub(super) fn open() -> io::Result<Self> {
+    fn open_scratch() -> io::Result<PathBuf> {
         let uid = getuid().as_raw();
         let gid = getgid().as_raw();
         // The standalone helper enters fresh user and mount namespaces. Its file descriptor table stays shared.
@@ -44,12 +45,7 @@ impl KernelWorkspace {
             MountFlags::NODEV | MountFlags::NOSUID,
             c"mode=0700",
         )?;
-        Ok(Self {
-            scratch: scratch.keep(),
-            root: PathBuf::new(),
-            target: PathBuf::new(),
-            next: 0,
-        })
+        Ok(scratch.keep())
     }
     fn target(&self, path: &Path) -> PathBuf {
         self.target.join(
@@ -61,15 +57,24 @@ impl KernelWorkspace {
 impl Drop for KernelWorkspace {
     fn drop(&mut self) {
         // Remove only the empty host mount point. No recursive cleanup can traverse a file mount.
-        let _ = unmount(&self.scratch, UnmountFlags::DETACH);
-        let _ = fs::remove_dir(&self.scratch);
+        if let Some(scratch) = &self.scratch {
+            let _ = unmount(scratch, UnmountFlags::DETACH);
+            let _ = fs::remove_dir(scratch);
+        }
     }
 }
 
 impl Mounts for &mut KernelWorkspace {
     fn start(&mut self, root: &Path) -> io::Result<()> {
         self.root = root.to_owned();
-        self.target = self.scratch.join(self.next.to_string());
+        if self.scratch.is_none() {
+            self.scratch = Some(KernelWorkspace::open_scratch()?);
+        }
+        self.target = self
+            .scratch
+            .as_ref()
+            .expect("initialized projection")
+            .join(self.next.to_string());
         self.next += 1;
         fs::create_dir(&self.target)?;
         mount(

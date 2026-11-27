@@ -2,7 +2,6 @@ import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.
 import { constants } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 
 const filesystem = vi.hoisted(() => ({
   lstat: vi.fn(),

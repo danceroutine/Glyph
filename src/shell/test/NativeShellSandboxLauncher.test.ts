@@ -16,7 +16,7 @@ describe(NativeShellSandboxLauncher, () => {
       );
       const launcher = new NativeShellSandboxLauncher(
         {
-          accessPolicy: new WorkspaceAccessPolicy(),
+          accessPolicy: new WorkspaceAccessPolicy({}, ['/project/personal']),
           binaryPath: '/bin/glyph-shell-sandbox',
           workspaceRoots: ['/project', '/second'],
           stateDirectory: '/state',
@@ -48,6 +48,8 @@ describe(NativeShellSandboxLauncher, () => {
           '/project',
           '--protected-path',
           '/project/worker',
+          '--private-path',
+          '/project/personal',
         ]),
       );
       expect(arguments_).not.toContain('/second');
