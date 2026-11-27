@@ -1,3 +1,4 @@
+import type { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import type { ChatTurnOptions } from '#src/chat/ChatTurnOptions.js';
 import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
 
@@ -6,6 +7,8 @@ import type { ContextAttachment } from '#src/context/attachments/ContextAttachme
  * snapshots resolved by the application immediately before inference.
  */
 export interface ChatRequest extends ChatTurnOptions {
+  /** In-memory admission for this turn, including scopes contributed by a Git comparison. */
+  readonly disclosure?: WorkspaceDisclosure;
   readonly text: string;
   readonly attachments: readonly ContextAttachment[];
 }

@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import {
   prepareModelContext,
   type ModelTurnContext,
@@ -89,6 +90,9 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     },
   ): Promise<TurnResult> {
     const request = toChatRequest(inputRequest);
+    const toolAccess = new WorkspaceDisclosure();
+    const disclosures = new Set<WorkspaceDisclosure>([toolAccess]);
+    if (request.disclosure) disclosures.add(request.disclosure);
     const turnId = request.turnId ?? randomUUID();
     const metadata = chatTurnOptionsSchema.parse({
       ...(request.mode !== undefined ? { mode: request.mode } : {}),
@@ -177,6 +181,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       );
       admittedContext = turnContext !== undefined;
       boundaryInstructions = prepareModelContext(turnContext?.initialEnvelope());
+      (await request.disclosure?.authorize(signal))?.();
       options.onTurnAdmitted?.();
       turn = await this.adapter.beginTurn(this.state, modelRequest, context(0));
       boundaryInstructions = undefined;
@@ -185,6 +190,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       let round = 0;
       const applySteering = async (steeringRequest: ChatRequest): Promise<boolean> => {
         try {
+          (await steeringRequest.disclosure?.authorize(signal))?.();
           boundaryInstructions = prepareModelContext(await this.steeringInstructions(turnId, steeringRequest, signal));
         } catch (error) {
           if (signal.aborted) throw signal.reason;
@@ -195,6 +201,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         }
         try {
           turn = await this.adapter.steerTurn(turn!, modelInput(steeringRequest), context(round));
+          if (steeringRequest.disclosure) disclosures.add(steeringRequest.disclosure);
         } finally {
           boundaryInstructions = undefined;
         }
@@ -210,9 +217,19 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         }
         round += 1;
         const send = await this.adapter.prepareStep(turn, context(round));
-        const assertCurrent = await this.turnContexts?.authorizeDisclosure?.(turnId, signal);
-        assertCurrent?.();
-        const step = await send(assertCurrent);
+        const authorize = async () => {
+          const checks = await Promise.all([
+            this.turnContexts?.authorizeDisclosure?.(turnId, signal),
+            ...[...disclosures].filter(value => value.hasSources).map(value => value.authorize(signal)),
+          ]);
+          return () => {
+            signal.throwIfAborted();
+            for (const check of checks) check?.();
+          };
+        };
+        const assertCurrent = await authorize();
+        assertCurrent();
+        const step = await send(assertCurrent, authorize);
         turn = step.turn;
         usageIncomplete ||= step.usage === null;
         totalUsage = addUsage(totalUsage, step.usage);
@@ -275,6 +292,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                     turnId,
                     mode: roundMode,
                     onModeChanged: setMode,
+                    retainResultAccess: toolAccess.retain,
                   },
                   onActivity: reportToolActivity,
                   trace: (kind, data) => {
@@ -380,7 +398,7 @@ function redactedHeaders(headers: Headers): Record<string, string> {
 }
 
 /** Steering uses the same validation and source-content framing as an initial prompt. */
-function modelInput(request: ChatRequest): ChatRequest {
+function modelInput({ disclosure: _disclosure, ...request }: ChatRequest): ChatRequest {
   const metadata = chatTurnOptionsSchema.parse({
     ...(request.mode !== undefined ? { mode: request.mode } : {}),
     ...(request.annotations ? { annotations: request.annotations } : {}),
@@ -406,7 +424,8 @@ export { toolInterruptionOutput as toolInterruptionOutput__TESTING_ONLY, errorDe
 
 /** Terminal and test display labels do not identify filesystem scopes. Legacy captures remain file-backed. */
 function attachmentPaths(request: ChatRequest): readonly string[] {
-  return request.attachments
+  const paths = request.attachments
     .filter(attachment => attachment.source?.kind !== 'terminal' && attachment.source?.kind !== 'test')
     .map(attachment => attachment.path);
+  return [...new Set([...paths, ...(request.disclosure?.additionalPaths ?? [])])];
 }

@@ -1,9 +1,10 @@
+import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
 import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { posix } from 'node:path';
 import { join } from 'node:path';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ConfigurationError } from '#src/errors/ConfigurationError.js';
 import type { WorkspaceMutationOptions } from '#src/workspace/WorkspaceMutationOptions.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
@@ -52,7 +53,7 @@ class MutableWorkspaceTextStore implements WorkspaceTextStore {
     return normalized;
   }
 
-  async read(path: string): Promise<WorkspaceTextSnapshot> {
+  async read(path: string, _options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot> {
     const normalized = this.normalizePath(path);
     this.reads.push(normalized);
     const snapshot = this.snapshots.get(this.key(normalized));
@@ -118,6 +119,24 @@ describe(ContextAttachmentService, () => {
   });
 
   describe(ContextAttachmentService.prototype.resolve, () => {
+    it('retains earlier source roots through the final file of the batch', async () => {
+      const workspace = new MutableWorkspaceTextStore();
+      workspace.set('one/a', 'first', 'one');
+      workspace.set('two/b', 'second', 'two');
+      const read = workspace.read.bind(workspace);
+      let firstSelected = true;
+      vi.spyOn(workspace, 'read').mockImplementation(async (path, options) => {
+        if (path === 'one/a')
+          options?.retainAccess?.(() => {
+            if (!firstSelected) throw new Error('First root changed');
+          });
+        else firstSelected = false;
+        return read(path, options);
+      });
+      await expect(
+        new ContextAttachmentService(workspace).resolve([{ path: 'one/a' }, { path: 'two/b' }]),
+      ).rejects.toThrow('First root changed');
+    });
     it('normalizes and deduplicates references while preserving first-seen order and exact metadata', async () => {
       const workspace = new MutableWorkspaceTextStore(false);
       workspace.set('src/alpha.ts', 'alpha', 'revision-alpha', true);

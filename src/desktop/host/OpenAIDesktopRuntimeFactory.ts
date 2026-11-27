@@ -239,7 +239,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               ...(signal && { signal }),
               ...(targetDirectory !== undefined && targetDirectory !== '' ? { targetDirectory } : {}),
             }),
-          request: async (request, signal) => {
+          request: async (request, signal, retainAccess) => {
             const operation = admitted.beginOperation();
             // Reuse filesystem policy and symlink checks before granting editor access.
             const path = this.requestPath(request);
@@ -279,6 +279,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 await admitted.validateAccess(request.mutation.target);
             }
             operation.assertCurrent();
+            retainAccess?.(operation.assertCurrent);
             return response.snapshot && path !== undefined && path !== ''
               ? {
                   ...response,

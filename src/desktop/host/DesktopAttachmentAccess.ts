@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { storedSourcePath } from '#src/workspace/SourcePathAliases.js';
 import { isAbsolute, relative, sep } from 'node:path';
@@ -34,7 +35,34 @@ export class DesktopAttachmentAccess {
   ) {}
 
   /** Revalidate captured paths before recording a message or handing its contents to the agent. */
-  async admit(attachments: readonly GlyphContextAttachment[], signal: AbortSignal): Promise<void> {
+  async admit(
+    attachments: readonly GlyphContextAttachment[],
+    signal: AbortSignal,
+    disclosure?: WorkspaceDisclosure,
+  ): Promise<void> {
+    const check = await this.checkCaptures(attachments, signal, disclosure?.additionalPaths);
+    check();
+    if (disclosure) {
+      disclosure.retain(check);
+      // A deliberate editor selection keeps its exact bytes. Derived names and comparison
+      // resources must still be visible through their owning policy at each model handoff.
+      const derived = attachments.filter(
+        item => item.kind === Kind.FOLDER || item.kind === Kind.DIFF || item.kind === Kind.SYMBOL || item.projectFile,
+      );
+      if (derived.length > 0) disclosure.revalidate(current => this.checkCaptures(derived, current));
+    }
+  }
+
+  /** Resolve one editor capture against its selected root and return an admitted folder outline when requested. */
+  resolve(resource: GlyphAttachmentResource, signal: AbortSignal): Promise<GlyphFolderListing | undefined> {
+    return this.resolveResource(resource, signal);
+  }
+
+  private async checkCaptures(
+    attachments: readonly GlyphContextAttachment[],
+    signal: AbortSignal,
+    additionalPaths?: Set<string>,
+  ): Promise<() => void> {
     if (
       attachments.length > 32 ||
       attachments.reduce((total, item) => total + Buffer.byteLength(item.text), 0) > 2 * 1024 * 1024
@@ -69,6 +97,7 @@ export class DesktopAttachmentAccess {
         );
         if (kind === Kind.DIFF) {
           const related = this.diffSources(attachment.text);
+          for (const source of related) additionalPaths?.add(source.path);
           await Promise.all(
             related.map(source =>
               this.resolveResource(
@@ -91,14 +120,11 @@ export class DesktopAttachmentAccess {
           throw new Error('The selected folder contents have changed. Refresh the attachment before sending.');
       }),
     );
-    signal.throwIfAborted();
-    check();
-    for (const checkRoot of rootChecks) checkRoot();
-  }
-
-  /** Resolve one editor capture against its selected root and return an admitted folder outline when requested. */
-  resolve(resource: GlyphAttachmentResource, signal: AbortSignal): Promise<GlyphFolderListing | undefined> {
-    return this.resolveResource(resource, signal);
+    return () => {
+      signal.throwIfAborted();
+      check();
+      for (const checkRoot of rootChecks) checkRoot();
+    };
   }
 
   /** A Send, Steer, or review may resolve several roots concurrently. Retain each admitting store's

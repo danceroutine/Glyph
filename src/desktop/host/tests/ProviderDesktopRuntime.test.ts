@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
@@ -2111,7 +2112,12 @@ describe(ProviderDesktopRuntime, () => {
         ).rejects.toThrow('declared workspace path');
         expect(agentReviews.start).not.toHaveBeenCalled();
         await harness.runtime.handle({ type: Command.START_AGENT_REVIEW, review, model });
-        expect(agentReviews.start).toHaveBeenCalledExactlyOnceWith(review, model);
+        expect(agentReviews.start).toHaveBeenCalledExactlyOnceWith(
+          review,
+          model,
+          expect.any(AbortSignal),
+          expect.any(WorkspaceDisclosure),
+        );
       } finally {
         await harness.runtime.dispose();
       }
