@@ -86,6 +86,7 @@ it('retains indexed project IDs for a user skill exposed through a differently n
     directory.refresh();
     expect(directory.ownsPackage(join(alias, 'one'))).toBe(true);
     const id = new ProjectSkillIdentity(root, '.glyph').forDirectory('.glyph/skills/one');
+    expect(directory.previousPackageIds('skills/one')).toContain(id);
     expect(directory.matchesProjectReference('skills/one', id, { remaining: 20 })).toBe(true);
     expect(directory.matchesProjectReference('skills/two', id, { remaining: 20 })).toBe(false);
   } finally {

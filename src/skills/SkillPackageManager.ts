@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, posix } from 'node:path';
+import { dirname, join, posix, sep } from 'node:path';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
@@ -402,7 +402,16 @@ export class SkillPackageManager {
         const target = await this.target(location, entry.directory);
         const stage = join(await privateSkillDirectory(this.state.metadata, location.store.root), entry.id);
         await inspectPrivateDirectory(this.state.metadata, stage);
-        await location.assertClean?.(target);
+        let retainedAliases: readonly string[] | undefined;
+        const backup = join(stage, 'previous');
+        if (location.sourcePathAliases && (await optionalStat(backup))) {
+          // A crash can leave an editor's direct mount attached to the original inode now in private staging.
+          const stageRoutes = location.sourcePathAliases(stage);
+          retainedAliases = location
+            .sourcePathAliases(backup, true)
+            .filter(alias => !stageRoutes.some(route => alias === route || alias.startsWith(route + sep)));
+        }
+        await location.assertClean?.(target, retainedAliases);
         if (entry.published) {
           if ((await diskRevision(target, entry.treeVersion)) !== entry.replacement)
             throw new Error('Package recovery is required. Published files changed at ' + target);

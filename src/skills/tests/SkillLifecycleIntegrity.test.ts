@@ -126,7 +126,13 @@ it('restores the original when a process stopped between moving the old package 
     retired: false,
   });
   await rename(join(root, directory), join(stage, 'previous'));
-  await new SkillPackageManager([location], catalog, state).recover();
+  const alias = join(root, 'editor-mount');
+  const backup = join(stage, 'previous');
+  const assertClean = vi.fn(async (_path: string, _aliases?: readonly string[]) => {});
+  const sourcePathAliases = (path: string) =>
+    path === stage ? [stage, join(root, 'other-stage')] : [backup, join(root, 'other-stage', 'previous'), alias];
+  await new SkillPackageManager([{ ...location, assertClean, sourcePathAliases }], catalog, state).recover();
+  expect(assertClean).toHaveBeenCalledWith(join(root, directory), [alias]);
   expect(await readFile(join(root, directory, 'SKILL.md'), 'utf8')).toContain('Reviewed instructions');
   expect(state.installations.get(skill.id)?.revision).toBe(expected);
 });
