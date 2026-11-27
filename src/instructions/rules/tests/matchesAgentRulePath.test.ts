@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AgentInstructionSourceKind, AgentInstructionSourceStatus } from '#src/instructions/AgentInstructionSource.js';
-import { globExpression, matchesAgentRulePath } from '#src/instructions/rules/matchesAgentRulePath.js';
+import { globExpression, matchesAgentRulePath, RuleGlobBudget } from '#src/instructions/rules/matchesAgentRulePath.js';
 
 describe(matchesAgentRulePath, () => {
   it('matches recursive and single-segment patterns only within scope', () => {
@@ -36,4 +36,29 @@ describe(matchesAgentRulePath, () => {
       expect(() => globExpression(pattern)).toThrow('Invalid rule glob');
     },
   );
+});
+
+it('reuses each evaluation across distinct rules and matches workspace-wide rules through overlapping roots', async () => {
+  const { InstructionPaths } = await import('#src/instructions/InstructionPaths.js');
+  const { WorkspaceSourceRoutes } = await import('#src/workspace/WorkspaceSourceRoutes.js');
+  const roots = [
+    { name: 'Repo', path: '/repo' },
+    { name: 'App', path: '/repo/sub' },
+  ];
+  const paths = new InstructionPaths(new Map(roots.map(root => [root.name, true])), new WorkspaceSourceRoutes(roots));
+  const rule = {
+    kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+    scope: '.',
+    path: 'rules/src.mdc',
+    label: 'src',
+    id: 'src',
+    status: AgentInstructionSourceStatus.ACTIVE,
+    globs: ['src/**/*.ts'],
+  };
+  const budget = new RuleGlobBudget();
+  expect(matchesAgentRulePath(rule, 'Repo/sub/src/file.ts', paths, budget)).toBe(true);
+  expect(matchesAgentRulePath({ ...rule, id: 'duplicate' }, 'App/src/file.ts', paths, budget)).toBe(true);
+  budget.spend(3_999_000);
+  for (let i = 0; i < 500; i++)
+    expect(matchesAgentRulePath({ ...rule, id: String(i) }, 'Repo/sub/src/file.ts', paths, budget)).toBe(true);
 });
