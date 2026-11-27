@@ -80,6 +80,21 @@ impl<'a> MountTable<'a> {
     /// Map a namespace pathname to its filesystem-relative backing location, then back through
     /// each mount of that filesystem. Overmounted records at the same depth are handled conservatively.
     pub fn aliases(&self, path: &Path, descendants: bool, output: &mut BTreeSet<PathBuf>) {
+        self.aliases_on_device(path, descendants, output);
+        if descendants {
+            // A separate filesystem can be mounted beneath a private directory, then exposed
+            // elsewhere. Its backing root belongs to its own device.
+            for child in self
+                .0
+                .iter()
+                .filter(|mount| mount.point != path && mount.point.starts_with(path))
+            {
+                self.aliases_on_device(&child.point, true, output);
+            }
+        }
+    }
+
+    fn aliases_on_device(&self, path: &Path, descendants: bool, output: &mut BTreeSet<PathBuf>) {
         let mounts = &self.0;
         let owners = || mounts.iter().filter(|mount| path.starts_with(&mount.point));
         let depth = owners().map(|mount| mount.point.components().count()).max();

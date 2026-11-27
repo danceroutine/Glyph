@@ -39,6 +39,7 @@ mod unix {
         identity: Option<Id>,
         traversed: BTreeSet<PathBuf>,
         inodes: BTreeSet<Id>,
+        directory: bool,
     }
 
     fn resolve(path: &Path, host: bool) -> io::Result<Location> {
@@ -94,13 +95,16 @@ mod unix {
         if identity(path)?.as_ref().map(id) != final_id {
             return Err(denied());
         }
+        let directory = final_meta.as_ref().is_some_and(fs::Metadata::is_dir);
         if let Some(meta) = final_meta {
             // A regular hard link can also be present under a workspace without any mount record.
             // Non-writable system multicall binaries legitimately have several installation names.
             if host
                 && meta.is_file()
                 && meta.nlink() > 1
-                && (meta.uid() != 0 || meta.mode() & 0o022 != 0)
+                && (meta.uid() != 0
+                    || meta.mode() & 0o022 != 0
+                    || rustix::fs::access(&current, rustix::fs::Access::WRITE_OK).is_ok())
             {
                 return Err(denied());
             }
@@ -110,6 +114,7 @@ mod unix {
             identity: final_id,
             traversed,
             inodes,
+            directory,
         })
     }
 
@@ -138,6 +143,18 @@ mod unix {
             #[cfg(target_os = "macos")]
             let traversed = host.traversed;
             for (root, logical) in roots.iter().zip(workspace_roots) {
+                #[cfg(target_os = "macos")]
+                let exposed = BTreeSet::from([root.path.clone()]);
+                #[cfg(target_os = "linux")]
+                let mut exposed = BTreeSet::from([root.path.clone()]);
+                #[cfg(target_os = "linux")]
+                mounts.aliases(&root.path, true, &mut exposed);
+                if host.directory
+                    && (host.identity.is_some_and(|i| root.inodes.contains(&i))
+                        || exposed.iter().any(|p| p.starts_with(&host.path)))
+                {
+                    return Err(denied());
+                }
                 if root.identity.is_some_and(|i| host.inodes.contains(&i))
                     || traversed
                         .iter()
@@ -167,7 +184,10 @@ mod unix {
             let check = |p| assert_host_paths(&[p], &roots);
             check(file.clone()).unwrap();
             check(missing.clone()).unwrap();
-            check(base.clone()).unwrap();
+            assert!(check(base.clone()).is_err());
+            let sibling = base.join("sibling");
+            fs::create_dir(&sibling).unwrap();
+            check(sibling).unwrap();
             symlink(&file, workspace.join("link")).unwrap();
             symlink("workspace/link", base.join("indirect")).unwrap();
             assert!(check(base.join("indirect")).is_err());
