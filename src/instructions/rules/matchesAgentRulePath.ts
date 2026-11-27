@@ -11,11 +11,20 @@ export class RuleGlobBudget {
 
   private readonly patterns = new Map<string, { matcher: GlobMatcher; results: Map<string, boolean> }>();
 
-  matches(pattern: string, path: string, sensitive: boolean): boolean {
+  private readonly spellings = new Map<string, string>();
+  storedSpelling(route: string, paths: InstructionPaths): string {
+    const cached = this.spellings.get(route);
+    if (cached !== undefined) return cached;
+    const stored = paths.routes?.storedSpelling(route) ?? route;
+    this.spellings.set(route, stored);
+    return stored;
+  }
+
+  matches(pattern: string, path: string, sensitive: boolean, original = pattern): boolean {
     const key = JSON.stringify([sensitive, pattern]);
     let evaluation = this.patterns.get(key);
     if (!evaluation) {
-      evaluation = { matcher: globExpression(pattern, sensitive), results: new Map() };
+      evaluation = { matcher: globExpression(pattern, sensitive, original), results: new Map() };
       this.patterns.set(key, evaluation);
     }
     const cached = evaluation.results.get(path);
@@ -47,17 +56,29 @@ export function matchesAgentRulePath(
     const relative = paths.relativeToScope(source.scope, route);
     const owner = source.scope === '.' ? route : source.scope;
     const normalized = (value: string) => paths.routes?.normalizeName(owner, value) ?? value;
-    return source.globs?.some(pattern =>
-      budget.matches(normalized(pattern), normalized(relative), paths.caseSensitive(owner)),
-    );
+    return source.globs?.some(pattern => {
+      const sensitive = paths.caseSensitive(owner);
+      const stored = pattern.includes('?') ? budget.storedSpelling(route, paths) : route;
+      const matched =
+        (pattern.includes('?') && budget.matches(pattern, paths.relativeToScope(source.scope, stored), sensitive)) ||
+        budget.matches(normalized(pattern), normalized(relative), sensitive, pattern);
+      if (!matched || !paths.routes) return matched;
+      const components = pattern.split('/');
+      const wildcard = components.findIndex(component => /[?*]/u.test(component));
+      const prefix = (wildcard < 0 ? components : components.slice(0, wildcard)).join('/');
+      if (!prefix || relative === prefix || relative.startsWith(prefix + '/')) return true;
+      const root = route.split('/')[0]!;
+      const scope = source.scope === '.' && paths.isWorkspaceRoot(root) ? root : source.scope;
+      return paths.contains(paths.reference(scope, prefix), route);
+    });
   });
 }
 
 /** Each token visits each path position at most once, including consecutive wildcards. */
-export function globExpression(pattern: string, sensitive = true): GlobMatcher {
+export function globExpression(pattern: string, sensitive = true, original = pattern): GlobMatcher {
   if (
     !pattern ||
-    pattern.length > 512 ||
+    original.length > 512 ||
     pattern.startsWith('/') ||
     pattern.includes('..') ||
     /[\\[\]{}()!]/u.test(pattern)

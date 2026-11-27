@@ -187,7 +187,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     const probe = new RustWorkspacePathIndex({ binaryPath, root, caseSensitive: true }, processFactory);
     try {
       return z
-        .object({ caseSensitive: z.boolean(), normalizesUnicode: z.boolean() })
+        .object({ caseSensitive: z.boolean(), normalizesUnicode: z.boolean(), foldsUnicode: z.boolean() })
         .parse(await probe.request(PathIndexMethod.FILESYSTEM_NAME_POLICY, root));
     } finally {
       await probe.dispose();

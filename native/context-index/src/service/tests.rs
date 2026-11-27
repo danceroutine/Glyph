@@ -214,9 +214,30 @@ fn name_policy_matches_composed_and_decomposed_directory_entries() {
             policy.normalizes_unicode
         );
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        for (a, b) in [("σ", "ς"), ("ſ", "s"), ("ß", "SS"), ("ﬀ", "ff")] {
+            let a = root.path().join(a);
+            let b = root.path().join(b);
+            fs::create_dir(&a).unwrap();
+            if policy.folds_unicode {
+                assert_eq!(
+                    fs::metadata(&a).unwrap().ino(),
+                    fs::metadata(&b).unwrap().ino()
+                );
+            } else if policy.case_sensitive {
+                fs::create_dir(&b).unwrap();
+                assert_ne!(
+                    fs::metadata(&a).unwrap().ino(),
+                    fs::metadata(&b).unwrap().ino()
+                );
+            }
+        }
+    }
     assert!(filesystem_name_policy(&root.path().join("absent")).is_err());
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    assert!(filesystem_casing::normalizes_unicode(&root.path().join("absent")).is_err());
+    assert!(filesystem_casing::unicode_policy(&root.path().join("absent")).is_err());
     #[cfg(target_os = "macos")]
     assert!(filesystem_casing::normalizing_volume(-1).is_err());
 }
