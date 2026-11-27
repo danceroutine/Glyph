@@ -87,6 +87,8 @@ async function modules() {
               : 'export const ipcRenderer = { on() {}, removeListener() {}, send() {} };',
           }));
           builder.onResolve({ filter: /^#vs\// }, args => {
+            if (args.path.endsWith('/resolveInstructionId.js'))
+              return { path: resolve('src/instructions/resolveInstructionId.ts') };
             if (args.path.startsWith('#vs/base/') || args.path.endsWith('/browserViewUri.js'))
               return { path: resolve('.code-oss/src/src/vs', args.path.slice(4).replace(/\.js$/, '.ts')) };
             if (/\/(NativeGlyphWorkbenchService|GlyphDesktopClient)\.js$/.test(args.path))

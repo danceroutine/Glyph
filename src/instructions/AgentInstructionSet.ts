@@ -21,6 +21,7 @@ export class AgentInstructionSet {
   /** Effective sources in precedence order, including disabled sources and discovery errors. */
   readonly sources: readonly AgentInstructionSource[];
   readonly rootGuidance: readonly AgentInstructionSource[];
+  private readonly order = new Map<AgentInstructionSource, number>();
   private readonly activeByScope = new Map<string, AgentInstructionSource[]>();
 
   /** Native project rules shadow same-name Cursor rules only within the same scope. */
@@ -33,6 +34,12 @@ export class AgentInstructionSet {
         .filter(source => source.kind === AgentInstructionSourceKind.GLYPH_PROJECT_RULE)
         .map(source => compatibilityKey(source, paths.key(source.scope))),
     );
+    const depth = new Map(
+      [...new Set(sources.map(source => source.scope))].map(scope => [
+        scope,
+        Math.max(...paths.equivalents(scope).map(route => scopeDepth(route))),
+      ]),
+    );
     this.sources = sources
       .filter(
         source =>
@@ -41,7 +48,7 @@ export class AgentInstructionSet {
       )
       .toSorted(
         (left, right) =>
-          scopeDepth(left.scope) - scopeDepth(right.scope) ||
+          depth.get(left.scope)! - depth.get(right.scope)! ||
           AgentInstructionSet.SOURCE_PRIORITY[left.kind] - AgentInstructionSet.SOURCE_PRIORITY[right.kind] ||
           left.path.localeCompare(right.path),
       );
@@ -51,7 +58,8 @@ export class AgentInstructionSet {
         source.kind === AgentInstructionSourceKind.AGENTS_MD &&
         paths.isWorkspaceRoot(source.scope),
     );
-    for (const source of this.sources) {
+    for (const [index, source] of this.sources.entries()) {
+      this.order.set(source, index);
       if (source.status !== AgentInstructionSourceStatus.ACTIVE) continue;
       const scope = paths.key(source.scope);
       const bucket = this.activeByScope.get(scope);
@@ -64,19 +72,20 @@ export class AgentInstructionSet {
    * Select successfully read ancestors of a workspace-relative target.
    * This is scope resolution only; enablement, glob matching, and disclosure belong
    * to the turn context session. Later sources have higher precedence.
-   * Visits only ancestor scope buckets, with O(depth + matches) lookup work instead
-   * of scanning the catalog. The returned array does not expose the stored buckets.
+   * Visits the ancestor buckets for each equivalent workspace route and orders the matched sources. The returned array does not expose the stored buckets.
    */
   forPath(path: string): readonly AgentInstructionSource[] {
-    const result = [...(this.activeByScope.get('.') ?? [])];
-    let scope = '';
-    for (const segment of this.paths.key(path).split('/')) {
-      scope = scope ? `${scope}/${segment}` : segment;
-      if (scope === '.') continue;
-      const bucket = this.activeByScope.get(scope);
-      if (bucket) for (const source of bucket) result.push(source);
+    const result = new Set(this.activeByScope.get('.'));
+    for (const route of this.paths.equivalents(path)) {
+      let scope = '';
+      for (const segment of this.paths.key(route).split('/')) {
+        scope = scope ? `${scope}/${segment}` : segment;
+        if (scope === '.') continue;
+        const bucket = this.activeByScope.get(scope);
+        if (bucket) for (const source of bucket) result.add(source);
+      }
     }
-    return result;
+    return [...result].toSorted((left, right) => this.order.get(left)! - this.order.get(right)!);
   }
 }
 

@@ -1,5 +1,6 @@
 export interface GlyphInstructionSource {
   readonly id: string;
+  readonly legacyIds?: readonly string[];
   readonly kind: string;
   readonly label: string;
   readonly path: string;

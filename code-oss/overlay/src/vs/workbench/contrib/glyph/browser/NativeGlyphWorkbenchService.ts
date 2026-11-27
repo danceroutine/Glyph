@@ -1,3 +1,4 @@
+import { resolveInstructionId } from '#vs/platform/glyph/instructions/resolveInstructionId.js';
 import type { GlyphSkillDraft, GlyphSkillSource } from '#glyph/protocol/events/GlyphSkillManagement.js';
 import type { AgentReviewInput } from '#vs/platform/glyph/reviewing/AgentReview.js';
 import { GlyphShellTerminals } from './GlyphShellTerminals.js';
@@ -301,7 +302,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
                 event.draft,
                 (kind, id) => {
                   if (kind === 'skill') return this.state.skills?.find(skill => skill.id === id);
-                  const source = this.state.instructionSources?.find(rule => rule.id === id);
+                  const source = resolveInstructionId(this.state.instructionSources ?? [], id);
                   return source
                     ? {
                         name: source.name ?? source.path.split('/').at(-1)!,

@@ -153,16 +153,27 @@ export class GlyphEditorAdapter extends Disposable {
           return { operationId, ok: true, snapshot: await this.read(request.path, request.maxBytes) };
         case GlyphEditorRequestType.READ_OPEN_SNAPSHOT: {
           const resource = this.resolve(request.path);
-          const model = this.modelService.getModel(resource);
-          // Automatic metadata reads may inspect an existing dirty buffer but
-          // never open a pathname whose filesystem identity the host cannot pin.
-          return {
-            operationId,
-            ok: true,
-            ...(model && this.textFileService.isDirty(resource)
-              ? { snapshot: await this.snapshot(request.path, model, request.maxBytes) }
-              : {}),
-          };
+          const physical = request.physicalUri ? URI.parse(request.physicalUri, true) : resource;
+          const candidates = this.uriIdentityService.extUri.isEqual(resource, physical)
+            ? [resource]
+            : [resource, physical];
+          const dirty = candidates.filter(
+            candidate => this.textFileService.isDirty(candidate) && this.modelService.getModel(candidate),
+          );
+          if (
+            dirty.length > 0 &&
+            request.physicalUri &&
+            (await this.fileService.realpath(resource))?.toString() !== physical.toString()
+          )
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+          const snapshots = await Promise.all(
+            dirty.map(candidate =>
+              this.snapshot(request.path, this.modelService.getModel(candidate)!, request.maxBytes),
+            ),
+          );
+          if (new Set(snapshots.map(snapshot => snapshot.contentRevision)).size > 1)
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+          return { operationId, ok: true, ...(snapshots[0] ? { snapshot: snapshots[0] } : {}) };
         }
         case GlyphEditorRequestType.APPLY_FILE_MUTATION:
           return { operationId, ok: true, ...(await this.applyFile(request.mutation)) };

@@ -361,13 +361,13 @@ describe(TurnContextCoordinator, () => {
 
     expect(session.initialEnvelope().candidates).toEqual([expect.objectContaining({ id: 'unnamed', name: 'unnamed' })]);
     expect(() => coordinator.activateManualRules('ineligible', ['disabled', 'missing'])).toThrow('manual activation');
-    expect(coordinator.activateManualRules('ineligible', ['missing'])).toBeUndefined();
+    expect(() => coordinator.activateManualRules('ineligible', ['missing'])).toThrow('unavailable');
     expect(coordinator.activateRule('ineligible', 'disabled')).toBeUndefined();
     expect(() => coordinator.activateManualRules('ineligible', ['unnamed'])).toThrow('manual activation');
     await expect(
       coordinator.beginTurn({ turnId: 'queued', attachmentPaths: [], manualRuleIds: ['unnamed'] }),
     ).rejects.toThrow('manual activation');
-    expect(coordinator.activateManualRules('ineligible', ['missing'])).toBeUndefined();
+    expect(() => coordinator.activateManualRules('ineligible', ['missing'])).toThrow('unavailable');
   });
 });
 

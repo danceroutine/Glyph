@@ -23,3 +23,22 @@ describe(InstructionPaths, () => {
       expect(() => roots.reference('App', invalid)).toThrow('relative');
   });
 });
+
+it('matches relative patterns under the same physical scope through every attached root', async () => {
+  const { WorkspaceSourceRoutes } = await import('#src/workspace/WorkspaceSourceRoutes.js');
+  const routes = new WorkspaceSourceRoutes([
+    { name: 'outer', path: '/app' },
+    { name: 'inner', path: '/app/sub' },
+  ]);
+  const paths = new InstructionPaths(
+    new Map([
+      ['outer', false],
+      ['inner', false],
+    ]),
+    routes,
+  );
+  expect(paths.contains('inner', 'outer/sub/file')).toBe(true);
+  expect(paths.relativeToScope('inner', 'outer/sub/file')).toBe('file');
+  expect(paths.relativeToScope('inner', 'outer/sub')).toBe('');
+  expect(paths.contains('inner/src', 'outer/sub/docs')).toBe(false);
+});

@@ -38,6 +38,7 @@ export type GlyphEditorRequest =
       readonly operationId: string;
       readonly path: string;
       readonly maxBytes?: number;
+      readonly physicalUri?: string;
     }
   | { readonly type: GlyphEditorRequestType.LIST_WORKING_COPIES; readonly operationId: string }
   | { readonly type: GlyphEditorRequestType.LIST_WORKING_COPY_PATHS; readonly operationId: string }
