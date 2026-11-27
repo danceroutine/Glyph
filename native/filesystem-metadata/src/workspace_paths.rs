@@ -304,6 +304,24 @@ mod tests {
         assert_eq!(future_name("e\u{301}", true, false, true), "é");
         assert_eq!(future_name("A", false, false, false), "a");
         assert_eq!(future_name("ẞı", true, true, false), "ssı");
+        let mutation =
+            WorkspacePaths::for_operation(&[], Some(std::slice::from_ref(&store))).unwrap();
+        for reserved in [
+            &store,
+            &dir,
+            &dir.join(".glyph"),
+            &dir.join(".cursor/skills/key"),
+            &dir.join("nested/.glyph/skills/example"),
+        ] {
+            assert!(mutation.assert_path(reserved, None).is_err());
+        }
+        mutation.assert_path(&visible, None).unwrap();
+        mutation
+            .assert_path(&dir.join(".cursor/rules/example"), None)
+            .unwrap();
+        assert!(admitted
+            .assert_path(&dir.join(".glyph-skill-run/tool"), None)
+            .is_err());
         let renamed = dir.join("cataloG");
         assert_eq!(admitted.excludes(&renamed), same_inode(&renamed, &store));
         let name = dir.join("ſample");

@@ -196,6 +196,49 @@ mod tests {
         assert!(request.protected_paths.contains(&nested));
         request.workspace_roots = vec![alias.clone()];
         assert!(protect(&mut request, None, &table).is_err());
+        // The typed host receives the same positive mount identity evidence as the shell.
+        // Ordinary nested mounts remain writable while managed package bytes remain readable.
+        use glyph_filesystem_metadata::workspace_paths::WorkspacePaths;
+        let earlier = WorkspacePaths::current(std::slice::from_ref(&private_file)).unwrap();
+        let named_staging = base_path.join(".skill-staging");
+        let marker = base_path.join(".glyph");
+        let library = marker.join("skills");
+        let ordinary = base_path.join("shared-data");
+        let links =
+            ["staged", "packages", "mounted-marker", "ordinary"].map(|name| project.join(name));
+        for path in [&named_staging, &library, &ordinary] {
+            fs::create_dir_all(path).unwrap();
+        }
+        for (src, dst) in [&named_staging, &library, &marker, &ordinary]
+            .into_iter()
+            .zip(&links)
+        {
+            fs::create_dir(dst).unwrap();
+            mount_bind(src, dst).unwrap();
+        }
+        assert!(!earlier.topology_current());
+        let private = std::slice::from_ref(&private_file);
+        let read = WorkspacePaths::current(private).unwrap();
+        let edit =
+            WorkspacePaths::for_operation(private, Some(std::slice::from_ref(&protected))).unwrap();
+        for path in [&named, &links[0]] {
+            assert!(read.assert_path(path, None).is_err());
+        }
+        for path in [&nested, &links[1], &links[2].join("skills")] {
+            read.assert_path(&path.join("document"), None).unwrap();
+            assert!(edit.assert_path(&path.join("document"), None).is_err());
+        }
+        let writable = links[3].join("example");
+        edit.assert_path(&writable, None).unwrap();
+        fs::write(&writable, "ordinary edit").unwrap();
+        read.assert_path(&writable, None).unwrap();
+        assert_eq!(
+            fs::read_to_string(ordinary.join("example")).unwrap(),
+            "ordinary edit"
+        );
+        for path in &links {
+            unmount(path, UnmountFlags::empty()).unwrap();
+        }
         for target in [&alias, &nested, &named] {
             unmount(target, UnmountFlags::empty()).unwrap();
         }
