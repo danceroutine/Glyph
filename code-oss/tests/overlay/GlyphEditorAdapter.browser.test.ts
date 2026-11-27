@@ -1773,6 +1773,20 @@ describe('skill package working-copy checks', () => {
   });
 });
 
+it('accepts dirty text only from the matching filesystem spelling', async () => {
+  const services = editorServices();
+  const adapter = createAdapter(services);
+  const real = textModel(URI.file('/workspace/api.mdc'), 'lower');
+  services.models.push(real);
+  services.dirty.add('/workspace/API.mdc');
+  services.modelService.getModel.mockReturnValue(real);
+  const request = { type: GlyphEditorRequestType.READ_OPEN_SNAPSHOT as const, operationId: 'case', path: 'API.mdc' };
+  expect((await adapter.handle({ ...request, caseSensitive: true })).snapshot).toBeUndefined();
+  expect((await adapter.handle({ ...request, caseSensitive: false })).snapshot?.text).toBe('lower');
+  services.modelService.getModel.mockReturnValue(null);
+  expect((await adapter.handle({ ...request, caseSensitive: false })).snapshot).toBeUndefined();
+});
+
 it('checks exact rules and complete skill packages across configured, physical, attached and associated-untitled routes', async () => {
   const services = editorServices();
   const adapter = createAdapter(services);

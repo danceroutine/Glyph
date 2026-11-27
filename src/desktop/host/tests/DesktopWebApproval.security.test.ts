@@ -1,3 +1,4 @@
+import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { mkdir, mkdtemp, realpath, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -67,6 +68,7 @@ describe('security: production desktop web consent', () => {
     await mkdir(changedRoot);
     vi.stubEnv('GLYPH_CONFIG_DIR', state);
     vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
+    vi.spyOn(RustWorkspacePathIndex, 'filesystemCaseSensitive').mockResolvedValue(true);
     vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
     const openMutations = NativeWorkspaceMutations.open;
     // This consent test never publishes a skill package. Keep the native-client

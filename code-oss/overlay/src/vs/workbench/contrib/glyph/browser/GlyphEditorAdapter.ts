@@ -15,6 +15,7 @@ import { IInstantiationService } from '#vs/platform/instantiation/common/instant
 import { Progress } from '#vs/platform/progress/common/progress.js';
 import { BulkTextEdits } from '#vs/workbench/contrib/bulkEdit/browser/bulkTextEdits.js';
 import { ExtUri } from '#vs/base/common/resources.js';
+import { extUri, extUriIgnorePathCase } from '#vs/base/common/resources.js';
 import { URI } from '#vs/base/common/uri.js';
 import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
@@ -139,23 +140,25 @@ export class GlyphEditorAdapter extends Disposable {
         case GlyphEditorRequestType.READ_OPEN_SNAPSHOT: {
           const resource = this.resolve(request.path);
           const physical = request.physicalUri ? URI.parse(request.physicalUri, true) : resource;
-          const candidates = this.uriIdentityService.extUri.isEqual(resource, physical)
-            ? [resource]
-            : [resource, physical];
-          const dirty = candidates.filter(
-            candidate => this.textFileService.isDirty(candidate) && this.modelService.getModel(candidate),
-          );
+          const identity =
+            request.caseSensitive === undefined
+              ? this.uriIdentityService.extUri
+              : request.caseSensitive
+                ? extUri
+                : extUriIgnorePathCase;
+          const candidates = identity.isEqual(resource, physical) ? [resource] : [resource, physical];
+          const dirty = candidates.flatMap(candidate => {
+            if (!this.textFileService.isDirty(candidate)) return [];
+            const model = this.modelService.getModel(candidate);
+            return model && identity.isEqual(candidate, model.uri) ? [model] : [];
+          });
           if (
             dirty.length > 0 &&
             request.physicalUri &&
-            (await this.fileService.realpath(resource))?.toString() !== physical.toString()
+            !identity.isEqual(await this.fileService.realpath(resource), physical)
           )
             throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-          const snapshots = await Promise.all(
-            dirty.map(candidate =>
-              this.snapshot(request.path, this.modelService.getModel(candidate)!, request.maxBytes),
-            ),
-          );
+          const snapshots = await Promise.all(dirty.map(model => this.snapshot(request.path, model, request.maxBytes)));
           if (new Set(snapshots.map(snapshot => snapshot.contentRevision)).size > 1)
             throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
           return { operationId, ok: true, ...(snapshots[0] ? { snapshot: snapshots[0] } : {}) };
@@ -919,7 +922,7 @@ export class GlyphEditorAdapter extends Disposable {
     const profile = configured
       ? URI.file(configured)
       : URI.joinPath(this.pathService.userHome({ preferLocal: true }), '.glyph');
-    const identity = new ExtUri(() => !caseSensitive);
+    const identity = caseSensitive ? extUri : extUriIgnorePathCase;
     const target = (root: URI) => URI.joinPath(root, kind === 'rule' ? 'rules' : 'skills', name);
     const contains = (directory: URI, resource: URI) =>
       kind === 'rule' ? identity.isEqual(resource, directory) : identity.isEqualOrParent(resource, directory);

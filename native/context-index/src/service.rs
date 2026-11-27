@@ -55,8 +55,8 @@ pub(crate) struct InitializeParams {
     pub(crate) respect_git_ignore: bool,
     #[serde(default = "default_max_files")]
     pub(crate) max_files: u32,
-    #[serde(default = "default_case_sensitive")]
-    pub(crate) case_sensitive: bool,
+    #[serde(default)]
+    pub(crate) case_sensitive: Option<bool>,
     #[serde(default = "default_max_content_search_file_bytes")]
     pub(crate) max_content_search_file_bytes: u64,
 }
@@ -76,15 +76,15 @@ struct IndexPolicy {
     case_sensitive: bool,
 }
 
-impl From<&InitializeParams> for IndexPolicy {
-    fn from(params: &InitializeParams) -> Self {
+impl IndexPolicy {
+    fn new(params: &InitializeParams, case_sensitive: bool) -> Self {
         // Normalize policy and candidates alike; walking, watch updates, and
         // cache validation must agree with the workspace reader's case policy.
         let normalize = |values: &[String]| -> Vec<String> {
             values
                 .iter()
                 .map(|value| {
-                    if params.case_sensitive {
+                    if case_sensitive {
                         value.clone()
                     } else {
                         value.to_lowercase()
@@ -102,7 +102,7 @@ impl From<&InitializeParams> for IndexPolicy {
             exclude_root: params.exclude_root,
             respect_git_ignore: params.respect_git_ignore,
             max_files: params.max_files,
-            case_sensitive: params.case_sensitive,
+            case_sensitive,
         }
     }
 }
@@ -372,8 +372,6 @@ impl ContextIndexService {
             ));
         }
         let started = Instant::now();
-        let policy = IndexPolicy::from(&params);
-        policy.validate()?;
         if params.max_content_search_file_bytes == 0 {
             return Err(ServiceError::invalid_request(
                 "maxContentSearchFileBytes must be positive.",
@@ -389,6 +387,12 @@ impl ContextIndexService {
             path: root,
             text: root_text,
         } = ProjectRoot::resolve(root_input)?;
+        let case_sensitive = match params.case_sensitive {
+            Some(value) => value,
+            None => filesystem_case_sensitive(&root)?,
+        };
+        let policy = IndexPolicy::new(&params, case_sensitive);
+        policy.validate()?;
         if params
             .cache_path
             .as_ref()
@@ -1288,8 +1292,92 @@ fn default_glob_limit() -> u32 {
     DEFAULT_GLOB_LIMIT
 }
 
-fn default_case_sensitive() -> bool {
-    !cfg!(any(target_os = "windows", target_os = "macos"))
+/// Read the attached filesystem's policy without creating probe files. The caller may explicitly override it.
+pub(crate) fn filesystem_case_sensitive(path: &Path) -> Result<bool, ServiceError> {
+    filesystem_casing::detect(path).map_err(|error| {
+        ServiceError::initialization(format!(
+            "Could not inspect filesystem case sensitivity: {error}"
+        ))
+    })
+}
+
+#[cfg(target_os = "macos")]
+mod filesystem_casing {
+    use std::{fs::File, io, os::fd::AsRawFd, path::Path};
+    pub(super) fn detect(path: &Path) -> io::Result<bool> {
+        let file = File::open(path)?;
+        // The open descriptor pins the volume even if a registered folder alias changes.
+        let value = unsafe { libc::fpathconf(file.as_raw_fd(), libc::_PC_CASE_SENSITIVE) };
+        case_setting(value)
+    }
+    pub(super) fn case_setting(value: libc::c_long) -> io::Result<bool> {
+        match value {
+            -1 => Err(io::Error::last_os_error()),
+            value => Ok(value != 0),
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod filesystem_casing {
+    use std::{fs, io, path::Path};
+    pub(super) fn detect(path: &Path) -> io::Result<bool> {
+        let names: Vec<_> = fs::read_dir(path)?
+            .take(64)
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        for name in &names {
+            let Some(position) = name.find(|c: char| c.is_ascii_alphabetic()) else {
+                continue;
+            };
+            let mut other = name.clone();
+            let letter = other.as_bytes()[position] ^ 32;
+            other.replace_range(position..position + 1, &(letter as char).to_string());
+            // Both spellings being separately listed proves they are distinct names, including hardlinks.
+            if names.contains(&other) {
+                return Ok(true);
+            }
+            if let Some(sensitive) = compare(path, name, &other) {
+                return Ok(sensitive);
+            }
+        }
+        empty_directory(path)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn compare(path: &Path, name: &str, other: &str) -> Option<bool> {
+        use std::os::unix::fs::MetadataExt;
+        let actual = fs::symlink_metadata(path.join(name)).ok()?;
+        match fs::symlink_metadata(path.join(other)) {
+            Ok(alias) if actual.dev() != alias.dev() || actual.ino() != alias.ino() => Some(true),
+            Ok(_) if actual.is_dir() || actual.nlink() == 1 => Some(false),
+            Ok(_) => None,
+            Err(error) => (error.kind() == io::ErrorKind::NotFound).then_some(true),
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn compare(path: &Path, name: &str, other: &str) -> Option<bool> {
+        let actual = fs::canonicalize(path.join(name)).ok()?;
+        Some(fs::canonicalize(path.join(other)).map_or(true, |alias| actual != alias))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn empty_directory(path: &Path) -> io::Result<bool> {
+        use std::os::fd::AsRawFd;
+        let directory = fs::File::open(path)?;
+        let mut flags: libc::c_long = 0;
+        // ext4 and F2FS expose per-directory casefolding through FS_IOC_GETFLAGS.
+        let result =
+            unsafe { libc::ioctl(directory.as_raw_fd(), libc::FS_IOC_GETFLAGS, &mut flags) };
+        Ok(result != 0 || flags & 0x4000_0000 == 0)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn empty_directory(_path: &Path) -> io::Result<bool> {
+        Ok(!cfg!(windows))
+    }
 }
 
 fn default_max_content_search_file_bytes() -> u64 {

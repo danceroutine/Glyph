@@ -2,6 +2,7 @@ import { UserSkillDirectory } from '#src/skills/UserSkillDirectory.js';
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { projectIntersection, WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
+import { filesystemPolicyDirectory, workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { assertUserWorkingCopiesClean } from '#src/desktop/workspace/assertUserWorkingCopiesClean.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { SkillProjectMutationPolicy } from '#src/skills/SkillProjectMutationPolicy.js';
@@ -160,14 +161,21 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     const canonicalUserDirectory = resolveAvailableIdentity(this.userDirectory);
     const policy = new WorkspaceAccessPolicy({}, [join(canonicalUserDirectory, 'skill-state.json')]);
     const logger = new FileLogger(configuration.traceFile);
-    const parts = roots.map(workspaceRoot => {
+    const casing = await Promise.all(
+      roots.map(root => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, root.path)),
+    );
+    const parts = roots.map((workspaceRoot, i) => {
       const excludedPaths = [configuration.stateDirectory, configuration.traceFile, artifactRoot].flatMap(target => {
         const path = relative(workspaceRoot.path, target);
         return path && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
           ? [path.split(sep).join('/')]
           : [];
       });
-      const disk = new FileSystemWorkspaceTextStore(workspaceRoot.path, { accessPolicy: policy, excludedPaths });
+      const disk = new FileSystemWorkspaceTextStore(workspaceRoot.path, {
+        caseSensitive: casing[i]!,
+        accessPolicy: policy,
+        excludedPaths,
+      });
       const index: RustWorkspacePathIndex = new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
         root: workspaceRoot.path,
@@ -244,6 +252,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               operationId: randomUUID(),
               path: route,
               physicalUri: pathToFileURL(join(disk.root, request.path)).toString(),
+              caseSensitive: disk.caseSensitive,
             });
             if (!response.ok) throw new Error(response.error?.message ?? 'The editor catalog snapshot is unavailable.');
             if (response.snapshot && response.snapshot.path !== route)
@@ -300,7 +309,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       };
       const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
       const userRuleRoot = canonicalUserDirectory;
-      const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
+      const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
+        caseSensitive: await RustWorkspacePathIndex.filesystemCaseSensitive(
+          indexExecutable,
+          filesystemPolicyDirectory(userRuleRoot),
+        ).catch(() => workspaceCaseSensitivity(userRuleRoot)),
+      });
       const mutationRoots = new Map(
         await Promise.all(
           [...new Set(parts.map(part => part.disk.root))].map(
@@ -322,6 +336,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       );
       const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
         accessPolicy: userInstructionPolicy,
+        caseSensitive: userRuleStore.caseSensitive,
       });
       const userRuleIndex = (this.userRuleIndex ??= new RustWorkspacePathIndex({
         binaryPath: indexExecutable,

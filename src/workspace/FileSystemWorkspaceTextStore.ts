@@ -1,3 +1,4 @@
+import { workspaceCaseSensitivity } from './workspaceCaseSensitivity.ts';
 import { WorkspaceTextDecodingError } from './WorkspaceTextDecodingError.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -58,7 +59,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const { caseSensitive, excludedPaths, accessPolicy, allowPrivateRoot } =
       fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
     this.root = resolve(root);
-    this.caseSensitive = caseSensitive ?? (process.platform !== 'win32' && process.platform !== 'darwin');
+    this.caseSensitive = caseSensitive ?? workspaceCaseSensitivity(this.root);
     const projected = accessPolicy.exclusionsFor(this.root, this.caseSensitive);
     this.privateRoot = projected.privateRoot && !allowPrivateRoot;
     this.options = {

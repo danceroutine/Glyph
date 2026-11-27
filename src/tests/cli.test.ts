@@ -68,7 +68,7 @@ describe('glyph command line', () => {
     const excludedPaths = ['.glyph/state', 'target/release/glyph-context-index', 'target/release/glyph-shell-sandbox'];
     const [workspace] = cli.instances('FileSystemWorkspaceTextStore');
     const [accessPolicy] = cli.instances('WorkspaceAccessPolicy');
-    expect(workspace?.args).toEqual([root, { excludedPaths, accessPolicy }]);
+    expect(workspace?.args).toEqual([root, { caseSensitive: true, excludedPaths, accessPolicy }]);
     expect(accessPolicy?.args).toEqual([{}, ['/profiles/current/skill-state.json']]);
     const mutationPolicy = cli.instances('ProjectToolRuntime')[0]?.args[5] as {
       getDenial(path: string): string | undefined;
@@ -411,7 +411,6 @@ function prepareCli({
     '#src/chat/sessions/SqliteChatSessionStore.js': 'SqliteChatSessionStore',
     '#src/context/attachments/ContextAttachmentService.js': 'ContextAttachmentService',
     '#src/context/search/MultiRootWorkspacePathIndex.js': 'MultiRootWorkspacePathIndex',
-    '#src/context/search/RustWorkspacePathIndex.js': 'RustWorkspacePathIndex',
     '#src/editing/proposals/EditProposalService.js': 'EditProposalService',
     '#src/editing/reviews/ProposalReviewManager.js': 'ProposalReviewManager',
     '#src/editing/reviews/persistence/FileProposalReviewStore.js': 'FileProposalReviewStore',
@@ -441,6 +440,13 @@ function prepareCli({
   };
   for (const [path, name] of Object.entries(recordedModules)) mock(path, () => ({ [name]: record(name) }));
 
+  mock('#src/context/search/RustWorkspacePathIndex.js', () => ({
+    RustWorkspacePathIndex: class extends record('RustWorkspacePathIndex') {
+      static async filesystemCaseSensitive() {
+        return true;
+      }
+    },
+  }));
   const settings = {
     stateDirectory: configuration.stateDirectory ?? '/state/glyph',
     traceFile: configuration.traceFile ?? '/state/glyph/trace.log',

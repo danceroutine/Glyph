@@ -1,16 +1,6 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { rustWorkspacePathIndexOptionsSchema } from '#src/context/search/RustWorkspacePathIndexOptions.js';
-
-async function loadSchemaOnPlatform(platform: NodeJS.Platform) {
-  const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
-  Object.defineProperty(process, 'platform', { ...original, value: platform });
-  onTestFinished(() => {
-    Object.defineProperty(process, 'platform', original);
-  });
-  vi.resetModules();
-  const module = await import('#src/context/search/RustWorkspacePathIndexOptions.js');
-  return module.rustWorkspacePathIndexOptionsSchema;
-}
 
 describe('rustWorkspacePathIndexOptionsSchema', () => {
   it('fills every omitted option with its protocol default', () => {
@@ -22,7 +12,7 @@ describe('rustWorkspacePathIndexOptionsSchema', () => {
       respectGitIgnore: true,
       maxFiles: 2_000_000,
       maxContentSearchFileBytes: 8 * 1_024 * 1_024,
-      caseSensitive: process.platform !== 'darwin' && process.platform !== 'win32',
+      caseSensitive: workspaceCaseSensitivity('/project'),
     });
   });
 
@@ -32,13 +22,10 @@ describe('rustWorkspacePathIndexOptionsSchema', () => {
     ).toThrow();
   });
 
-  it.each([
-    ['linux', true],
-    ['darwin', false],
-    ['win32', false],
-  ] as const)('defaults path matching on %s to case sensitivity %s', async (platform, caseSensitive) => {
-    const schema = await loadSchemaOnPlatform(platform);
-
-    expect(schema.parse({ binaryPath: '/bin/index', root: '/project' }).caseSensitive).toBe(caseSensitive);
+  it.each([true, false])('preserves an explicitly selected filesystem policy (%s)', caseSensitive => {
+    expect(
+      rustWorkspacePathIndexOptionsSchema.parse({ binaryPath: '/bin/index', root: '/project', caseSensitive })
+        .caseSensitive,
+    ).toBe(caseSensitive);
   });
 });

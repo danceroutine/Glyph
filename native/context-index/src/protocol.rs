@@ -39,6 +39,7 @@ struct RequestEnvelope {
 #[derive(Debug)]
 enum Request {
     Initialize(InitializeParams),
+    FilesystemCaseSensitive(String),
     Search(SearchParams),
     Glob(GlobParams),
     FilterPaths(Vec<String>),
@@ -279,6 +280,13 @@ fn service_loop(
             WorkItem::Request(decoded) => {
                 let id = Some(decoded.id.clone());
                 match decoded.request {
+                    Request::FilesystemCaseSensitive(root) => (
+                        result_response(
+                            id,
+                            crate::service::filesystem_case_sensitive(std::path::Path::new(&root)),
+                        ),
+                        false,
+                    ),
                     Request::Initialize(params) => {
                         (result_response(id, service.initialize(params)), false)
                     }
@@ -402,6 +410,11 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
     }
 
     let request = match envelope.method.as_str() {
+        "filesystemCaseSensitive" => Request::FilesystemCaseSensitive(decode_params(
+            "filesystemCaseSensitive",
+            envelope.params,
+            Some(envelope.id.clone()),
+        )?),
         "initialize" => Request::Initialize(decode_params(
             "initialize",
             envelope.params,

@@ -161,6 +161,28 @@ fn shutdown_during_catalog_io_does_not_publish_the_new_snapshot() {
     }
 }
 
+fn fixture_policy(params: &InitializeParams) -> IndexPolicy {
+    IndexPolicy::new(params, params.case_sensitive.unwrap())
+}
+
+#[test]
+fn inspects_the_actual_directory_when_no_case_policy_is_specified() {
+    let root = tempdir().unwrap();
+    assert!(filesystem_case_sensitive(&root.path().join("missing")).is_err());
+    let empty = filesystem_case_sensitive(root.path()).unwrap();
+    write(root.path().join("123"), "number").unwrap();
+    assert_eq!(empty, filesystem_case_sensitive(root.path()).unwrap());
+    write(root.path().join("Glyph"), "one").unwrap();
+    let different = !root.path().join("glyph").exists();
+    assert_eq!(different, filesystem_case_sensitive(root.path()).unwrap());
+    #[cfg(target_os = "macos")]
+    {
+        assert!(filesystem_casing::case_setting(-1).is_err());
+        assert!(filesystem_casing::case_setting(1).unwrap());
+        assert!(!filesystem_casing::case_setting(0).unwrap());
+    }
+}
+
 fn params(root: &Path) -> InitializeParams {
     InitializeParams {
         root: root.to_string_lossy().into_owned(),
@@ -174,9 +196,44 @@ fn params(root: &Path) -> InitializeParams {
         exclude_root: false,
         respect_git_ignore: true,
         max_files: DEFAULT_MAX_FILES,
-        case_sensitive: default_case_sensitive(),
+        case_sensitive: Some(!cfg!(any(target_os = "windows", target_os = "macos"))),
         max_content_search_file_bytes: DEFAULT_MAX_CONTENT_SEARCH_FILE_BYTES,
     }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn each_directory_owns_its_existing_filename_spelling() {
+    let root = tempdir().unwrap();
+    let directory = root.path();
+    write(directory.join("LETTER"), "x").unwrap();
+    write(directory.join("lETTER"), "y").unwrap();
+    assert!(filesystem_case_sensitive(directory).unwrap());
+    assert_eq!(
+        filesystem_casing::compare(directory, "LETTER", "lETTER"),
+        Some(true)
+    );
+    assert_eq!(
+        filesystem_casing::compare(directory, "LETTER", "LETTER"),
+        Some(false)
+    );
+    fs::hard_link(directory.join("LETTER"), directory.join("other")).unwrap();
+    assert_eq!(
+        filesystem_casing::compare(directory, "LETTER", "other"),
+        None
+    );
+    assert_eq!(
+        filesystem_casing::compare(directory, "absent", "other"),
+        None
+    );
+    assert_eq!(
+        filesystem_casing::compare(directory, "LETTER", "missing"),
+        Some(true)
+    );
+    assert_eq!(
+        filesystem_casing::compare(directory, "LETTER", "other/file"),
+        None
+    );
 }
 
 #[test]
@@ -192,9 +249,9 @@ fn scan_excludes_sensitive_names_using_filesystem_case_policy() {
         write(directory.path().join(name), "harmless search fixture").unwrap();
     }
     let mut input = params(directory.path());
-    input.case_sensitive = false;
+    input.case_sensitive = Some(false);
     input.respect_git_ignore = false;
-    let policy = IndexPolicy::from(&input);
+    let policy = fixture_policy(&input);
     let result = scan_paths(directory.path(), &policy, None, &AtomicBool::new(false)).unwrap();
     assert_eq!(result.paths, vec![".ENV.EXAMPLE", "public.txt"]);
     assert!(policy.excludes(".GIT/config"));
@@ -207,7 +264,7 @@ fn private_root_does_not_scan_watch_or_admit_paths() {
     write(directory.path().join("record.json"), "private").unwrap();
     let mut options = params(directory.path());
     options.exclude_root = true;
-    let policy = IndexPolicy::from(&options);
+    let policy = fixture_policy(&options);
     assert!(policy.excludes("record.json"));
     let mut service = ContextIndexService::new();
     assert_eq!(service.initialize(options).unwrap().file_count, 0);
@@ -250,7 +307,7 @@ fn excluded_paths_require_normalized_project_relative_paths() {
     ] {
         let mut configuration = params(directory.path());
         configuration.excluded_paths = vec![invalid.to_owned()];
-        let error = IndexPolicy::from(&configuration)
+        let error = fixture_policy(&configuration)
             .validate()
             .expect_err("invalid excluded path should be rejected");
         assert_eq!(error.code, "INVALID_REQUEST", "accepted {invalid:?}");
@@ -259,7 +316,7 @@ fn excluded_paths_require_normalized_project_relative_paths() {
 
     let mut configuration = params(directory.path());
     configuration.excluded_paths = vec!["src/generated".to_owned(), "docs/private.md".to_owned()];
-    IndexPolicy::from(&configuration)
+    fixture_policy(&configuration)
         .validate()
         .expect("normalized excluded paths should be accepted");
 }
@@ -269,7 +326,7 @@ fn excluded_paths_match_exact_paths_and_descendants_at_component_boundaries() {
     let directory = tempdir().expect("temporary directory should exist");
     let mut configuration = params(directory.path());
     configuration.excluded_paths = vec!["src/generated".to_owned(), "docs/private.md".to_owned()];
-    let policy = IndexPolicy::from(&configuration);
+    let policy = fixture_policy(&configuration);
 
     assert!(policy.excludes("src/generated"));
     assert!(policy.excludes("src/generated/client/api.ts"));
@@ -281,10 +338,10 @@ fn excluded_paths_match_exact_paths_and_descendants_at_component_boundaries() {
 #[test]
 fn excluded_paths_change_the_cache_policy_fingerprint() {
     let directory = tempdir().expect("temporary directory should exist");
-    let baseline = IndexPolicy::from(&params(directory.path()));
+    let baseline = fixture_policy(&params(directory.path()));
     let mut configuration = params(directory.path());
     configuration.excluded_paths = vec!["src/generated".to_owned()];
-    let excluded = IndexPolicy::from(&configuration);
+    let excluded = fixture_policy(&configuration);
 
     assert_ne!(
         cache::policy_fingerprint(&baseline).expect("baseline policy should hash"),
@@ -309,7 +366,7 @@ fn scan_prunes_excluded_files_and_subtrees() {
     write(directory.path().join("docs/public.md"), "").expect("included file fixture should write");
     let mut configuration = params(directory.path());
     configuration.excluded_paths = vec!["src/generated".to_owned(), "docs/private.md".to_owned()];
-    let policy = IndexPolicy::from(&configuration);
+    let policy = fixture_policy(&configuration);
 
     let result = scan_paths(directory.path(), &policy, None, &AtomicBool::new(false))
         .expect("scan should complete");
@@ -330,7 +387,7 @@ fn watcher_ignores_events_inside_excluded_subtrees() {
     let known = RwLock::new(BTreeSet::new());
     let mut configuration = params(directory.path());
     configuration.excluded_paths = vec!["src/generated".to_owned()];
-    let policy = IndexPolicy::from(&configuration);
+    let policy = fixture_policy(&configuration);
     let event = Event {
         kind: EventKind::Create(CreateKind::File),
         paths: vec![path],
@@ -362,7 +419,7 @@ fn scan_respects_project_and_sensitive_file_exclusions() {
     write(directory.path().join(".env"), "SECRET=1").expect("secret fixture should write");
     write(directory.path().join(".env.example"), "SECRET=").expect("allowed fixture should write");
 
-    let policy = IndexPolicy::from(&params(directory.path()));
+    let policy = fixture_policy(&params(directory.path()));
     let result = scan_paths(directory.path(), &policy, None, &AtomicBool::new(false))
         .expect("scan should complete");
 
@@ -379,13 +436,13 @@ fn scan_respects_gitignore_and_can_disable_it() {
     write(directory.path().join("generated/output.ts"), "")
         .expect("generated fixture should write");
 
-    let respected = IndexPolicy::from(&params(directory.path()));
+    let respected = fixture_policy(&params(directory.path()));
     let respected_paths = scan_paths(directory.path(), &respected, None, &AtomicBool::new(false))
         .expect("scan should complete")
         .paths;
     let mut disabled_params = params(directory.path());
     disabled_params.respect_git_ignore = false;
-    let disabled = IndexPolicy::from(&disabled_params);
+    let disabled = fixture_policy(&disabled_params);
     let disabled_paths = scan_paths(directory.path(), &disabled, None, &AtomicBool::new(false))
         .expect("scan should complete")
         .paths;
@@ -451,7 +508,7 @@ fn editor_paths_use_catalog_spelling_and_preserve_case_and_exclusion_policy() {
         write(directory.path().join("src/Café.ts"), "text").unwrap();
         write(directory.path().join(".env"), "secret").unwrap();
         let mut configuration = params(directory.path());
-        configuration.case_sensitive = case_sensitive;
+        configuration.case_sensitive = Some(case_sensitive);
         let mut service = ContextIndexService::new();
         service.initialize(configuration).unwrap();
         let paths = service
@@ -480,7 +537,7 @@ fn service_glob_uses_the_shared_filtered_path_catalog() {
     write(directory.path().join("tests/App.test.tsx"), "").expect("fixture should write");
     write(directory.path().join(".env.local"), "SECRET=1").expect("sensitive fixture should write");
     let mut configuration = params(directory.path());
-    configuration.case_sensitive = true;
+    configuration.case_sensitive = Some(true);
     let mut service = ContextIndexService::new();
     service
         .initialize(configuration)
@@ -551,7 +608,7 @@ fn content_changes_do_not_require_a_path_reconcile() {
     let path = directory.path().join("src.ts");
     write(&path, "before").expect("fixture should write");
     let known = RwLock::new(BTreeSet::from(["src.ts".to_owned()]));
-    let policy = IndexPolicy::from(&params(directory.path()));
+    let policy = fixture_policy(&params(directory.path()));
     let event = Event {
         kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
         paths: vec![path],
@@ -573,7 +630,7 @@ fn ignore_file_content_changes_require_a_reconcile() {
     let path = directory.path().join(".gitignore");
     write(&path, "generated/\n").expect("fixture should write");
     let known = RwLock::new(BTreeSet::new());
-    let policy = IndexPolicy::from(&params(directory.path()));
+    let policy = fixture_policy(&params(directory.path()));
     let event = Event {
         kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
         paths: vec![path],
@@ -632,7 +689,7 @@ fn search_params(query: &str, limit: u32, generation: u64) -> SearchParams {
 
 fn monitor_state(root: &Path, stop: &Arc<AtomicBool>) -> MonitorState {
     let root = fs::canonicalize(root).expect("root should canonicalize");
-    let policy = IndexPolicy::from(&params(&root));
+    let policy = fixture_policy(&params(&root));
     MonitorState {
         root_text: root.to_string_lossy().into_owned(),
         root,
@@ -671,7 +728,7 @@ fn index_policies_require_positive_limits_and_plain_names() {
     let errors = [without_files, nested_name, empty_name, windows_name]
         .iter()
         .map(|configuration| {
-            IndexPolicy::from(configuration)
+            fixture_policy(configuration)
                 .validate()
                 .expect_err("policy should be rejected")
                 .message
@@ -806,7 +863,7 @@ fn initialization_rebuilds_unusable_caches_and_tolerates_unwritable_cache_locati
     assert_eq!(rebuilt.file_count, 1);
     assert!(!uncached.from_cache);
     assert_eq!(uncached.file_count, 1);
-    let policy = IndexPolicy::from(&params(directory.path()));
+    let policy = fixture_policy(&params(directory.path()));
     let reloaded = cache::load(
         &corrupt_cache,
         &rebuilt.root,
@@ -958,7 +1015,7 @@ fn refresh_rescans_the_project_and_rewrites_the_cache() {
     assert!(!refreshed.from_cache);
     assert!(!refreshed.truncated);
     assert_eq!(refreshed.root, status.root);
-    let policy = IndexPolicy::from(&params(directory.path()));
+    let policy = fixture_policy(&params(directory.path()));
     let cached = cache::load(
         &cache_path,
         &status.root,
@@ -1203,7 +1260,7 @@ fn watch_events_require_reconciliation_only_for_catalog_changes() {
     std::os::unix::fs::symlink(root.join("file.txt"), root.join("link.txt"))
         .expect("symlink should be created");
     let cache_path = root.join("index.bin");
-    let policy = IndexPolicy::from(&params(&root));
+    let policy = fixture_policy(&params(&root));
     let known = RwLock::new(BTreeSet::from([
         "deleted.ts".to_owned(),
         "removed/inner.ts".to_owned(),
@@ -1246,7 +1303,7 @@ fn watch_events_require_reconciliation_when_known_paths_are_unreadable() {
     let directory = tempdir().expect("temporary directory should exist");
     let known = Arc::new(RwLock::new(BTreeSet::new()));
     poison_known_paths(Arc::clone(&known));
-    let policy = IndexPolicy::from(&params(directory.path()));
+    let policy = fixture_policy(&params(directory.path()));
 
     assert!(event_requires_reconcile(
         &event(EventKind::Any, vec![directory.path().join("a.ts")]),
@@ -1287,14 +1344,14 @@ fn scans_stop_when_cancelled_and_truncate_at_the_file_limit() {
     write(directory.path().join("b.ts"), "").expect("fixture should write");
     let mut limited = params(directory.path());
     limited.max_files = 1;
-    let policy = IndexPolicy::from(&params(directory.path()));
+    let policy = fixture_policy(&params(directory.path()));
 
     let cancelled = scan_paths(directory.path(), &policy, None, &AtomicBool::new(true))
         .err()
         .map(|error| (error.code, error.message));
     let truncated = scan_paths(
         directory.path(),
-        &IndexPolicy::from(&limited),
+        &fixture_policy(&limited),
         None,
         &AtomicBool::new(false),
     )
@@ -1319,7 +1376,7 @@ fn scans_skip_cache_artifacts_and_find_nothing_under_missing_or_file_roots() {
     write(root.join("sub/kept.ts"), "").expect("fixture should write");
     let cache_path = root.join("index.bin");
     write(&cache_path, "").expect("cache fixture should write");
-    let policy = IndexPolicy::from(&params(&root));
+    let policy = fixture_policy(&params(&root));
 
     let scanned = scan_paths(&root, &policy, Some(&cache_path), &AtomicBool::new(false))
         .expect("scan should complete");
@@ -1603,7 +1660,7 @@ fn direct_root_globs_observe_current_children_and_ignore_policy_with_a_truncated
     write(root.path().join("nested/AGENTS.md"), "nested").unwrap();
     let mut config = params(root.path());
     config.max_files = 1;
-    config.case_sensitive = false;
+    config.case_sensitive = Some(false);
     let mut service = ContextIndexService::new();
     assert!(service.initialize(config).unwrap().truncated);
     let direct = |pattern: &str| {

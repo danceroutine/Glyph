@@ -42,3 +42,21 @@ it('matches relative patterns under the same physical scope through every attach
   expect(paths.relativeToScope('inner', 'outer/sub')).toBe('');
   expect(paths.contains('inner/src', 'outer/sub/docs')).toBe(false);
 });
+
+it('resolves old physical rule IDs only when the current filesystem identifies a single source', async () => {
+  const { WorkspaceSourceRoutes } = await import('#src/workspace/WorkspaceSourceRoutes.js');
+  const { resolveInstructionId } = await import('#src/instructions/resolveInstructionId.js');
+  const { AgentInstructionSourceKind } = await import('#src/instructions/AgentInstructionSource.js');
+  const routes = new WorkspaceSourceRoutes([{ name: 'root', path: '/physical' }]);
+  const kind = AgentInstructionSourceKind.GLYPH_PROJECT_RULE;
+  const paths = new InstructionPaths(true, routes, true);
+  const upper = paths.sourceIdentity(kind, 'API.mdc');
+  const lower = paths.sourceIdentity(kind, 'api.mdc');
+  const old = new InstructionPaths(false, routes, true).sourceIdentity(kind, 'API.mdc').id;
+  expect(upper.id).not.toBe(lower.id);
+  expect(resolveInstructionId([upper, lower], old)).toBeUndefined();
+  expect(resolveInstructionId([upper], old)).toBe(upper);
+  expect(resolveInstructionId([upper, lower], lower.id)).toBe(lower);
+  expect(new InstructionPaths(true, routes, false).sourceIdentity(kind, 'api.mdc').id).toBe(old);
+  expect(new InstructionPaths(false, routes, false).sourceIdentity(kind, 'API.mdc').id).toBe(old);
+});

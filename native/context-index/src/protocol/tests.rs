@@ -330,6 +330,7 @@ fn decodes_each_method_and_rejects_invalid_parameters_with_the_request_id() {
         "initialize",
         "search",
         "assertReplaceableMetadata",
+        "filesystemCaseSensitive",
         "filterPaths",
         "listDirectories",
         "glob",
@@ -1028,6 +1029,7 @@ fn checks_direct_file_replacement_metadata_through_the_protocol() {
     let project = project_with_needle();
     let (sender, responses, worker) = start_service(0, Default::default());
     for (id, req, expected) in [
+        (0, decode_request(serde_json::json!({"version":1,"id":0,"method":"filesystemCaseSensitive","params":project.path()}).to_string().as_bytes()).unwrap().request, true),
         (1, Request::AssertReplaceableMetadata("notes.txt".into()), false),
         (2, initialize_request(project.path()), true),
         (3, Request::AssertReplaceableMetadata("../notes.txt".into()), false),

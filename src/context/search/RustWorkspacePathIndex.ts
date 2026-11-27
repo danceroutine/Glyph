@@ -25,6 +25,7 @@ const PROTOCOL_VERSION = 1;
 const MAXIMUM_ERROR_OUTPUT = 8_192;
 
 enum PathIndexMethod {
+  FILESYSTEM_CASE_SENSITIVE = 'filesystemCaseSensitive',
   INITIALIZE = 'initialize',
   SEARCH = 'search',
   GLOB = 'glob',
@@ -166,6 +167,20 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
       cachePath: parsed.cachePath === null ? null : resolve(parsed.cachePath),
     };
     this.processFactory = processFactory;
+  }
+
+  /** Query filesystem metadata before projecting exclusions or constructing an editor-backed store. */
+  static async filesystemCaseSensitive(
+    binaryPath: string,
+    root: string,
+    processFactory: ProcessFactory = startProcess,
+  ): Promise<boolean> {
+    const probe = new RustWorkspacePathIndex({ binaryPath, root, caseSensitive: true }, processFactory);
+    try {
+      return z.boolean().parse(await probe.request(PathIndexMethod.FILESYSTEM_CASE_SENSITIVE, root));
+    } finally {
+      await probe.dispose();
+    }
   }
 
   async initialize(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
