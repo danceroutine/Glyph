@@ -53,6 +53,7 @@ beforeAll(async () => {
           builder.onResolve({ filter: /^#vs\// }, args => {
             if (
               args.path.startsWith('#vs/base/') ||
+              args.path === '#vs/platform/glyph/workspace/FilesystemNamePolicy.js' ||
               args.path.startsWith('#vs/platform/uriIdentity/') ||
               args.path === '#vs/platform/files/common/files.js' ||
               args.path === '#vs/workbench/services/textfile/common/textfiles.js'

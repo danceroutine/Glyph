@@ -54,7 +54,11 @@ export function createCatalogWorkspace(
         stat(fileURLToPath(snapshot.uri), { bigint: true }),
         stat(join(disk.root, path), { bigint: true }),
       ]);
-      if (modelFile.dev !== sourceFile.dev || modelFile.ino !== sourceFile.ino)
+      if (
+        modelFile.dev !== sourceFile.dev ||
+        modelFile.ino !== sourceFile.ino ||
+        `${Number(sourceFile.dev)}:${Number(sourceFile.ino)}` !== after.identity
+      )
         throw new Error('The dirty editor model belongs to a different instruction file.');
       return {
         ...after,
