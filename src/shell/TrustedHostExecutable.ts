@@ -2,7 +2,7 @@ import { resolveAvailableIdentity } from './ShellRuntimePathPolicy.ts';
 import { accessSync, constants, realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, sep } from 'node:path';
 
-export type HostExecutable = 'git' | 'sh' | 'node' | 'python3';
+export type HostExecutable = 'git' | 'sh' | 'ssh' | 'node' | 'python3';
 
 function contains(root: string, path: string): boolean {
   const suffix = relative(root, path);
@@ -24,7 +24,9 @@ export function trustedHostExecutable(name: HostExecutable, workspaceRoots: read
     process.platform === 'win32'
       ? name === 'git'
         ? ['C:\\Program Files\\Git\\cmd\\git.exe']
-        : []
+        : name === 'ssh'
+          ? ['C:\\Windows\\System32\\OpenSSH\\ssh.exe']
+          : []
       : [
           ...(name === 'node' && basename(process.execPath) === 'node' ? [process.execPath] : []),
           ...(name === 'sh' ? ['/bin/sh'] : []),

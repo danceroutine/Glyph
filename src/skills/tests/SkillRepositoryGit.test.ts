@@ -1,5 +1,5 @@
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { it, expect, vi, onTestFinished } from 'vitest';
@@ -18,6 +18,21 @@ async function fixture() {
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
+it('rechecks frozen configuration authority when a peer attaches its dotfiles checkout', async () => {
+  const root = await fixture();
+  const preview = join(root, 'preview');
+  const dotfiles = join(root, 'dotfiles');
+  await mkdir(preview);
+  await mkdir(dotfiles);
+  const config = join(dotfiles, 'git.config');
+  await writeFile(config, '[user]\nname = Host identity\n');
+  vi.stubEnv('GIT_CONFIG_GLOBAL', config);
+  let roots: string[] = [];
+  const transport = new SkillRepositoryGit(preview, new AbortController().signal, () => roots, testFilesystemMetadata);
+  expect((await transport.run(['--version'])).toString()).toContain('git version');
+  roots = [dotfiles];
+  await expect(transport.run(['--version'])).rejects.toThrow('outside writable workspaces');
+});
 it('rejects a repository object store over budget before starting another object fetch', async () => {
   const root = await fixture();
   await writeFile(join(root, 'objects.pack'), Buffer.alloc(32 * 1024 * 1024 + 1));

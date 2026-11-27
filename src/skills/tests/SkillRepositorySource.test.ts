@@ -26,6 +26,28 @@ function repository(entries = '100644 blob abc\tSKILL.md\0', blob = manifest) {
   });
 }
 describe('Repository package source boundary', () => {
+  it('consults current host-wide roots when opening a repository preview', async () => {
+    repository();
+    const roots = vi.fn(() => []);
+    const sourceReader = new SkillPackageSourceReader('unused', [], testFilesystemMetadata, roots);
+    expect((await sourceReader.read(source)).name).toBe('example');
+    expect(roots).toHaveBeenCalled();
+  });
+  it('derives the same root package name when the repository URL has trailing slashes', async () => {
+    repository();
+    expect((await reader.read({ ...source, url: source.url + '//' })).name).toBe('example');
+  });
+  it('rejects a tree pathname that cannot round-trip through UTF-8 before capturing any resource', async () => {
+    repository();
+    const run = git.getMockImplementation()!;
+    git.mockImplementation(async (args, maxOutput) =>
+      args.includes('ls-tree')
+        ? Buffer.concat([Buffer.from('100644 blob abc\tasset-'), Buffer.from([0xff]), Buffer.from('\0')])
+        : run(args, maxOutput),
+    );
+    await expect(reader.read(source)).rejects.toThrow('Repository paths must use valid UTF-8');
+    expect(git.mock.calls.some(([args]) => args.includes('cat-file'))).toBe(false);
+  });
   it('pins a root package to the resolved commit and bounds every Git subprocess', async () => {
     repository();
     const signal = new AbortController().signal;

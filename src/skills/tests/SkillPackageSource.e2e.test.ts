@@ -14,6 +14,15 @@ const manifest = '---\nname: example\ndescription: Example workflow\n---\nPinned
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'glyph-skill-source-'));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const home = join(root, 'home');
+  await mkdir(home);
+  const config = join(home, 'git.config');
+  await writeFile(config, '');
+  vi.stubEnv('HOME', home);
+  vi.stubEnv('XDG_CONFIG_HOME', undefined);
+  vi.stubEnv('GIT_CONFIG_GLOBAL', config);
+  vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+  onTestFinished(() => vi.unstubAllEnvs());
   const directory = join(root, 'example');
   await mkdir(directory);
   await writeFile(join(directory, 'SKILL.md'), manifest);
@@ -25,6 +34,50 @@ async function fixture() {
   return { root, directory, reader };
 }
 describe(SkillPackageSourceReader, () => {
+  it('rejects a real non-UTF-8 Git tree and accepts the repaired root package through a trailing-slash URL', async () => {
+    const { root, reader } = await fixture();
+    const repository = join(root, 'source.git');
+    const git = (args: string[], input?: Buffer) =>
+      execFileSync(
+        'git',
+        ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', ...args],
+        { cwd: root, ...(input ? { input } : {}) },
+      );
+    git(['init', '--bare', repository]);
+    const object = (bytes: Buffer) =>
+      git(['--git-dir=' + repository, 'hash-object', '-w', '--stdin'], bytes)
+        .toString()
+        .trim();
+    const manifestId = object(Buffer.from(manifest));
+    const assetId = object(Buffer.from([0xa5]));
+    const tree = (path: Buffer) =>
+      git(
+        ['--git-dir=' + repository, 'mktree', '-z'],
+        Buffer.concat([
+          Buffer.from(`100644 blob ${manifestId}\tSKILL.md\0`),
+          Buffer.from(`100644 blob ${assetId}\t`),
+          path,
+          Buffer.from('\0'),
+        ]),
+      )
+        .toString()
+        .trim();
+    const commit = (path: Buffer) =>
+      git(['--git-dir=' + repository, 'commit-tree', tree(path), '-m', 'fixture'])
+        .toString()
+        .trim();
+    const source = { kind: 'repository' as const, url: 'https://skills.invalid/example.git/', directory: '' };
+    await writeFile(
+      process.env.GIT_CONFIG_GLOBAL!,
+      `[url "file://${repository}"]\ninsteadOf = https://skills.invalid/example.git\n`,
+    );
+    await expect(reader.read({ ...source, revision: commit(Buffer.from([0x61, 0xff])) })).rejects.toThrow(
+      'valid UTF-8',
+    );
+    const draft = await reader.read({ ...source, revision: commit(Buffer.from('asset.bin')) });
+    expect(draft.name).toBe('example');
+    expect(draft.files().get('asset.bin')).toEqual(Uint8Array.from([0xa5]));
+  });
   it('uses the Rust index for selected local packages and preserves binary resource bytes', async () => {
     const { directory, reader } = await fixture();
     await mkdir(join(directory, 'assets'));

@@ -860,6 +860,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               indexExecutable,
               roots.map(workspaceRoot => workspaceRoot.path),
               filesystemMetadata,
+              input.hostWorkspaceRoots,
             ),
           }
         : {}),

@@ -9,20 +9,20 @@ const parser = vi.hoisted(() => ({ replies: [] as (string | Error)[] }));
 vi.mock('node:child_process', () => ({
   execFile: (
     _path: string,
-    _args: string[],
+    args: string[],
     _options: unknown,
     callback: (error: Error | null, output: Buffer) => void,
-  ) => ({
-    stdin: {
-      end: () => {
-        const next = parser.replies.shift()!;
-        queueMicrotask(() => {
-          if (next instanceof Error) callback(next, Buffer.alloc(0));
-          else callback(null, Buffer.from(next));
-        });
-      },
-    },
-  }),
+  ) => {
+    const complete = () => {
+      const next = parser.replies.shift()!;
+      queueMicrotask(() => {
+        if (next instanceof Error) callback(next, Buffer.alloc(0));
+        else callback(null, Buffer.from(next));
+      });
+    };
+    if (args.includes('--exec-path')) complete();
+    return { stdin: { end: complete } };
+  },
 }));
 vi.mock('#src/shell/TrustedHostExecutable.js', async importOriginal => ({
   ...(await importOriginal<typeof import('#src/shell/TrustedHostExecutable.js')>()),
@@ -72,4 +72,11 @@ it('disables the system configuration explicitly on Windows too', async () => {
   Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
   parser.replies.push('');
   expect(await f.capture()).toMatchObject({ GIT_CONFIG_SYSTEM: 'NUL', GIT_CONFIG_NOSYSTEM: '1' });
+});
+
+it('stops capture when Git cannot resolve its credential helper installation', async () => {
+  const f = await fixture('[credential]\nhelper = store\n');
+  const value = 'credential.helper\nstore\0';
+  parser.replies.push(`global\0file:${f.config}\0${value}`, value, new Error('Git installation unavailable'));
+  await expect(f.capture()).rejects.toThrow('Git installation unavailable');
 });

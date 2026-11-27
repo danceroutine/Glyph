@@ -196,6 +196,10 @@ describe(GlyphDesktopHost, () => {
       trusted: true,
     });
     const destination = join(await realpath(root), '.glyph/skills/example');
+    const hostRoots = (
+      fixture.factory.create.mock.calls[0]![0] as Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0]
+    ).hostWorkspaceRoots!;
+    expect(hostRoots()).toEqual(expect.arrayContaining([root, alias, await realpath(root)]));
     expect(fixture.host.trustedSkillEditors(owner, destination)).toEqual([
       {
         identity: peer,
@@ -205,6 +209,7 @@ describe(GlyphDesktopHost, () => {
     ]);
     expect(fixture.host.trustedSkillEditors(owner, join(parent, 'outside'))).toEqual([]);
     await rm(alias);
+    expect(hostRoots()).toEqual(expect.arrayContaining([root, alias]));
     expect(() => fixture.host.trustedSkillEditors(owner, destination)).toThrow('unavailable project root');
     await symlink(root, alias);
     await fixture.host.disconnect('peer');

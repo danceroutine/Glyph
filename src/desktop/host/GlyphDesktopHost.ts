@@ -362,6 +362,18 @@ export class GlyphDesktopHost {
             identity: connection.identity,
             roots: command.roots,
             trusted: command.trusted,
+            hostWorkspaceRoots: () => {
+              const roots = new Set<string>();
+              for (const peer of this.sessions.values()) {
+                for (const root of peer.roots) {
+                  roots.add(root.canonicalPath);
+                  for (const observed of peer.physicalRoots.get(root)!) roots.add(observed);
+                  const current = physicalRoot(root);
+                  if (current !== undefined) roots.add(current);
+                }
+              }
+              return [...roots];
+            },
             emit: event => {
               this.broadcast(key, event);
             },

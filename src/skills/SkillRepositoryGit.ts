@@ -1,6 +1,8 @@
-import { repositoryEnvironment, trustedHostExecutable } from '#src/shell/TrustedHostExecutable.js';
+import { repositoryEnvironment } from '#src/shell/TrustedHostExecutable.js';
 import { captureRepositoryEnvironment } from './SkillRepositoryConfiguration.ts';
+import { SkillRepositoryAuthority, type RepositoryWorkspaceRoots } from './SkillRepositoryAuthority.ts';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
+import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 import { spawn } from 'node:child_process';
 import { readdir, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -35,15 +37,19 @@ async function storageBytes(root: string): Promise<number> {
 /** Git transport, lazy object reads, and their helper processes share one deadline and storage budget. */
 export class SkillRepositoryGit {
   private environment?: Promise<NodeJS.ProcessEnv>;
+  private readonly authority: SkillRepositoryAuthority;
   constructor(
     private readonly cwd: string,
     private readonly signal: AbortSignal,
-    private readonly workspaceRoots: readonly string[],
-    private readonly metadata: FilesystemMetadata,
-  ) {}
+    workspaceRoots: RepositoryWorkspaceRoots,
+    private readonly metadata: FilesystemMetadata & HostFilesystemAuthority,
+  ) {
+    this.authority = new SkillRepositoryAuthority(workspaceRoots, metadata);
+    this.authority.admit(cwd);
+  }
   async initialize(url: string): Promise<void> {
     const empty = {
-      ...repositoryEnvironment(this.workspaceRoots),
+      ...repositoryEnvironment(this.authority.workspaceRoots),
       GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
       GIT_CONFIG_NOSYSTEM: '1',
     };
@@ -64,6 +70,8 @@ export class SkillRepositoryGit {
       '-c',
       'maintenance.auto=false',
       '-c',
+      'core.fsmonitor=false',
+      '-c',
       'fetch.unpackLimit=1',
       '-c',
       'remote.origin.promisor=true',
@@ -76,20 +84,22 @@ export class SkillRepositoryGit {
     const env =
       initialization ??
       (await (this.environment ??= captureRepositoryEnvironment(
-        this.workspaceRoots,
+        this.authority.workspaceRoots,
         this.cwd,
         this.signal,
         this.metadata,
         args.find(arg => arg.startsWith('--git-dir='))?.slice('--git-dir='.length),
+        this.authority,
       )));
-    const executable = trustedHostExecutable('git', this.workspaceRoots);
+    const executable = this.authority.executable('git');
     const used = await storageBytes(this.cwd);
     // POSIX sh specifies 512-byte blocks. Limit each incoming pack before it can fill the disk between polls.
     const blocks = Math.max(1, Math.floor((maxStorage - used) / 512));
-    const command = windows ? executable : trustedHostExecutable('sh', this.workspaceRoots);
+    const command = windows ? executable : this.authority.executable('sh');
     const argv = windows
       ? gitArgs
       : ['-c', 'ulimit -f "$1" || exit 1; shift; exec "$@"', 'glyph-git', String(blocks), executable, ...gitArgs];
+    await this.authority.validate();
     const result = await new Promise<Buffer>((accept, reject) => {
       const child = spawn(command, argv, {
         cwd: this.cwd,

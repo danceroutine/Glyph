@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
@@ -41,7 +41,7 @@ it('pins trusted include values, repeated values, bare booleans and escaped subs
   await writeFile(f.global, '[include]\npath = included.config\n[user]\nname = Trusted user\n[fetch]\nprune\n');
   await writeFile(
     included,
-    '[credential]\nhelper = first\nhelper = second\n[url "https://trusted.invalid/a"]\ninsteadOf = "https://example.invalid/\\t\\n\\b\\\\\\\""\n',
+    '[credential]\nhelper = store\nhelper = cache\n[url "https://trusted.invalid/a"]\ninsteadOf = "https://example.invalid/\\t\\n\\b\\\\\\\""\n',
   );
   const environment = await f.capture();
   const git = (...args: string[]) =>
@@ -50,7 +50,9 @@ it('pins trusted include values, repeated values, bare booleans and escaped subs
       env: environment,
       encoding: 'utf8',
     });
-  expect(git('--get-all', 'credential.helper')).toBe('first\nsecond\n');
+  expect(git('--get-all', 'credential.helper')).toMatch(
+    /^!exec '[^\n]+git-credential-store'\n!exec '[^\n]+git-credential-cache'\n$/u,
+  );
   expect(git('--bool', '--get', 'fetch.prune')).toBe('true\n');
   expect(git('--get', 'user.name')).toBe('Trusted user\n');
   expect(git('--get', 'url.https://trusted.invalid/a.insteadOf')).toBe('https://example.invalid/\t\n\b\\"\n');
@@ -66,6 +68,7 @@ it('keeps an empty configuration private and propagates cancellation and metadat
   expect(await readFile(environment.GIT_CONFIG_GLOBAL!, 'utf8')).toBe('');
   await expect(
     captureRepositoryEnvironment([f.project], f.preview, new AbortController().signal, {
+      assertHostPaths: async () => {},
       inspect: async () => {
         throw new Error('Inherited ACL');
       },
@@ -116,4 +119,59 @@ it('rejects settings whose bytes cannot round-trip through a UTF-8 configuration
   const f = await fixture();
   await writeFile(f.global, Buffer.concat([Buffer.from('[user]\nname = '), Buffer.from([0xff]), Buffer.from('\n')]));
   await expect(f.capture()).rejects.toThrow(/utf-8/iu);
+});
+
+it('uses an admitted absolute helper without evaluating its filename as shell syntax', async () => {
+  const f = await fixture();
+  const helper = join(f.home, "host'helper");
+  await writeFile(helper, "#!/bin/sh\nprintf 'username=fixture\\npassword=fixture\\n'\n");
+  await chmod(helper, 0o700);
+  await writeFile(f.global, `[credential]\nhelper = ${helper}\n`);
+  const env = await f.capture();
+  expect(
+    execFileSync(trustedHostExecutable('git', []), ['credential', 'fill'], {
+      cwd: f.preview,
+      env,
+      input: 'protocol=https\nhost=fixture.invalid\n\n',
+      encoding: 'utf8',
+    }),
+  ).toContain('username=fixture\npassword=fixture');
+});
+
+it('refuses workspace-controlled helpers and shell fragments before transport can execute them', async () => {
+  const f = await fixture();
+  const helper = join(f.project, 'helper');
+  await writeFile(helper, '#!/bin/sh\nexit 0\n');
+  await chmod(helper, 0o700);
+  await writeFile(f.global, `[credential]\nhelper = ${helper}\n`);
+  await expect(f.capture()).rejects.toThrow('outside writable workspaces');
+  for (const value of ['!echo unreviewed', 'store --file credentials']) {
+    await writeFile(f.global, `[credential]\nhelper = ${value}\n`);
+    await expect(f.capture()).rejects.toThrow('without arguments');
+  }
+  await writeFile(f.global, `[credential]\nhelper = ${f.home}\n`);
+  await expect(f.capture()).rejects.toThrow('executable file');
+});
+
+it('retains credential reset entries and blocks command-valued transport overrides', async () => {
+  const f = await fixture();
+  await writeFile(f.global, '[credential]\nhelper =\n');
+  const env = await f.capture();
+  expect(
+    execFileSync(trustedHostExecutable('git', []), ['config', '--get-all', 'credential.helper'], {
+      cwd: f.preview,
+      env,
+      encoding: 'utf8',
+    }),
+  ).toBe('\n');
+  for (const [section, key] of [
+    ['core', 'sshCommand'],
+    ['core', 'gitProxy'],
+    ['core', 'askPass'],
+    ['remote "origin"', 'uploadpack'],
+    ['remote "origin"', 'proxy'],
+  ]) {
+    await writeFile(f.global, `[${section}]\n${key} = arbitrary-command\n`);
+    await expect(f.capture()).rejects.toThrow('command-valued Git transport');
+  }
 });

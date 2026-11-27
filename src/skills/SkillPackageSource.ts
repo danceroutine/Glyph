@@ -11,6 +11,8 @@ import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspace
 import { SkillPackageDraft } from './SkillPackageDraft.ts';
 import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
+import type { RepositoryWorkspaceRoots } from './SkillRepositoryAuthority.ts';
+import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 
 export const skillPackageSourceSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('local'), path: z.string().min(1) }).strict(),
@@ -28,8 +30,9 @@ export type SkillPackageSource = z.infer<typeof skillPackageSourceSchema>;
 export class SkillPackageSourceReader {
   constructor(
     private readonly binaryPath: string,
-    private readonly workspaceRoots: readonly string[],
-    private readonly metadata: FilesystemMetadata,
+    workspaceRoots: readonly string[],
+    private readonly metadata: FilesystemMetadata & HostFilesystemAuthority,
+    private readonly hostWorkspaceRoots: RepositoryWorkspaceRoots = workspaceRoots,
   ) {}
   async read(input: SkillPackageSource, signal?: AbortSignal): Promise<SkillPackageDraft> {
     const source = skillPackageSourceSchema.parse(input);
@@ -98,7 +101,9 @@ export class SkillPackageSourceReader {
       throw new Error('Repository package directory must be relative.');
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/u.test(source.revision) || source.revision.includes('..'))
       throw new Error('Select a commit, branch or tag.');
-    const temporary = await mkdtemp(join(outsideWorkspace(tmpdir(), this.workspaceRoots), 'glyph-skill-repository-'));
+    const currentRoots =
+      typeof this.hostWorkspaceRoots === 'function' ? this.hostWorkspaceRoots() : this.hostWorkspaceRoots;
+    const temporary = await mkdtemp(join(outsideWorkspace(tmpdir(), currentRoots), 'glyph-skill-repository-'));
     const deadline = AbortSignal.timeout(60_000);
     try {
       await inspectPrivateDirectory(this.metadata, temporary);
@@ -108,10 +113,19 @@ export class SkillPackageSourceReader {
       const transport = new SkillRepositoryGit(
         storage,
         signal ? AbortSignal.any([signal, deadline]) : deadline,
-        this.workspaceRoots,
+        this.hostWorkspaceRoots,
         this.metadata,
       );
-      const git = async (...args: string[]) => (await transport.run(args)).toString('utf8');
+      const git = async (...args: string[]) => {
+        const bytes = await transport.run(args);
+        try {
+          return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+        } catch {
+          throw new Error(
+            'Repository paths must use valid UTF-8. Rename the affected file before importing the skill.',
+          );
+        }
+      };
       await transport.initialize(source.url);
       await git(
         '--git-dir=source.git',
@@ -155,7 +169,7 @@ export class SkillPackageSourceReader {
         });
       }
       return new SkillPackageDraft({
-        name: basename(source.directory || source.url.replace(/\.git$/u, '')),
+        name: basename(source.directory || url.pathname.replace(/\/+$/u, '').replace(/\.git$/u, '')),
         source: `Requested repository ${source.url}@${revision}${source.directory ? `:${source.directory}` : ''}`,
         files,
         directories,

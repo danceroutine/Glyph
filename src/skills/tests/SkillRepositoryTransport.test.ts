@@ -11,6 +11,7 @@ const io = vi.hoisted(() => ({
 }));
 vi.mock('node:fs/promises', () => ({ readdir: io.list, lstat: io.stat }));
 vi.mock('#src/shell/TrustedHostExecutable.js', () => ({
+  outsideWorkspace: (path: string) => path,
   trustedHostExecutable: (name: string) => '/usr/bin/' + name,
   repositoryEnvironment: () => ({}),
 }));
