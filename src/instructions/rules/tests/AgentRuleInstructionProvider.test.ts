@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
@@ -64,7 +65,7 @@ describe(AgentRuleInstructionProvider, () => {
       ok: true,
       snapshot: {
         path,
-        uri: 'file:///' + path,
+        uri: pathToFileURL(join(root, path)).href,
         text: 'x',
         byteOrderMark: false,
         contentRevision: 'live',
