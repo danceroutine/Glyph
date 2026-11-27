@@ -16,7 +16,7 @@ pub use unix::assert_host_paths;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod unix {
     use super::*;
-    use std::collections::{BTreeSet, VecDeque};
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
     use std::ffi::OsString;
     use std::fs;
     use std::os::unix::fs::MetadataExt;
@@ -32,6 +32,26 @@ mod unix {
     type Id = (u64, u64);
     fn id(meta: &fs::Metadata) -> Id {
         (meta.dev(), meta.ino())
+    }
+
+    fn existing(result: io::Result<fs::Metadata>) -> io::Result<Option<fs::Metadata>> {
+        match result {
+            Ok(meta) => Ok(Some(meta)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn unchanged(before: Option<Id>, after: Option<Id>) -> io::Result<()> {
+        if before == after {
+            Ok(())
+        } else {
+            Err(denied())
+        }
+    }
+
+    fn writable_link(uid: u32, mode: u32, writable: bool) -> bool {
+        uid != 0 || mode & 0o022 != 0 || writable
     }
 
     struct Location {
@@ -52,7 +72,7 @@ mod unix {
             .collect();
         let mut current = PathBuf::new();
         let mut traversed = BTreeSet::new();
-        let mut inodes = BTreeSet::new();
+        let mut observed = BTreeMap::new();
         let mut links = 0;
         while let Some(part) = remaining.pop_front() {
             if part == ".." {
@@ -61,12 +81,11 @@ mod unix {
                 current.push(part);
             }
             traversed.insert(current.clone());
-            let meta = match fs::symlink_metadata(&current) {
-                Ok(meta) => meta,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error),
+            let meta = existing(fs::symlink_metadata(&current))?;
+            observed.insert(current.clone(), meta.as_ref().map(id));
+            let Some(meta) = meta else {
+                continue;
             };
-            inodes.insert(id(&meta));
             if meta.is_symlink() {
                 links += 1;
                 if links > 40 {
@@ -83,17 +102,14 @@ mod unix {
         }
         // Confirm that resolving the caller's spelling still selects the inode we inspected.
         // A future file is admitted only when the same missing suffix is anchored by this trace.
-        let identity = |path: &Path| -> io::Result<Option<fs::Metadata>> {
-            match fs::metadata(path) {
-                Ok(meta) => Ok(Some(meta)),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(error),
-            }
-        };
-        let final_meta = identity(&current)?;
+        let final_meta = existing(fs::metadata(&current))?;
         let final_id = final_meta.as_ref().map(id);
-        if identity(path)?.as_ref().map(id) != final_id {
-            return Err(denied());
+        unchanged(final_id, existing(fs::metadata(path))?.as_ref().map(id))?;
+        for (name, expected) in &observed {
+            unchanged(
+                *expected,
+                existing(fs::symlink_metadata(name))?.as_ref().map(id),
+            )?;
         }
         let directory = final_meta.as_ref().is_some_and(fs::Metadata::is_dir);
         if let Some(meta) = final_meta {
@@ -102,9 +118,11 @@ mod unix {
             if host
                 && meta.is_file()
                 && meta.nlink() > 1
-                && (meta.uid() != 0
-                    || meta.mode() & 0o022 != 0
-                    || rustix::fs::access(&current, rustix::fs::Access::WRITE_OK).is_ok())
+                && writable_link(
+                    meta.uid(),
+                    meta.mode(),
+                    rustix::fs::access(&current, rustix::fs::Access::WRITE_OK).is_ok(),
+                )
             {
                 return Err(denied());
             }
@@ -113,7 +131,7 @@ mod unix {
             path: current,
             identity: final_id,
             traversed,
-            inodes,
+            inodes: observed.into_values().flatten().collect(),
             directory,
         })
     }
@@ -204,7 +222,17 @@ mod unix {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&file, fs::Permissions::from_mode(0o666)).unwrap();
             assert!(check(file).is_err());
-            assert!(assert_host_paths(&[missing.clone()], &[missing]).is_err());
+            assert!(assert_host_paths(
+                std::slice::from_ref(&missing),
+                std::slice::from_ref(&missing)
+            )
+            .is_err());
+            assert!(existing(Err(io::ErrorKind::PermissionDenied.into())).is_err());
+            assert!(unchanged(Some((1, 2)), Some((1, 3))).is_err());
+            assert!(writable_link(0, 0o755, true));
+            assert!(writable_link(0, 0o775, false));
+            assert!(!writable_link(0, 0o755, false));
+            check(PathBuf::from("/bin/sh")).unwrap();
         }
     }
 }

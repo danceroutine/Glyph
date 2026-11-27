@@ -433,7 +433,7 @@ fn seatbelt_policy_is_deny_default_and_preserves_read_only_boundaries() {
         root.join("nested/.git").display()
     )));
     assert!(policy.contains(&format!(
-        "(deny file-read* file-write* (literal \"{}\"))",
+        "(deny file-read* file-write* file-test-existence (subpath \"{}\"))",
         root.join(".env").display()
     )));
     assert!(policy.contains(&format!(

@@ -546,11 +546,59 @@ fn security_private_staging_and_project_package_paths_stay_reserved() {
 
 #[test]
 #[ignore = "requires the host sandbox backend; run with pnpm test:security:native"]
+fn respects_filesystem_identity_for_stored_unicode_reservations() {
+    let fixture = Fixture::new();
+    let stored = fixture.workspace.join("nested/.ſkill-ﬆaging");
+    fs::create_dir_all(&stored).unwrap();
+    let marker = stored.join("record");
+    fs::write(&marker, "fixture record").unwrap();
+    let folded = fixture.workspace.join("nested/.skill-staging").exists();
+    let visible = fixture
+        .run("read-only", r#"test -f "$FILE""#, &[("FILE", &marker)])
+        .status
+        .success();
+    assert_eq!(visible, !folded);
+    let managed = fixture.workspace.join("nested/.glyph/ſKills");
+    fs::create_dir_all(&managed).unwrap();
+    let file = managed.join("sample");
+    fs::write(&file, "fixture record").unwrap();
+    let write = fixture
+        .run(
+            "workspace-write",
+            r#"printf 'I win' > "$FILE""#,
+            &[("FILE", &file)],
+        )
+        .status
+        .success();
+    assert_eq!(
+        write,
+        !fixture.workspace.join("nested/.glyph/skills").exists()
+    );
+}
+
+#[test]
+#[ignore = "requires the host sandbox backend; run with pnpm test:security:native"]
 fn security_running_shell_keeps_existing_and_future_host_files_private() {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::process::Stdio;
     let fixture = Fixture::new();
-    let future = fixture.workspace.join("nested/.skill-staging/transaction");
+    #[cfg(target_os = "macos")]
+    let folded = fixture.workspace.join("folding-probe");
+    #[cfg(target_os = "macos")]
+    fs::write(&folded, "").unwrap();
+    #[cfg(target_os = "macos")]
+    let staging = if fixture.workspace.join("FOLDING-PROBE").exists() {
+        ".ſkill-ﬅaging"
+    } else {
+        ".skill-staging"
+    };
+    #[cfg(target_os = "linux")]
+    let staging = ".skill-staging";
+    let future = fixture
+        .workspace
+        .join("nested")
+        .join(staging)
+        .join("transaction");
     let runtime = fixture.home.join(".cargo/bin");
     fs::create_dir_all(&runtime).unwrap();
     let ordinary = runtime.join("public");
