@@ -353,6 +353,15 @@ describe(GlyphContextController, () => {
     const attachment = { uri: 'glyph-skill:example', path: 'example' };
     await controller.openAttachment(attachment);
     expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(skill.uri);
+    const physical = URI.file('/other/.glyph/skills/example/SKILL.md');
+    services.files.realpath.mockResolvedValueOnce(physical);
+    await expect(controller.openAttachment(attachment)).rejects.toThrow('unavailable');
+    services.files.realpath.mockImplementationOnce(async uri => {
+      services.folders.pop();
+      return uri;
+    });
+    await expect(controller.openAttachment(attachment)).rejects.toThrow('unavailable');
+    expect(services.editors.openEditor).toHaveBeenCalledTimes(1);
     controller.setSkillSources(() => [
       {
         ...skill,
