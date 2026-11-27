@@ -176,6 +176,7 @@ export class ChatSession {
     let reasoningSummary = '';
     const tools = new Map<string, ChatToolSummary>();
     const recordingResponse: ChatResponseStream = {
+      ...(response.onTurnAdmitted ? { onTurnAdmitted: response.onTurnAdmitted } : {}),
       push: part => {
         switch (part.type) {
           case ChatResponsePartType.TEXT:
