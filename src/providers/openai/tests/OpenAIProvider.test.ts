@@ -1,3 +1,4 @@
+import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { AgentMode } from '#src/chat/AgentMode.js';
@@ -115,7 +116,7 @@ function aTurnContextCoordinator(
 ): TurnContextCoordinator & { beginTurn: ReturnType<typeof vi.fn> } {
   const beginTurn = vi.fn(async () => {
     const envelope = await context();
-    return { initialEnvelope: () => envelope, prepareReplay: () => ({}) };
+    return { initialEnvelope: () => envelope, prepareReplay: () => ({ didDeliver: () => {} }) };
   });
   return {
     beginTurn,
@@ -148,6 +149,77 @@ const toolCompleted = {
 };
 
 describe(OpenAIProvider, () => {
+  it('continues preparing an unrelated prompt when a nested skill is replaced', async () => {
+    const skill = aSkillDescriptor({ scope: 'nested' });
+    const catalog = new SkillCatalog([
+      {
+        id: skill.origin.id,
+        origin: skill.origin,
+        discover: async () => [skill],
+        capture: async () => aSkillPackage(skill),
+        refreshIndex: async () => {},
+      },
+    ]);
+    const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
+    const { provider, requests } = harness([() => sse([completed])], new ToolRegistry([]), turns);
+    await provider.send('Explain this workspace.', {
+      ...options(),
+      onTrace: entry => {
+        if (entry.kind === 'authentication.resolved') catalog.retirements.publish(skill.id, 'nested-update');
+      },
+    });
+    expect(requests[0]?.input).toEqual([{ role: 'user', content: 'Explain this workspace.' }]);
+  });
+
+  it('preserves a human schema example and records only resource bytes received by the transport', async () => {
+    const { catalog, manager, install } = await aSkillLifecycle();
+    const skill = await install();
+    const removal = await manager.prepareRemoval(skill.id);
+    const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
+    const read = {
+      ...toolCompleted,
+      response: {
+        ...toolCompleted.response,
+        output: [
+          {
+            ...toolCompleted.response.output[0],
+            namespace: 'skills',
+            name: 'read_resource',
+            arguments: JSON.stringify({ id: skill.id, path: 'references/notes.md' }),
+          },
+        ],
+      },
+    };
+    const { provider, requests } = harness(
+      [() => sse([read]), () => sse([completed]), () => sse([completed])],
+      new SkillToolRuntime(turns),
+      turns,
+    );
+    const human = JSON.stringify({
+      schema: 'glyph.agent-instructions.v1',
+      sources: [],
+      question: 'Which fields are required?',
+    });
+    let checkpoints = 0;
+    const result = await provider.send(
+      { text: human, attachments: [], skillIds: [skill.id] },
+      {
+        ...options(),
+        onStateCheckpoint: async () => {
+          if (++checkpoints === 2) await manager.apply(removal.id);
+        },
+      },
+    );
+    expect(result.context?.skills).toMatchObject([{ body: 'Reviewed instructions', resources: [] }]);
+    expect(requests).toHaveLength(2);
+    provider.restoreState(provider.exportState());
+    await provider.send('Continue.', options());
+    for (const request of requests) {
+      expect(request.input).toContainEqual({ role: 'user', content: human });
+      expect(JSON.stringify(request.input)).not.toContain('Pinned notes');
+    }
+  });
+
   it('continues two active chats after Settings replaces a package shared by their workspaces', async () => {
     const authority = new NativePinnedSourceAuthority(testFilesystemMetadata, new WorkspaceAccessPolicy(), () => {});
     const {
@@ -1818,6 +1890,7 @@ describe(OpenAIProvider, () => {
         { id: 'reference-only' },
         { role: 'assistant', content: 'Earlier answer.' },
         { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Rich input.' }] },
+        { role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,AA==', detail: 'auto' }] },
         { role: 'user', content: 'Plain text, not JSON.' },
         { role: 'developer', content: JSON.stringify({ schema: 'other.schema', event: { id: 'event-1' } }) },
         { role: 'developer', content: JSON.stringify({ schema: 'glyph.context-event.v1', event: {} }) },

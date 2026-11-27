@@ -241,6 +241,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         const assertCurrent = await authorize();
         assertCurrent();
         const step = await send(assertCurrent, authorize);
+        replay?.didDeliver();
         pendingWorkspaceInput = false;
         turn = step.turn;
         usageIncomplete ||= step.usage === null;

@@ -56,13 +56,14 @@ export interface AgentModelAdapter<TTurn> {
   emptyState(): ChatProviderState;
   restoreState(state: ChatProviderState): ChatProviderState;
   /**
-   * Apply the supplied runtime projection to plain user messages and serialized tool
+   * Apply the supplied runtime projection to host instruction messages, legacy untagged user messages and serialized tool
    * outputs in this provider's state. Preserve other protocol fields and never mutate
    * the source state. Required for both current checkpoints and legacy restoration;
    * adapters must not implement their own instruction-retention policy.
    */
   projectHistory(state: ChatProviderState, projection: AgentHistoryProjection): ChatProviderState;
-  /** Apply the same projection to live protocol records while preserving in-flight adapter state. */
+  /** Apply the projection to host instruction records and tool outputs. Retain typed human input,
+   * including human-authored schema examples, and preserve in-flight adapter state. */
   projectTurn(turn: TTurn, projection: AgentHistoryProjection): TTurn;
   /** Settles durable tool intents that have no outcome, such as after process interruption. */
   recoverInterruptedToolCalls(state: ChatProviderState): InterruptedToolRecovery;

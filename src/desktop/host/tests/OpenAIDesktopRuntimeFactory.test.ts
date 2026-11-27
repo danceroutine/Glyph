@@ -1032,8 +1032,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
         new AbortController().signal,
       );
-      expect(prepared.snapshot().skills).toHaveLength(3);
-      expect(prepared.snapshot().skills!.every(skill => skill.body === 'Reviewed factory workflow')).toBe(true);
+      expect(prepared.initialEnvelope().skills).toHaveLength(3);
+      expect(prepared.initialEnvelope().skills!.every(skill => skill.body === 'Reviewed factory workflow')).toBe(true);
       turns!.discardTurn('skills-turn');
       for (const skill of skills.filter(skill => skill.origin.scope === 'project')) {
         await runtime.handle({
@@ -1927,7 +1927,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
         new AbortController().signal,
       );
-      expect(turn.snapshot().skills).toHaveLength(2);
+      expect(turn.initialEnvelope().skills).toHaveLength(2);
       expect(refresh).toHaveBeenCalledTimes(4);
       await (observe.mock.contexts[0] as SkillCatalog).refreshIndexes();
       expect(refresh).toHaveBeenCalledTimes(7);
@@ -1936,7 +1936,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         attachmentPaths: [],
         skillIds: [skills[0]!.id],
       });
-      expect(second.snapshot().skills).toHaveLength(1);
+      expect(second.initialEnvelope().skills).toHaveLength(1);
       refresh.mockResolvedValueOnce({ truncated: true } as never);
       await expect(
         coordinator.beginTurn({ turnId: 'incomplete', attachmentPaths: [], skillIds: [skills[0]!.id] }),

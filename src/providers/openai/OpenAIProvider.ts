@@ -170,7 +170,7 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     const request = {
       model: this.model,
       instructions: [this.configuration.instructions, context.mode.instructions].filter(Boolean).join('\n\n'),
-      input: turn.input,
+      input: turn.input.map(toWireInput),
       stream: true,
       // Keep state client-side; complete response items are replayed in `input`.
       store: false,
@@ -415,7 +415,9 @@ function historyFrom(state: ChatProviderState): ResponseInputItem[] {
 }
 
 function toUserInput(request: ChatRequest): ResponseInputItem {
-  if (request.attachments.length === 0) return { role: 'user', content: request.text };
+  // Human input uses a typed text part in live turns and checkpoints. Instruction envelopes and
+  // legacy single-string records pass through the host history projection.
+  if (request.attachments.length === 0) return { role: 'user', content: [{ type: 'input_text', text: request.text }] };
   const context = JSON.stringify({
     schema: 'glyph.workspace-context.v1',
     files: request.attachments.map(attachment => {
@@ -436,6 +438,21 @@ function toUserInput(request: ChatRequest): ResponseInputItem {
       { type: 'input_text', text: request.text },
     ],
   };
+}
+
+/** Keep the Responses shorthand for a plain prompt at transport. The stored turn retains its typed origin. */
+function toWireInput(item: ResponseInputItem): ResponseInputItem {
+  if (
+    item.type === undefined &&
+    'role' in item &&
+    item.role === 'user' &&
+    Array.isArray(item.content) &&
+    item.content.length === 1
+  ) {
+    const part = item.content[0]!;
+    if (part.type === 'input_text') return { ...item, content: part.text };
+  }
+  return item;
 }
 
 function toInstructionContextInput(context: TurnContextEnvelope): ResponseInputItem {

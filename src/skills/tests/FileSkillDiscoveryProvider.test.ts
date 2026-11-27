@@ -79,6 +79,7 @@ describe(FileSkillDiscoveryProvider, () => {
     );
     mismatch = false;
     await turns.activateSource('turn', 'skills', id, 'model', 'use it');
+    session.prepareReplay().didDeliver();
     const tool = new SkillToolRuntime(turns).tools[1]!;
     const read = () =>
       tool.execute(JSON.stringify({ id, path: 'guide.txt' }), new AbortController().signal, { turnId: 'turn' });

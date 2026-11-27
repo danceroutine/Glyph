@@ -98,6 +98,7 @@ describe(SkillContextContributor, () => {
     ) as { instructionContext: { skillResources: readonly SkillResourceUse[] } };
     expect(binary.instructionContext.skillResources[0]).toMatchObject({ content: 'AP8A', encoding: 'base64' });
     expect(capture).toHaveBeenCalledOnce();
+    session.prepareReplay().didDeliver();
     const snapshot = coordinator.completeTurn('turn');
     expect(snapshot?.skills?.[0]).toMatchObject({
       reason: 'model',
@@ -123,13 +124,15 @@ describe(SkillContextContributor, () => {
     const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
     const session = await turns.beginTurn({ turnId: 'same', attachmentPaths: [], skillIds: [active.id] });
     const skills = turns.contribution('same', 'skills') as SkillTurnContext;
+    session.prepareReplay().didDeliver();
     const pending = session.prepareReplay();
     const handoff = await turns.authorizeDisclosure('same', undefined, pending);
     catalog.retirements.publish('unrelated', 'other-commit');
     expect(handoff).not.toThrow();
+    catalog.retirements.publish(nested.id, 'nested-update');
+    expect(handoff).not.toThrow();
     catalog.retirements.publish(active.id, 'active-update');
     catalog.retirements.publish(active.id, 'another-update');
-    catalog.retirements.publish(nested.id, 'nested-update');
     expect(handoff).toThrow('changed');
     expect(skills.disclosePaths(['src/file'])).toBeUndefined();
     expect(() => skills.activePackage(active.id)).toThrow('Activate the skill');
@@ -205,6 +208,7 @@ describe(SkillContextContributor, () => {
         allowedTools: ['Read'],
       },
     ]);
+    session.prepareReplay().didDeliver();
     expect(session.snapshot().skills?.[0]?.descriptor).toEqual(descriptor);
   });
 
@@ -231,6 +235,7 @@ describe(SkillContextContributor, () => {
       skillIds: [first.id],
       attachmentPaths: [],
     });
+    session.prepareReplay().didDeliver();
     const steer = (skillIds: string[]) =>
       session.steer({ turnId: 'steering', skillIds, attachmentPaths: ['nested/file'] });
     await expect(steer([other.id])).rejects.toThrow('same-name');

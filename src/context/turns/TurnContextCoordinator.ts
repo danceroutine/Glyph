@@ -4,7 +4,12 @@ import { prepareModelContext, type TurnContextEnvelope, type TurnContextSnapshot
 import type { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { AgentInstructionActivationReason } from '#src/instructions/AgentInstructionSource.js';
 import { InstructionContextContributor } from './InstructionContextContributor.ts';
-import type { TurnContextContribution, TurnContextContributor, TurnContextInput } from './TurnContextContributor.ts';
+import type {
+  TurnContextContribution,
+  TurnContextContributor,
+  TurnContextInput,
+  TurnContextReplay,
+} from './TurnContextContributor.ts';
 
 export type BeginTurnContextInput = TurnContextInput;
 
@@ -19,26 +24,23 @@ export class PreparedTurnContext {
     return [...this.contributions.values()].flatMap(part => part.disclosurePins?.(context) ?? []);
   }
   /** Bind the replay policy applied to this request to its final transport handoff, including SDK retries. */
-  prepareReplay(): {
-    readonly session: PreparedTurnContext;
-    readonly filter: TurnContextContribution['replayFilter'];
-    readonly assertCurrent: () => void;
-  } {
-    const policies = [...this.contributions.values()].map(part => ({ part, filter: part.replayFilter }));
-    const filters = policies.flatMap(({ filter }) => filter ?? []);
+  prepareReplay(): TurnContextReplay & { readonly session: PreparedTurnContext } {
+    const parts = [...this.contributions.values()].flatMap(part => part.prepareReplay?.() ?? []);
+    const filters = parts.flatMap(part => part.filter ?? []);
     return {
       session: this,
-      filter:
-        filters.length === 0
-          ? undefined
-          : (context: TurnContextEnvelope) =>
-              filters.reduce<TurnContextEnvelope | undefined>(
-                (remaining, filter) => remaining && filter(remaining),
-                context,
-              ),
+      ...(filters.length > 0 && {
+        filter: (context: TurnContextEnvelope) =>
+          filters.reduce<TurnContextEnvelope | undefined>(
+            (remaining, filter) => remaining && filter(remaining),
+            context,
+          ),
+      }),
       assertCurrent: () => {
-        if (policies.some(({ part, filter }) => part.replayFilter !== filter))
-          throw new Error('Instruction sources changed during request preparation.');
+        for (const part of parts) part.assertCurrent();
+      },
+      didDeliver: () => {
+        for (const part of parts) part.didDeliver();
       },
     };
   }
