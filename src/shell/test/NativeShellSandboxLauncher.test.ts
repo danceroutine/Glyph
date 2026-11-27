@@ -52,7 +52,7 @@ describe(NativeShellSandboxLauncher, () => {
         );
         const launcher = new NativeShellSandboxLauncher(
           {
-          accessPolicy: new WorkspaceAccessPolicy(),
+          accessPolicy: new WorkspaceAccessPolicy({}, ['/project/mandatory']),
             binaryPath: '/bin/glyph-shell-sandbox',
             workspaceRoots: ['/project', '/second'],
             stateDirectory: '/state',
@@ -90,6 +90,7 @@ describe(NativeShellSandboxLauncher, () => {
             '/project/worker',
             '--private-path',
             '/project/.skill-staging',
+            '/project/mandatory',
             '--read-only-path',
             '/host/pinned',
           ]),

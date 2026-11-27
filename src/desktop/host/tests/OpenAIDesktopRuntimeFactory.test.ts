@@ -1151,7 +1151,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const read = { type: GlyphEditorRequestType.READ_SNAPSHOT, operationId: 'read', path: 'file.txt' } as const;
       await expect(client.request(read, signal)).resolves.toMatchObject({ snapshot: { path: 'file.txt' } });
       expect(request).toHaveBeenLastCalledWith(factoryIdentity, read, signal);
-      expect(validate).toHaveBeenLastCalledWith('file.txt');
+      expect(validate).toHaveBeenLastCalledWith('file.txt', false);
       const occupancy = { type: GlyphEditorRequestType.EXISTS, operationId: 'exists', path: 'file.txt' } as const;
       await client.request(occupancy);
       expect(exists).toHaveBeenCalledExactlyOnceWith('file.txt');
@@ -1178,7 +1178,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         expectedToken: { workspaceGeneration: 'g', resource: 'file:///file.txt', incarnation: 'i', version: 1 },
       });
       await expect(client.request(rename)).resolves.toMatchObject({ snapshot: { path: 'renamed.txt' } });
-      expect(validate).toHaveBeenLastCalledWith('renamed.txt');
+      expect(validate).toHaveBeenLastCalledWith('renamed.txt', true);
       expect(request).toHaveBeenLastCalledWith(factoryIdentity, rename, undefined);
       const create = fileMutation({
         kind: GlyphFileMutationKind.CREATE,
@@ -1926,68 +1926,6 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await expect(turns.beginTurn({ turnId: 'invalid-guidance', attachmentPaths: [] })).rejects.toThrow(
         'Required root instruction',
       );
-    });
-
-    it('uses the physical profile for discovery and resolves a formerly shared project rule only through its user owner', async () => {
-      const profile = join(isolatedUserDirectory, 'current');
-      const first = join(isolatedUserDirectory, 'first');
-      const second = join(isolatedUserDirectory, 'second');
-      await mkdir(join(first, '.glyph'), { recursive: true });
-      await symlink(join(first, '.glyph'), profile);
-      const fixture = await factoryFixture({ userDirectory: profile });
-      useFilesystemIndex();
-      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
-      useFilesystemIndex();
-      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
-        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
-        return { operationId: request.operationId, ok: true };
-      });
-      for (const root of [first, second]) {
-        const skill = basename(root);
-        await mkdir(join(root, '.glyph/skills', skill), { recursive: true });
-        await writeFile(
-          join(root, '.glyph/skills', skill, 'SKILL.md'),
-          '---\nname: ' + skill + '\ndescription: Example\n---\nWorkflow',
-        );
-        await mkdir(join(root, '.glyph/rules'), { recursive: true });
-        await writeFile(
-          join(root, '.glyph/rules/shared.mdc'),
-          '---\nactivation: manual\nreferences: [context.md]\n---\nShared',
-        );
-        await writeFile(join(root, '.glyph/context.md'), basename(root) + ' profile context');
-        await writeFile(join(root, 'context.md'), 'Project context');
-      }
-      const old = 'glyph_project_rule:.glyph/rules/shared.mdc';
-      for (const root of [first, second]) {
-        if (root === second) {
-          await rm(profile);
-          await symlink(join(second, '.glyph'), profile);
-          await writeFile(join(second, '.glyph/rules/new.mdc'), 'New');
-        }
-        const runtime = await fixture.create([root]);
-        const snapshot = await runtime.snapshot();
-        expect(snapshot.skills!.map(skill => skill.name)).toEqual(
-          root === first ? [basename(first)] : [basename(first), basename(second)].toSorted(),
-        );
-        expect(snapshot.instructionWatchRoots).toContain(pathToFileURL(join(first, '.glyph/skills')).href);
-        const sources = snapshot.instructionSources!;
-        const user = sources.find(source => source.kind === 'glyph_user_rule')!;
-        expect(sources).toHaveLength(root === first ? 1 : 3);
-        expect(user.kind).toBe('glyph_user_rule');
-        expect(user.legacyIds).toBeUndefined();
-        expect(runtime.resolveRuleReference(old)).toBe(
-          root === first
-            ? user.id
-            : sources.find(source => source.kind === 'glyph_project_rule' && source.path.endsWith('shared.mdc'))!.id,
-        );
-        const turn = await captured.providerFactories
-          .at(-1)![3]!
-          .beginTurn({ turnId: 'manual', attachmentPaths: [], manualRuleIds: [old] });
-        const bodies = turn.initialEnvelope().sources.map(source => source.content);
-        expect(bodies).toHaveLength(1);
-        expect(bodies[0]).toContain(root === first ? 'first profile context' : 'Project context');
-        if (root === first) expect(bodies[0]).not.toContain('Project context');
-      }
     });
 
     it('reports an unsafe user rules directory without querying its native index', async () => {

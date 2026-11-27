@@ -507,7 +507,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           ),
         ],
         paths,
-        () => userRuleDirectory.refresh(),
+        () => {
+          userRuleDirectory.refresh();
+        },
       );
       const userSkillDirectory = new UserSkillDirectory(userRuleRoot, userCaseSensitive, this.sourcePathAliases);
       const skillRoot = userSkillDirectory.path;

@@ -174,10 +174,15 @@ export class SkillPackageManager {
       uri: pathToFileURL(join(location.store.root, location.directory)).toString(),
     }));
   }
+  /** Journal keys identify the installation location. A project that contains the personal store can still
+   * own packages below other nested collection directories. Every recovered target passes through target(). */
+  private async journalRoot(location: SkillPackageLocation): Promise<string> {
+    return location.updateOnly ? join(location.store.root, location.directory) : location.store.resolvePath(location.directory);
+  }
   async recover(originId?: string, directory?: string): Promise<void> {
     for (const location of this.locations) {
       if (originId !== undefined && location.id !== originId) continue;
-      const root = await location.store.resolvePath(location.directory);
+      const root = await this.journalRoot(location);
       if ((await this.journal.entries(root, location.id)).length > 0)
         await withSkillLock(this.state.metadata, location.store.root, 'destination', () =>
           this.recoverLocation(location, root),
@@ -247,7 +252,7 @@ export class SkillPackageManager {
         async () => {
           await this.recoverLocation(
             change.location,
-            await change.location.store.resolvePath(change.location.directory),
+            await this.journalRoot(change.location),
           );
           return this.withPackageScope(change.location, change.directory, () => this.commit(change, signal), signal);
         },
@@ -530,7 +535,7 @@ export class SkillPackageManager {
   private async commit(change: Pending, signal?: AbortSignal) {
     const { location, directory, preview, files, expected } = change;
     await change.sourceAccess?.assertCurrent();
-    const root = await location.store.resolvePath(location.directory);
+    const root = await this.journalRoot(location);
     await location.refreshIndex();
     const current = await this.read(location, directory);
     if ((current.files.size > 0 ? packageRevision(current.files, current.directories) : null) !== expected)
@@ -604,6 +609,7 @@ export class SkillPackageManager {
           files ? relativeStage + '/package' : undefined,
         );
         this.assertAdmitted(location, target);
+        await change.sourceAccess?.assertCurrent();
         swapStarted = true;
         await location.mutations.renameExclusive(directory, relativeStage + '/previous');
         await this.checkMetadata(
@@ -616,7 +622,8 @@ export class SkillPackageManager {
           throw new Error('The skill changed during replacement. Preview it again.');
       } else if (await optionalStat(target)) throw new Error('A skill appeared at the destination. Preview again.');
       signal?.throwIfAborted();
-      await change.sourceAccess?.assertCurrent();
+      const relocation = expected ? { source: target, backup } : undefined;
+      await change.sourceAccess?.assertCurrent(relocation);
       if (files) {
         this.assertAdmitted(location, target);
         swapStarted = true;
@@ -638,7 +645,7 @@ export class SkillPackageManager {
       if (files) await this.checkMetadata(location, directory, entry.replacementMetadata);
       await this.assertBackup(location, entry, stage);
       signal?.throwIfAborted();
-      await change.sourceAccess?.assertCurrent();
+      await change.sourceAccess?.assertCurrent(relocation);
       entry.published = true;
       await this.journal.write(entry);
       await this.persist(entry);

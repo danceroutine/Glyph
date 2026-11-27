@@ -27,6 +27,20 @@ the reviewed revision and, for local intake, the source access check. At publica
 the manager checks the source, destination and peer editors again. Ordinary
 project edits consult `SkillProjectMutationPolicy` to reserve this workflow for
 managed paths.
+## Composing a host
+
+Select the consumer's policy through `WorkspaceContentAccess` at the CLI or
+desktop composition root. Its project, shell, selected-file and user-catalog
+views share the host's reservations. Bind the chosen policy to the attached
+directory with `WorkspaceRootAccess`. The disk store and path index use that
+root's projection. The operation's `assertCurrent` check belongs immediately
+before returning an asynchronous result or performing a write.
+
+For a rule or instruction supplied to a model, carry the identity observed by
+the authorized read. `NativePinnedSourceAuthority` checks the physical origins
+in a batch. The provider's final synchronous guard checks trust, cancellation
+and the private-path generation at the moment of delivery. Keeping the body
+selected for the turn lets ordinary content edits take effect on the next turn.
 
 ## Choosing the boundary
 

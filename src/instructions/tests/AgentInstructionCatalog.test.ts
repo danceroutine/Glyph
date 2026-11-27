@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
 import {

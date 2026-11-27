@@ -270,6 +270,37 @@ fn checks_bound_private_and_ordinary_trees_through_the_cli() {
             cmd.arg("--assert-workspace-path");
         });
         assert_eq!(result.status.success(), admitted);
+        let sources =
+            serde_json::json!({"paths": [view.join("data")], "privatePaths":[]}).to_string();
+        let inspect_origins = || {
+            run_with_input(&sources, |cmd| {
+                cmd.arg("--source-origins");
+            })
+        };
+        let original = inspect_origins();
+        assert_eq!(original.status.success(), admitted);
+        if admitted {
+            // The same directory and file inode exposed through a replacement mount is a new route.
+            let original: Value = serde_json::from_slice(&original.stdout).unwrap();
+            assert!(Command::new("mount")
+                .args(["-o", "bind"])
+                .arg(&source)
+                .arg(&view)
+                .status()
+                .unwrap()
+                .success());
+            let replacement = inspect_origins();
+            assert!(replacement.status.success());
+            let replacement: Value = serde_json::from_slice(&replacement.stdout).unwrap();
+            assert_eq!(original[0]["identity"], replacement[0]["identity"]);
+            assert_ne!(original[0]["origin"], replacement[0]["origin"]);
+            assert!(Command::new("umount")
+                .arg(&view)
+                .status()
+                .unwrap()
+                .success());
+        }
+
         assert!(Command::new("umount")
             .arg(&view)
             .status()

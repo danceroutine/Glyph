@@ -17,6 +17,12 @@ const cases = [
   ['src/skills/SkillScriptRunner.ts', 'selected.packageFiles();', false],
   ['src/skills/Feature.ts', "import { captureSkillPackage } from './SkillPackage.ts';", true],
   ['src/skills/Presenter.ts', "import type { SkillPackage } from './SkillPackage.ts';", false],
+  ['src/cli.ts', "import { WorkspaceAccessPolicy } from './workspace/policy/WorkspaceAccessPolicy.js';", true],
+  [
+    'code-oss/overlay/src/vs/workbench/contrib/glyph/browser/Feature.ts',
+    "import { IFileService } from '../../../../platform/files/common/files.js';",
+    true,
+  ],
   ['src/chat/Raw.ts', "import { readFile as load } from 'node:fs/promises';", true],
   ['src/chat/Launch.ts', "export * from 'child_process';", true],
   ['src/chat/Lazy.ts', "const adapter = await import('#src/workspace/FileSystemWorkspaceTextStore.js');", true],
@@ -68,8 +74,8 @@ const cases = [
     false,
   ],
   [
-    'src/cli.ts',
-    "import { WorkspaceAccessPolicy } from './workspace/policy/WorkspaceAccessPolicy.js'; new WorkspaceAccessPolicy();",
+    'src/workspace/policy/WorkspaceContentAccess.ts',
+    "import { WorkspaceAccessPolicy } from './WorkspaceAccessPolicy.js'; new WorkspaceAccessPolicy();",
     false,
   ],
   [

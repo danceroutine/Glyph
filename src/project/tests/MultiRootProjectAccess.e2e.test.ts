@@ -4,10 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
-import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import type { ProjectContext } from '#src/project/context/ProjectContext.js';
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { MultiRootWorkspaceTextStore } from '#src/workspace/MultiRootWorkspaceTextStore.js';
 import { ProjectAccess } from '#src/project/ProjectAccess.js';
 

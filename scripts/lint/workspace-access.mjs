@@ -15,6 +15,8 @@ const nativeIndex = 'src/context/search/RustWorkspacePathIndex.ts';
 const nativeMetadata = 'src/workspace/NativeFilesystemMetadata.ts';
 const disk = 'src/workspace/FileSystemWorkspaceTextStore.ts';
 const policy = 'src/workspace/policy/WorkspaceAccessPolicy.ts';
+const contentPolicy = 'src/workspace/policy/WorkspaceContentAccess.ts';
+const rootPolicy = 'src/workspace/policy/WorkspaceRootAccess.ts';
 
 // Exact importers only. Keep host state persistence separate from workspace I/O.
 const filesystem = new Set([
@@ -29,7 +31,7 @@ const filesystem = new Set([
   'src/shell/FileShellPermissionStore.ts',
   // OS adapters for project provenance, physical identity, or a single filesystem operation.
   disk,
-  policy,
+  'src/workspace/ReservedWorkspaceDirectory.ts',
   nativeShell,
   'src/desktop/host/GlyphDesktopHost.ts',
   'src/desktop/host/WorkspaceOwnershipRegistry.ts',
@@ -84,6 +86,7 @@ const subprocess = new Set([
 // Runtime access to concrete adapters belongs to composition. Feature code imports their ports.
 const composition = new Set([cli, host]);
 const shellComposition = new Set([...composition, deterministicHost]);
+const policyConstruction = new Set([deterministicHost, contentPolicy, rootPolicy]);
 const restrictedModules = new Map([
   ['fs', filesystem],
   ['fs/promises', filesystem],
@@ -91,6 +94,9 @@ const restrictedModules = new Map([
   ['worker_threads', subprocess],
   ['src/skills/SkillPackage.ts', new Set(['src/skills/FileSkillDiscoveryProvider.ts'])],
   [disk, composition],
+  [contentPolicy, composition],
+  [rootPolicy, new Set([...composition, disk, nativeIndex])],
+  ['src/workspace/PinnedSourceAuthority.ts', composition],
   [nativeMetadata, composition],
   [nativeIndex, composition],
   [nativeShell, shellComposition],
@@ -118,7 +124,7 @@ const inventoryConsumers = new Set([
 
 // Workbench service modules also export ordinary enums and types. Restrict only service acquisition.
 const symbols = new Map([
-  [policy, { name: 'WorkspaceAccessPolicy', owners: new Set([...composition, disk, nativeShell, nativeIndex]) }],
+  [policy, { name: 'WorkspaceAccessPolicy', owners: new Set([...policyConstruction, disk, nativeShell, nativeIndex]) }],
   [
     '#vs/platform/files/common/files.js',
     {
@@ -154,9 +160,12 @@ function repoPath(path) {
 /** @param {string} importer @param {string} specifier */
 function moduleKey(importer, specifier) {
   if (specifier.startsWith('node:')) return specifier.slice(5);
-  if (specifier.startsWith('#src/')) return specifier.slice(1).replace(/\.js$/u, '.ts');
+  if (specifier.startsWith('#src/')) return repoPath(resolve(root, specifier.slice(1))).replace(/\.js$/u, '.ts');
   if (specifier.startsWith('.') || specifier.startsWith('/')) {
-    return repoPath(resolve(dirname(importer), specifier)).replace(/\.js$/u, '.ts');
+    const path = repoPath(resolve(dirname(importer), specifier));
+    const overlay = 'code-oss/overlay/src/vs/';
+    if (path.startsWith(overlay)) return '#vs/' + path.slice(overlay.length).replace(/\.ts$/u, '.js');
+    return path.replace(/\.js$/u, '.ts');
   }
   return specifier;
 }
@@ -201,7 +210,7 @@ export default {
             if (node.importKind === 'type') return;
             const values = node.specifiers.filter(s => s.type !== 'ImportSpecifier' || s.importKind !== 'type');
             if (node.specifiers.length > 0 && values.length === 0) return;
-            if (moduleKey(context.filename, node.source.value) === policy && !composition.has(importer)) {
+            if (moduleKey(context.filename, node.source.value) === policy && !policyConstruction.has(importer)) {
               for (const specifier of values) {
                 if (specifier.type === 'ImportNamespaceSpecifier') policyNamespaces.add(specifier.local.name);
                 if (

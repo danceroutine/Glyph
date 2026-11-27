@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
-import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 it('keeps host state and transaction files private across containing, overlapping and directly attached roots', async () => {

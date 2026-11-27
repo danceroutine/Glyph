@@ -1,4 +1,5 @@
 import { closeSync, constants, fstatSync, openSync } from 'node:fs';
+import { lstat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { optionalStat } from './SkillPackageStorage.ts';
 import type { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
@@ -51,17 +52,24 @@ export class LocalSkillSourceAuthority implements SkillSourceAccess {
       throw changed();
     }
     return {
-      assertCurrent: () => this.verify(descriptor),
+      assertCurrent: relocation => this.verify(descriptor, relocation),
       release: () => {
         closeSync(descriptor);
       },
     };
   }
 
-  private async verify(descriptor?: number): Promise<void> {
+  private async verify(descriptor?: number, relocation?: { readonly source: string; readonly backup: string }): Promise<void> {
     await this.checkPrivate();
     const parent = dirname(this.root);
-    if (!(await optionalStat(this.root))) {
+    if (relocation?.source === this.root) {
+      // An in-place update deliberately moves this inode. The retained descriptor prevents inode reuse, and
+      // the native transaction verifies the complete backup revision and metadata before committing.
+      const backup = await lstat(relocation.backup, { bigint: true });
+      const [route] = await this.metadata.sourceOrigins([parent], this.policy.privatePaths, undefined, true);
+      if (`${backup.dev}:${backup.ino}` !== this.directories[1]!.identity || route!.origin !== this.directories[0]!.origin)
+        throw changed();
+    } else if (!(await optionalStat(this.root))) {
       if (descriptor === undefined) throw changed();
       await this.metadata.assertUnlinkedDirectory(descriptor);
       const [route] = await this.metadata.sourceOrigins([parent], this.policy.privatePaths, undefined, true);

@@ -24,7 +24,8 @@ describe('glyph command line', () => {
     await cli.finished;
     const [launcher] = cli.instances('NativeShellSandboxLauncher');
     const options = launcher!.args[0] as { privatePaths: () => readonly string[] };
-    expect(options.privatePaths()).toEqual(['/state/glyph/trace.log', directory]);
+    expect(options.privatePaths()).toEqual([directory]);
+    expect((launcher!.args[0] as {accessPolicy: {privatePaths: string[]}}).accessPolicy.privatePaths).toContain('/state/glyph/trace.log');
   });
   it('prints usage help without starting a terminal session', async () => {
     const cli = prepareCli({ argv: ['--help'] });
@@ -274,7 +275,7 @@ describe('glyph command line', () => {
 
     const [workspace] = cli.instances('FileSystemWorkspaceTextStore');
     const options = (
-      workspace?.args[1] as { access: import('#src/workspace/policy/WorkspaceRootAccess.js').WorkspaceRootAccess }
+      workspace!.args[1] as { access: import('#src/workspace/policy/WorkspaceRootAccess.js').WorkspaceRootAccess }
     ).access.beginOperation();
     expect(options.excludedPaths).toContain('logs/trace.log');
     expect(options.excludedPaths.some(path => path.includes('glyph') && path.includes('state'))).toBe(false);

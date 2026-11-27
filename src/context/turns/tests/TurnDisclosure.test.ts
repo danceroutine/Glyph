@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleInstructionProvider.js';
 import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
 import { TurnContextSession } from '../TurnContextSession.ts';

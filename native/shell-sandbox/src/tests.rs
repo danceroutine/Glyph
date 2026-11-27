@@ -235,7 +235,7 @@ fn private_metadata_is_masked_and_cannot_be_admitted_as_a_readable_resource() {
     assert_eq!(prepared.private_paths, vec![future.clone()]);
     let policy = macos::seatbelt_policy(&prepared, fixture.path(), None).unwrap();
     assert!(policy.contains(&format!(
-        "(deny file-read* file-write* (subpath \"{}\"))",
+        "(deny file-read* file-write* file-test-existence (subpath \"{}\"))",
         future.display()
     )));
     assert!(canonical_private_path(Path::new("relative")).is_err());
@@ -1330,11 +1330,19 @@ fn confines_personal_sources_and_keeps_ordinary_project_files_available() {
         "(deny file-read* file-write* file-test-existence (subpath \"{}\"))",
         rules.display()
     )));
-    let mounts = linux::bubblewrap_arguments(&prepared, None).unwrap();
+    let home = base.join("home");
+    fs::create_dir_all(home.join(".cargo")).unwrap();
+    std::os::unix::fs::symlink(&profile, home.join(".cargo/bin")).unwrap();
+    let mounts = linux::bubblewrap_arguments(&prepared, Some(&home)).unwrap();
     assert!(mounts.iter().any(|arg| arg == ordinary.as_os_str()));
     assert!(!mounts
         .iter()
         .any(|arg| arg == rules.join("selected").as_os_str()));
+    // The toolchain alias resolves into the workspace. The upper sandbox omits
+    // a raw mount of that location and exposes ordinary files through its workspace view.
+    assert!(!mounts.windows(3).any(|args| {
+        args[0] == "--ro-bind" && args[2] == home.join(".cargo/bin").as_os_str()
+    }));
     let mut inside = request(SandboxProfile::ReadOnly, &rules, &state);
     inside.private_paths = vec![rules.clone()];
     assert!(prepare_request(inside).is_err());

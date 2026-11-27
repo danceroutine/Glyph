@@ -3,8 +3,6 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ProjectAccess } from '#src/project/ProjectAccess.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
 

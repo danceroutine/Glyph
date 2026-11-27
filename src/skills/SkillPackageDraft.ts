@@ -41,7 +41,8 @@ export interface SkillSourceAccess {
 
 /** Live authority retained for one pending local import. The manager releases it on every terminal path. */
 export interface PendingSkillSourceAccess {
-  assertCurrent(): Promise<void>;
+  /** For an in-place import the destination transaction supplies its own verified backup of the selected root. */
+  assertCurrent(relocation?: { readonly source: string; readonly backup: string }): Promise<void>;
   release(): void;
 }
 

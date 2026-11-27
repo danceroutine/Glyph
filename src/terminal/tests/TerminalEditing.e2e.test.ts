@@ -11,7 +11,6 @@ import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManage
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { TerminalEditReviewer } from '#src/terminal/ui/proposal/TerminalEditReviewer.js';
 import { TerminalUI } from '#src/terminal/TerminalUI.js';
 import { normalize } from '#src/shared/tests/normalize.ts';

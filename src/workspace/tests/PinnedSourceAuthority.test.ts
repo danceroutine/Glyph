@@ -4,9 +4,9 @@ import { WorkspaceAccessPolicy } from '../policy/WorkspaceAccessPolicy.ts';
 
 describe(NativePinnedSourceAuthority, () => {
   it('batches captured sources and accepts a saved revision only at the original authorized location', async () => {
-    let origin = 'route',
-      identity = '1:2',
-      trusted = true;
+    let origin = 'route';
+    let identity = '1:2';
+    let trusted = true;
     const sourceOrigins = vi.fn(async (paths: readonly string[]) => paths.map(() => ({ origin, identity })));
     let privatePaths = ['/state'];
     const policy = new WorkspaceAccessPolicy({}, () => privatePaths);

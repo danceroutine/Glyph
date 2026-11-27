@@ -7,7 +7,6 @@ import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatConfiguration } from '#src/configuration/ChatConfiguration.js';
 import { describeError } from '#src/describeError.js';
-import { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { ToolRegistry } from '#src/tools/ToolRegistry.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import type { ToolSource } from '#src/tools/ToolSource.js';

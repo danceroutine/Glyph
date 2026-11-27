@@ -36,7 +36,11 @@ const fileSystemWorkspaceTextStoreOptionsSchema = z
   .object({
     access: z.instanceof(WorkspaceRootAccess),
     physicalAccess: z.custom<WorkspacePathAccess>(
-      value => !!value && typeof (value as WorkspacePathAccess)?.assertWorkspacePath === 'function',
+      value =>
+        typeof value === 'object' &&
+        value !== null &&
+        'assertWorkspacePath' in value &&
+        typeof value.assertWorkspacePath === 'function',
     ),
     managedDirectories: z.custom<readonly string[] | (() => readonly string[])>().optional(),
   })

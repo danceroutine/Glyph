@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';

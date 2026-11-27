@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.js';
 import { it, expect, vi, onTestFinished } from 'vitest';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
 
