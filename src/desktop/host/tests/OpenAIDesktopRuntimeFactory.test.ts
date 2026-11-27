@@ -1017,7 +1017,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const fixture = await factoryFixture();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
       useFilesystemIndex();
-      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+      const rpc = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
         if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
         return { operationId: request.operationId, ok: true };
       });
@@ -1027,7 +1027,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const alias = join(dirname(root), 'alias');
       await symlink(root, alias);
       const first = await (await fixture.create([root])).snapshot();
-      const current = await (await fixture.create([root, alias])).snapshot();
+      const joined = await fixture.create([root, alias]);
+      const current = await joined.snapshot();
       expect(current.instructionSources!.map(source => source.id)).toEqual(
         first.instructionSources!.map(source => source.id),
       );
@@ -1037,6 +1038,23 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         manualRuleIds: ['glyph_project_rule:.glyph/rules/manual.mdc'],
       });
       expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual(['Manual body', 'Required body']);
+      rpc.mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
+        if (request.path.endsWith('AGENTS.md')) return editorResponse(request, request.path, request.path);
+        return {
+          operationId: request.operationId,
+          ok: false,
+          error: { code: GlyphDesktopErrorCode.INVALID_REQUEST, message: 'Editor disconnected', retryable: true },
+        };
+      });
+      expect((await joined.snapshot()).instructionSources!.map(source => source.message)).toEqual(
+        expect.arrayContaining(['Editor disconnected', expect.stringContaining('conflicting unsaved edits')]),
+      );
+      rpc.mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
+        return { operationId: request.operationId, ok: false };
+      });
+      expect((await joined.snapshot()).instructionSources![0]!.message).toContain('catalog snapshot is unavailable');
     });
     it('retains a physical skill ID and offers it once through overlapping and aliased folders', async () => {
       const fixture = await factoryFixture();

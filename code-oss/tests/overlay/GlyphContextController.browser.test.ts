@@ -1419,9 +1419,10 @@ describe(GlyphContextController, () => {
     }));
     services.files.realpath.mockResolvedValue(physical);
     await controller.openInstruction('guidance');
-    expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(
-      'file:///workspace/AGENTS.md',
-    );
+    expect(services.editors.openEditor).toHaveBeenCalledWith({
+      resource: expect.objectContaining({ path: '/workspace/AGENTS.md' }),
+      options: { pinned: true },
+    });
     services.files.realpath.mockResolvedValue(undefined);
     await expect(controller.openInstruction('guidance')).rejects.toThrow('unavailable');
     services.files.stat.mockResolvedValueOnce({ isFile: true, isSymbolicLink: true });
