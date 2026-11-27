@@ -17,6 +17,11 @@ export class UserSkillDirectory {
     this.store.refresh();
   }
 
+  /** Confirm alias ownership before publishing user packages with historical project references or preferences. */
+  verifyAliases(): void {
+    this.store.verifyAliases();
+  }
+
   ownsStore(directory: string): boolean {
     return this.store.ownsStore(directory);
   }

@@ -15,7 +15,7 @@ export class SkillCatalog {
       equivalents(path: string): string[];
       prepare?(paths: readonly string[]): void;
     },
-    /** Refresh the host's physical user-store aliases before any provider enumerates package candidates. */
+    /** Invalidate the host's previous alias snapshot. Each provider establishes ownership inside its discovery call. */
     private readonly beforeDiscovery?: () => void,
   ) {
     this.byId = new Map(providers.map(provider => [provider.id, provider]));
@@ -90,7 +90,13 @@ export class SkillCatalog {
       for (const skill of sources) {
         budget.remaining--;
         const provider = this.byId.get(skill.origin.id);
-        const matched = provider?.matchesLegacyId?.(skill.directory, id, budget);
+        let matched: boolean | undefined;
+        try {
+          matched = provider?.matchesLegacyId?.(skill.directory, id, budget);
+        } catch {
+          // A failed ownership query leaves the historical reference ambiguous across providers.
+          return undefined;
+        }
         if (budget.remaining <= 0) return undefined;
         if (!matched) continue;
         if (source) return undefined;

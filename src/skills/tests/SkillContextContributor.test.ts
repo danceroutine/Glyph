@@ -22,6 +22,7 @@ describe(SkillContextContributor, () => {
         refreshIndex: async () => {},
         discover: async () => [skill, other, inactive],
         matchesLegacyId: (directory, id, budget) => {
+          if (id === 'unverified') throw new Error('Cannot verify the personal store aliases.');
           if (id === 'exhausted') budget.remaining = 0;
           return id === 'ambiguous' || (id === 'historical' && directory === skill.directory);
         },
@@ -31,6 +32,7 @@ describe(SkillContextContributor, () => {
     for (const id of [null, '', 'x'.repeat(501), 'ambiguous', 'exhausted']) {
       expect(catalog.resolveReference(id as string)).toBeUndefined();
     }
+    expect(catalog.resolveReference('unverified')).toBeUndefined();
     expect(catalog.resolveReference('disabled')).toMatchObject({ enabled: false });
     await expect(session.activateManualSkills(['disabled'], 'select')).rejects.toThrow('unavailable');
     expect(

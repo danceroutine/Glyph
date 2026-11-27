@@ -540,6 +540,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             await mkdir(skillRoot, { recursive: true, mode: 0o700 });
             await userRuleStore.canonicalPath('skills');
             const result = await userSkillIndex.listSkillPackages(null, signal);
+            userSkillDirectory.verifyAliases();
             return {
               truncated: result.truncated,
               packages: result.packages.map(({ directory, manifest }) => ({

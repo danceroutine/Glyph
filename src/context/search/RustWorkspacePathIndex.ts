@@ -289,8 +289,13 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
 
   /** One indexed representative per package, preferring the manifest over an ordinary resource. */
   async listSkillPackages(marker: string | null, signal?: AbortSignal) {
+    const check = this.beginResultAccess();
     await this.initialize(signal);
-    return skillPackageListingSchema.parse(await this.request(PathIndexMethod.LIST_SKILL_PACKAGES, marker, signal));
+    const result = skillPackageListingSchema.parse(
+      await this.request(PathIndexMethod.LIST_SKILL_PACKAGES, marker, signal),
+    );
+    check();
+    return result;
   }
 
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
