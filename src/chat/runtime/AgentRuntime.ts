@@ -209,8 +209,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           await options.onStateCheckpoint?.(structuredClone(this.state));
         }
         round += 1;
+        const replay = turnContext?.prepareReplay();
+        if (replay?.filter) turn = this.adapter.projectTurn(turn, new AgentHistoryRetention(replay.filter));
         const send = await this.adapter.prepareStep(turn, context(round));
-        const assertCurrent = await this.turnContexts?.authorizeDisclosure?.(turnId, signal);
+        const assertCurrent = await this.turnContexts?.authorizeDisclosure(turnId, signal, replay);
         assertCurrent?.();
         const step = await send(assertCurrent);
         turn = step.turn;

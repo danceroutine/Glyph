@@ -18,6 +18,26 @@ export class PreparedTurnContext {
   disclosurePins(context?: TurnContextEnvelope) {
     return [...this.contributions.values()].flatMap(part => part.disclosurePins?.(context) ?? []);
   }
+  /** Bind the replay policy applied to this request to its final transport handoff, including SDK retries. */
+  prepareReplay() {
+    const policies = [...this.contributions.values()].map(part => ({ part, filter: part.replayFilter }));
+    const filters = policies.flatMap(({ filter }) => filter ?? []);
+    return {
+      session: this,
+      filter:
+        filters.length === 0
+          ? undefined
+          : (context: TurnContextEnvelope) =>
+              filters.reduce<TurnContextEnvelope | undefined>(
+                (remaining, filter) => remaining && filter(remaining),
+                context,
+              ),
+      assertCurrent: () => {
+        if (policies.some(({ part, filter }) => part.replayFilter !== filter))
+          throw new Error('Instruction sources changed during request preparation.');
+      },
+    };
+  }
   checkpoint(): () => void {
     const restore = [...this.contributions.values()].flatMap(part =>
       part.checkpointSteering ? [part.checkpointSteering()] : [],
@@ -169,11 +189,16 @@ export class TurnContextCoordinator {
     this.sessions.delete(turnId);
   }
   /** Reauthorize only the source material entering this provider request after async preparation. */
-  authorizeDisclosure(turnId: string, signal?: AbortSignal): Promise<() => void> {
+  authorizeDisclosure(
+    turnId: string,
+    signal?: AbortSignal,
+    replay?: ReturnType<PreparedTurnContext['prepareReplay']>,
+  ): Promise<() => void> {
     const session = this.sessions.get(turnId);
-    if (!session) throw new Error('This turn has ended.');
+    if (!session || (replay && replay.session !== session)) throw new Error('This turn has ended.');
     return authorizeSources(session.disclosurePins(), signal).then(check => () => {
       if (this.sessions.get(turnId) !== session) throw new Error('This turn has ended.');
+      replay?.assertCurrent();
       check();
     });
   }

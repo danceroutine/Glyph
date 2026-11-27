@@ -200,8 +200,17 @@ export class SkillPackageManager {
     for (const path of [...draft.files().keys(), ...draft.packageDirectories().keys()])
       location.store.normalizePath(directory + '/' + path);
     const before = await this.read(location, directory);
-    if (!replaceId && (before.files.size > 0 || (await location.store.exists(directory))))
-      throw new Error('A skill already occupies this destination. Select Update.');
+    if (!replaceId && (before.files.size > 0 || (await location.store.exists(directory)))) {
+      if (
+        before.files.size > 0 &&
+        this.catalog.skills.some(
+          skill =>
+            skill.origin.id === targetId && skill.directory === directory && skill.name === draft.name && skill.path,
+        )
+      )
+        throw new Error('A skill already occupies this destination. Select Update.');
+      throw new Error('A directory already occupies this destination. Move it or choose a different package name.');
+    }
     if (replaceId && before.files.size === 0) throw new Error('The installed skill is missing. Refresh Settings.');
     return this.remember(location, directory, before, draft);
   }
@@ -227,13 +236,18 @@ export class SkillPackageManager {
   }
   /** The complete destination inventory can disclose scoped instructions before package approval. */
   workspacePaths(id: string): readonly string[] {
-    const { preview } = this.requirePreview(id);
+    const { preview, location } = this.requirePreview(id);
     const paths = [
       ...preview.createdParentDirectories,
       preview.destination.path,
       ...[...preview.files, ...preview.directories].map(entry => join(preview.destination.path, entry.path)),
     ];
-    return [...new Set(paths.flatMap(path => this.workspaceRoutes.routesForPhysicalPath(path)))];
+    const aliases = location.sourcePathAliases;
+    const visible = new Set(paths);
+    if (aliases) {
+      for (const alias of aliases.batch?.(paths) ?? paths.flatMap(path => aliases(path))) visible.add(alias);
+    }
+    return [...new Set([...visible].flatMap(path => this.workspaceRoutes.routesForPhysicalPath(path)))];
   }
   async apply(id: string, signal?: AbortSignal): Promise<{ applied: true; refreshError?: string }> {
     const change = this.requirePreview(id);

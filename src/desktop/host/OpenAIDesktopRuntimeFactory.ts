@@ -122,8 +122,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   /** All windows and sandbox launches use the same startup selection, including prospective profile paths. */
   private readonly profile: StartupUserProfile;
   /** Resolve visible physical routes afresh for each host editor decision; retained routes belong to its transaction. */
-  readonly sourcePathAliases: SourcePathAliases = (path, descendants) =>
-    readSourcePathAliases(nativeExecutable('glyph-context-index'), path, descendants);
+  readonly sourcePathAliases: SourcePathAliases = Object.assign(
+    (path: string, descendants?: boolean) =>
+      readSourcePathAliases(nativeExecutable('glyph-context-index'), path, descendants),
+    { batch: (paths: readonly string[]) => readSourcePathAliases(nativeExecutable('glyph-context-index'), paths) },
+  );
   private readonly privatePaths: readonly string[];
   private readonly managedSkillDirectories: readonly string[];
   private skillState?: SkillStateStore;

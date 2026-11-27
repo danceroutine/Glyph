@@ -47,15 +47,19 @@ export interface ModelTurnContext extends TurnContextEnvelope {
   readonly policy: string;
 }
 
-/** Apply host-owned guidance only when the model receives new context. */
-export function prepareModelContext(context: TurnContextEnvelope | undefined): ModelTurnContext | undefined {
-  if (
-    !context ||
-    ![context.sources, context.candidates, context.skills, context.skillCandidates, context.skillResources].some(
+/** Does this envelope still carry any model-visible source material? */
+export function hasModelContext(context: TurnContextEnvelope | undefined): context is TurnContextEnvelope {
+  return (
+    !!context &&
+    [context.sources, context.candidates, context.skills, context.skillCandidates, context.skillResources].some(
       entries => entries?.length,
     )
-  )
-    return undefined;
+  );
+}
+
+/** Apply host-owned guidance only when the model receives new context. */
+export function prepareModelContext(context: TurnContextEnvelope | undefined): ModelTurnContext | undefined {
+  if (!hasModelContext(context)) return undefined;
   return {
     ...context,
     policy:

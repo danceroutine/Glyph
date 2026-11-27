@@ -62,6 +62,8 @@ export interface AgentModelAdapter<TTurn> {
    * adapters must not implement their own instruction-retention policy.
    */
   projectHistory(state: ChatProviderState, projection: AgentHistoryProjection): ChatProviderState;
+  /** Apply the same projection to live protocol records while preserving in-flight adapter state. */
+  projectTurn(turn: TTurn, projection: AgentHistoryProjection): TTurn;
   /** Settles durable tool intents that have no outcome, such as after process interruption. */
   recoverInterruptedToolCalls(state: ChatProviderState): InterruptedToolRecovery;
   recordContext(state: ChatProviderState, events: readonly ChatContextEvent[]): ChatProviderState;

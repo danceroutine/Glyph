@@ -1,5 +1,6 @@
 import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { inventoryPackage, readDirectoryModes } from '#src/skills/skillPackageInventory.js';
+import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
@@ -34,6 +35,7 @@ export async function aSkillLifecycle(
     root: string,
   ) => WorkspaceDirectoryMutations | Promise<WorkspaceDirectoryMutations> = testPackageMutations,
   metadata: FilesystemMetadata = testFilesystemMetadata,
+  authority?: PinnedSourceAuthority,
 ) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-skill-manager-')));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
@@ -49,6 +51,7 @@ export async function aSkillLifecycle(
   const provider = new FileSkillDiscoveryProvider({
     origin: { id: 'user:glyph', label: 'User', scope: 'user', compatibility: 'glyph' },
     directory: 'skills',
+    ...(authority ? { authority } : {}),
     workspace: store,
     binaryStore: store,
     captureFiles: async directory => ({ ...(await listFiles()), directories: await listPackageDirectories(directory) }),

@@ -223,6 +223,14 @@ fn reports_the_visible_routes_of_an_editor_source() {
     assert!(result.status.success());
     let aliases: Vec<std::path::PathBuf> = serde_json::from_slice(&result.stdout).unwrap();
     assert!(aliases.contains(&path));
+    let prospective = path.join("future/SKILL.md");
+    let inventory = serde_json::json!([[path, prospective], false]);
+    let result = run_with_input(&inventory.to_string(), |cmd| {
+        cmd.arg("--source-path-aliases");
+    });
+    assert!(result.status.success());
+    let aliases: Vec<std::path::PathBuf> = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(aliases.contains(&path) && aliases.contains(&prospective));
 }
 
 #[cfg(target_os = "linux")]
@@ -280,6 +288,15 @@ fn checks_bound_private_and_ordinary_trees_through_the_cli() {
         let original = inspect_origins();
         assert_eq!(original.status.success(), admitted);
         if admitted {
+            let inventory =
+                serde_json::json!([[source.join("data"), source.join("future/SKILL.md")], false]);
+            let result = run_with_input(&inventory.to_string(), |cmd| {
+                cmd.arg("--source-path-aliases");
+            });
+            assert!(result.status.success());
+            let aliases: Vec<std::path::PathBuf> = serde_json::from_slice(&result.stdout).unwrap();
+            assert!(aliases.contains(&view.join("data")));
+            assert!(aliases.contains(&view.join("future/SKILL.md")));
             // The same directory and file inode exposed through a replacement mount is a new route.
             let original: Value = serde_json::from_slice(&original.stdout).unwrap();
             assert!(Command::new("mount")
