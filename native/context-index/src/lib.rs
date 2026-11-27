@@ -1,4 +1,5 @@
 mod cache;
+mod catalog_names;
 mod content_search;
 mod index;
 mod path_glob;

@@ -140,7 +140,13 @@ type ProcessFactory = (binaryPath: string) => SidecarProcess;
 
 /** Persistent JSONL transport for the native cached workspace path index. */
 export class RustWorkspacePathIndex implements WorkspacePathIndex {
-  private readonly options: ResolvedRustWorkspacePathIndexOptions & { excludeRoot?: true };
+  private readonly options: ResolvedRustWorkspacePathIndexOptions & {
+    excludeRoot?: true;
+    privatePaths?: readonly string[];
+  };
+  private readonly accessPolicy: WorkspaceAccessPolicy;
+  private readonly explicitExcludedPaths: readonly string[];
+  private policyRevision: number;
   private readonly processFactory: ProcessFactory;
   private process: SidecarProcess | undefined;
   private readonly pending = new Map<number, PendingRequest>();
@@ -156,11 +162,15 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   constructor(options: RustWorkspacePathIndexConfiguration, processFactory: ProcessFactory = startProcess) {
     const { accessPolicy = new WorkspaceAccessPolicy(), readContentOverrides, ...rawOptions } = options;
     this.readContentOverrides = readContentOverrides;
+    this.accessPolicy = accessPolicy;
+    this.policyRevision = accessPolicy.revision;
     const parsed = rustWorkspacePathIndexOptionsSchema.parse(rawOptions);
+    this.explicitExcludedPaths = parsed.excludedPaths;
     const projected = accessPolicy.exclusionsFor(parsed.root, parsed.caseSensitive);
     this.options = {
       ...parsed,
       ...accessPolicy.toJSON(),
+      ...(accessPolicy.privatePaths.length > 0 ? { privatePaths: [...accessPolicy.privatePaths] } : {}),
       excludedPaths: [...new Set([...parsed.excludedPaths, ...projected.excludedPaths])],
       ...(projected.privateRoot ? { excludeRoot: true } : {}),
       binaryPath: resolve(parsed.binaryPath),
@@ -196,18 +206,14 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   }
 
   async initialize(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
+    this.synchronizePolicy();
     if (this.initialized) return this.initialized;
     if (!this.initializing) {
       const { binaryPath: _, ...configuration } = this.options;
-      this.initializing = this.request(PathIndexMethod.INITIALIZE, configuration)
-        .then(value => {
-          const result = indexStateSchema.parse(value);
-          this.initialized = result;
-          return result;
-        })
-        .finally(() => {
-          this.initializing = undefined;
-        });
+      const operation = this.requestState(PathIndexMethod.INITIALIZE, configuration).finally(() => {
+        if (this.initializing === operation) this.initializing = undefined;
+      });
+      this.initializing = operation;
     }
     return withAbortSignal(this.initializing, signal);
   }
@@ -216,6 +222,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     query: string,
     options: { generation: number; limit?: number; signal?: AbortSignal },
   ): Promise<FileSearchResult> {
+    this.synchronizePolicy();
     if (!this.initialized) await this.initialize(options.signal);
     return searchResultSchema.parse(
       await this.request(
@@ -234,6 +241,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     pattern: string,
     options: { targetDirectory?: string; rootFilesOnly?: boolean; limit: number; signal?: AbortSignal },
   ): Promise<WorkspacePathGlobResult> {
+    this.synchronizePolicy();
     if (!this.initialized) await this.initialize(options.signal);
     return globResultSchema.parse(
       await this.request(
@@ -258,6 +266,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
     const { signal, ...serializableOptions } = options;
     const resolvedOptions = workspaceContentSearchOptionsSchema.parse(serializableOptions);
+    this.synchronizePolicy();
     if (!this.initialized) await this.initialize(signal);
     const overrides = await this.readContentOverrides?.(signal);
     signal?.throwIfAborted();
@@ -275,21 +284,37 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
 
   /** Metadata-only intersection with the catalog, including ignore and sensitive-file exclusions. */
   async filterPaths(paths: readonly string[], signal?: AbortSignal): Promise<readonly string[]> {
+    this.synchronizePolicy();
     if (!this.initialized) await this.initialize(signal);
     return z.array(z.string()).parse(await this.request(PathIndexMethod.FILTER_PATHS, paths, signal));
   }
 
   async refresh(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
+    this.synchronizePolicy();
     if (!this.initialized) return this.initialize(signal);
-    const result = indexStateSchema.parse(await this.request(PathIndexMethod.REFRESH, {}, signal));
-    this.initialized = result;
-    return result;
+    return this.requestState(PathIndexMethod.REFRESH, {}, signal);
   }
 
   dispose(): Promise<void> {
     if (this.disposed) return Promise.resolve();
     this.disposing ??= this.shutdown();
     return this.disposing;
+  }
+
+  private async requestState(
+    method: PathIndexMethod.INITIALIZE | PathIndexMethod.REFRESH,
+    params: unknown,
+    signal?: AbortSignal,
+  ): Promise<WorkspacePathIndexState> {
+    const revision = this.policyRevision;
+    const response = this.request(method, params, signal);
+    const worker = this.process;
+    const result = indexStateSchema.parse(await response);
+    // A decoded reply can resume after another caller rotates the worker or its policy.
+    if (worker !== this.process || revision !== this.accessPolicy.revision)
+      throw new Error('Workspace index changed while loading state. Retry the request.');
+    this.initialized = result;
+    return result;
   }
 
   private async shutdown(): Promise<void> {
@@ -313,12 +338,29 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     }
   }
 
+  /** Rotate a cached worker before accepting work under newly admitted host-private paths. */
+  private synchronizePolicy(): void {
+    if (this.policyRevision === this.accessPolicy.revision) return;
+    this.fail(new Error('Workspace private paths changed. Retry the request.'));
+    this.initializing = undefined;
+    this.policyRevision = this.accessPolicy.revision;
+    const projected = this.accessPolicy.exclusionsFor(this.options.root, this.options.caseSensitive);
+    this.options.excludedPaths = [...new Set([...this.explicitExcludedPaths, ...projected.excludedPaths])];
+    this.options.privatePaths = [...this.accessPolicy.privatePaths];
+    if (projected.privateRoot) this.options.excludeRoot = true;
+    else delete this.options.excludeRoot;
+  }
+
   private request(method: PathIndexMethod, params: unknown, signal?: AbortSignal): Promise<unknown> {
     if (this.disposed) return Promise.reject(new Error('The workspace path index has been disposed.'));
     if (this.disposing && method !== PathIndexMethod.SHUTDOWN) {
       return Promise.reject(new Error('The workspace path index is shutting down.'));
     }
     if (signal?.aborted === true) return Promise.reject(toAbortError(signal));
+    if (method !== PathIndexMethod.SHUTDOWN && this.policyRevision !== this.accessPolicy.revision) {
+      this.synchronizePolicy();
+      return Promise.reject(new Error('Workspace private paths changed. Retry the request.'));
+    }
     const process = this.ensureProcess();
     const id = this.nextRequestId++;
     return new Promise((resolveRequest, rejectRequest) => {
@@ -329,7 +371,16 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
       };
       signal?.addEventListener('abort', onAbort, { once: true });
       const removeAbortListener = (): void => signal?.removeEventListener('abort', onAbort);
-      this.pending.set(id, { resolve: resolveRequest, reject: rejectRequest, removeAbortListener });
+      this.pending.set(id, {
+        resolve: value => {
+          if (method !== PathIndexMethod.SHUTDOWN && this.policyRevision !== this.accessPolicy.revision) {
+            this.synchronizePolicy();
+            rejectRequest(new Error('Workspace private paths changed. Retry the request.'));
+          } else resolveRequest(value);
+        },
+        reject: rejectRequest,
+        removeAbortListener,
+      });
       process.stdin.write(`${JSON.stringify({ version: PROTOCOL_VERSION, id, method, params })}\n`, error => {
         if (!error) return;
         const pending = this.pending.get(id);

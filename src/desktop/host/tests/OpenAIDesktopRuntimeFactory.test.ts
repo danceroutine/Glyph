@@ -230,6 +230,7 @@ vi.mock('#src/providers/openai/OpenAIProviderFactory.js', async importOriginal =
 let isolatedUserDirectory: string;
 beforeEach(async () => {
   vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'assertWorkspacePath').mockResolvedValue(undefined);
   isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
   onTestFinished(async () => {
     await rm(isolatedUserDirectory, { recursive: true, force: true });

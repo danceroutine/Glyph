@@ -1,3 +1,4 @@
+use glyph_filesystem_metadata::workspace_paths::WorkspacePaths;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -154,6 +155,7 @@ fn has_windows_drive_prefix(path: &str) -> bool {
 
 #[derive(Clone)]
 pub(crate) struct ContentSearchContext {
+    access: WorkspacePaths,
     root: PathBuf,
     paths: Arc<RwLock<BTreeSet<String>>>,
     index_truncated: Arc<AtomicBool>,
@@ -169,7 +171,7 @@ trait SearchableFiles: Sync {
 
 impl SearchableFiles for ContentSearchContext {
     fn read(&self, path: &str) -> Result<String, ()> {
-        read_searchable_file(&self.root, path, self.max_file_bytes)
+        read_searchable_file(&self.root, path, self.max_file_bytes, &self.access)
     }
 }
 
@@ -214,6 +216,10 @@ fn collect_outcomes(
 }
 
 impl ContentSearchContext {
+    pub(crate) fn with_access(mut self, access: WorkspacePaths) -> Self {
+        self.access = access;
+        self
+    }
     pub(crate) fn new(
         root: PathBuf,
         paths: Arc<RwLock<BTreeSet<String>>>,
@@ -222,6 +228,7 @@ impl ContentSearchContext {
         max_file_bytes: u64,
     ) -> Self {
         Self {
+            access: WorkspacePaths::default(),
             root,
             paths,
             index_truncated,
@@ -235,7 +242,15 @@ impl ContentSearchContext {
         params: ContentSearchParams,
         cancelled: &AtomicBool,
     ) -> Result<ContentSearchResult, ContentSearchError> {
-        self.search_files(params, cancelled, self)
+        let result = self.search_files(params, cancelled, self)?;
+        self.access
+            .current_at_completion()
+            .then_some(result)
+            .ok_or_else(|| {
+                ContentSearchError::Internal(
+                    "Workspace access boundaries changed during search.".into(),
+                )
+            })
     }
 
     fn search_files(
@@ -353,6 +368,7 @@ impl ContentSearchContext {
             .map_err(|_| "The known-path set lock is poisoned.".to_owned())?;
         Ok(paths
             .iter()
+            .filter(|path| !self.access.excludes(&self.root.join(path)))
             .filter(|path| path_is_in_scope(path, scoped_path, self.path_case_sensitive))
             .filter(|path| file_glob.is_none_or(|matcher| matcher.is_match(path)))
             .filter(|path| file_types.is_none_or(|types| types.matched(path, false).is_whitelist()))
@@ -655,7 +671,12 @@ fn path_is_in_scope(path: &str, scope: Option<&str>, case_sensitive: bool) -> bo
     }
 }
 
-fn read_searchable_file(root: &Path, relative: &str, max_file_bytes: u64) -> Result<String, ()> {
+fn read_searchable_file(
+    root: &Path,
+    relative: &str,
+    max_file_bytes: u64,
+    access: &WorkspacePaths,
+) -> Result<String, ()> {
     let candidate = root.join(relative);
     let link = fs::symlink_metadata(&candidate).map_err(|_| ())?;
     if !link.is_file() || link.file_type().is_symlink() || link.len() > max_file_bytes {
@@ -665,7 +686,20 @@ fn read_searchable_file(root: &Path, relative: &str, max_file_bytes: u64) -> Res
     if canonical != candidate || !canonical.starts_with(root) {
         return Err(());
     }
-    open_searchable_file(&canonical, &link, max_file_bytes)
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        Some((link.dev().to_string(), link.ino().to_string()))
+    };
+    #[cfg(not(unix))]
+    let identity: Option<(String, String)> = None;
+    let identity = identity
+        .as_ref()
+        .map(|(dev, ino)| (dev.as_str(), ino.as_str()));
+    access.assert_path(&canonical, identity).map_err(|_| ())?;
+    let text = open_searchable_file(&canonical, &link, max_file_bytes)?;
+    access.assert_path(&canonical, identity).map_err(|_| ())?;
+    Ok(text)
 }
 
 fn open_searchable_file(

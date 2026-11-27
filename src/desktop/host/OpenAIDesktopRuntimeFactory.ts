@@ -148,7 +148,13 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       configuration.stateDirectory,
       configuration.traceFile,
     );
-    const policy = new WorkspaceAccessPolicy();
+    const policy = new WorkspaceAccessPolicy(
+      {},
+      [configuration.stateDirectory, configuration.traceFile, artifactRoot].flatMap(path => [
+        path,
+        resolveAvailableIdentity(path),
+      ]),
+    );
     const logger = new FileLogger(configuration.traceFile);
     const namePolicies = await Promise.all(
       roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemNamePolicy(indexExecutable, workspaceRoot.path)),
@@ -164,6 +170,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         caseSensitive: namePolicies[i]!.caseSensitive,
         accessPolicy: policy,
         excludedPaths,
+        physicalAccess: filesystemMetadata,
       });
       const index: RustWorkspacePathIndex = new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
@@ -218,6 +225,15 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           )
             wire = { ...wire, mutation: { ...wire.mutation, target: `${workspaceRoot.name}/${wire.mutation.target}` } };
           const response = await this.editors.request(input.identity, wire, signal);
+          if (path !== undefined && path !== '') {
+            await disk.validateAccess(path);
+            if (
+              request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
+              'target' in request.mutation &&
+              request.mutation.target
+            )
+              await disk.validateAccess(request.mutation.target);
+          }
           return response.snapshot && path !== undefined && path !== ''
             ? {
                 ...response,
@@ -328,6 +344,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
         accessPolicy: userInstructionPolicy,
         caseSensitive: userRuleStore.caseSensitive,
+        physicalAccess: filesystemMetadata,
       });
       let userRuleIndex = this.userRuleIndexes.get(userRuleRoot);
       if (!userRuleIndex) {

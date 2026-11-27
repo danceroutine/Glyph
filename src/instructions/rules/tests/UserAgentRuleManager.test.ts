@@ -230,6 +230,18 @@ describe(UserAgentRuleManager, () => {
     );
   });
 
+  it.each([
+    ['enabled: true  # Keep until release', 'enabled: false  # Keep until release'],
+    ['enabled:\ttrue\t', 'enabled:\tfalse\t'],
+    ['enabled:true', 'enabled:false'],
+    ['enabled: # Default', 'enabled: false # Default'],
+    ['enabled:# Default', 'enabled: false # Default'],
+    ['enabled:', 'enabled: false'],
+  ])('preserves the comment and spacing in %s', (original, expected) => {
+    const text = ['---', original, '---', 'Body'].join('\r\n');
+    expect(withEnabled__TESTING_ONLY(text, false)).toBe(text.replace(original, expected));
+  });
+
   it('inserts a missing enabled field', () => {
     expect(withEnabled__TESTING_ONLY('---\nname: Test\n---\nBody', true)).toBe(
       '---\nname: Test\nenabled: true\n---\nBody',

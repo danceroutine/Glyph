@@ -10,6 +10,7 @@ export function normalizeVolumeName(
   policy?: { normalizesUnicode?: boolean; foldsUnicode?: boolean },
 ): string {
   if (!policy?.normalizesUnicode) return value;
+  if (policy.foldsUnicode && /^\p{ASCII}*$/u.test(value)) return value.toLowerCase();
   const normalized = value.normalize('NFC');
   if (!policy.foldsUnicode) return normalized;
   // Map one scalar at a time so Greek sigma is independent of its word position.

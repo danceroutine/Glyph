@@ -46,35 +46,89 @@ export class RuleGlobBudget {
   }
 }
 
-/** Match the rule against a path using the target root's filesystem casing. */
+/** Resolve each participating scope and evaluate shared rule patterns once per disclosure. */
+export class RulePathBatch {
+  private readonly scopes = new Map<string, ReturnType<RulePathBatch['resolveScope']>>();
+  constructor(
+    private readonly inputs: readonly string[],
+    private readonly paths: InstructionPaths,
+    private readonly budget = new RuleGlobBudget(),
+  ) {}
+
+  matching(scope: string, globs?: readonly string[]): readonly string[] {
+    let resolved = this.scopes.get(scope);
+    if (!resolved) {
+      resolved = this.resolveScope(scope);
+      this.scopes.set(scope, resolved);
+    }
+    if (!globs) return resolved.paths;
+    const key = JSON.stringify(globs);
+    let matches = resolved.selections.get(key);
+    if (!matches) {
+      matches = resolved.paths.filter((_path, index) => globs.some(pattern => resolved.matches(index, pattern)));
+      resolved.selections.set(key, matches);
+    }
+    return matches;
+  }
+
+  private resolveScope(scope: string) {
+    const paths = this.inputs.filter(path => this.paths.contains(scope, path));
+    const routes = new Map<number, ReturnType<RulePathBatch['resolveRoutes']>>();
+    const patterns = new Map<string, Map<number, boolean>>();
+    const matches = (index: number, pattern: string): boolean => {
+      let results = patterns.get(pattern);
+      if (!results) {
+        results = new Map();
+        patterns.set(pattern, results);
+      }
+      const cached = results.get(index);
+      if (cached !== undefined) return cached;
+      let resolved = routes.get(index);
+      if (!resolved) {
+        resolved = this.resolveRoutes(scope, paths[index]!);
+        routes.set(index, resolved);
+      }
+      const result = resolved.some(matchesRoute => matchesRoute(pattern));
+      results.set(index, result);
+      return result;
+    };
+    return { paths, matches, selections: new Map<string, readonly string[]>() };
+  }
+
+  private resolveRoutes(scope: string, path: string) {
+    const paths = this.paths;
+    return (scope === '.' ? paths.equivalents(path) : [path]).map(route => {
+      const relative = paths.relativeToScope(scope, route);
+      const owner = scope === '.' ? route : scope;
+      const policy = paths.routes?.namePolicy(owner);
+      const sensitive = paths.caseSensitive(owner);
+      let stored: string | undefined;
+      return (pattern: string): boolean => {
+        const candidate = pattern.includes('?')
+          ? (stored ??= paths.relativeToScope(scope, this.budget.storedSpelling(route, paths)))
+          : relative;
+        const matched = this.budget.matches(pattern, candidate, sensitive, policy);
+        if (!matched || !paths.routes) return matched;
+        const components = pattern.split('/');
+        const wildcard = components.findIndex(component => /[?*]/u.test(component));
+        const prefix = (wildcard < 0 ? components : components.slice(0, wildcard)).join('/');
+        if (!prefix || relative === prefix || relative.startsWith(prefix + '/')) return true;
+        const root = route.split('/')[0]!;
+        const base = scope === '.' && paths.isWorkspaceRoot(root) ? root : scope;
+        return paths.contains(paths.reference(base, prefix), route);
+      };
+    });
+  }
+}
+
+/** Match one source outside a shared disclosure batch. */
 export function matchesAgentRulePath(
   source: AgentInstructionSource,
   path: string,
   paths: InstructionPaths = defaultInstructionPaths,
   budget = new RuleGlobBudget(),
 ): boolean {
-  if (!paths.contains(source.scope, path)) return false;
-  const routes = source.scope === '.' ? paths.equivalents(path) : [path];
-  return routes.some(route => {
-    const relative = paths.relativeToScope(source.scope, route);
-    const owner = source.scope === '.' ? route : source.scope;
-    const policy = paths.routes?.namePolicy(owner);
-    return source.globs?.some(pattern => {
-      const sensitive = paths.caseSensitive(owner);
-      const candidate = pattern.includes('?')
-        ? paths.relativeToScope(source.scope, budget.storedSpelling(route, paths))
-        : relative;
-      const matched = budget.matches(pattern, candidate, sensitive, policy);
-      if (!matched || !paths.routes) return matched;
-      const components = pattern.split('/');
-      const wildcard = components.findIndex(component => /[?*]/u.test(component));
-      const prefix = (wildcard < 0 ? components : components.slice(0, wildcard)).join('/');
-      if (!prefix || relative === prefix || relative.startsWith(prefix + '/')) return true;
-      const root = route.split('/')[0]!;
-      const scope = source.scope === '.' && paths.isWorkspaceRoot(root) ? root : source.scope;
-      return paths.contains(paths.reference(scope, prefix), route);
-    });
-  });
+  return new RulePathBatch([path], paths, budget).matching(source.scope, source.globs ?? []).length > 0;
 }
 
 /**

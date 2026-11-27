@@ -99,7 +99,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     let uri: string | undefined;
     try {
       normalized = this.workspace.normalizePath(path);
-      scope = ruleScope(normalized, this.options.directory, this.paths.caseSensitive(normalized));
+      scope = ruleScope(normalized, this.options.directory, this.paths);
       const snapshot = await this.read(normalized, budget);
       signal?.throwIfAborted();
       sourceRevision = snapshot.revision;
@@ -272,11 +272,17 @@ interface DiscoveryBudget {
   edges: number;
 }
 
-function ruleScope(path: string, directory: '.glyph' | '.cursor' | '.', sensitive: boolean): string {
+function ruleScope(path: string, directory: '.glyph' | '.cursor' | '.', paths: InstructionPaths): string {
   if (directory === '.') return '.';
   const segments = path.split('/');
   const location = segments.slice(-3).join('/');
-  const normalized = sensitive ? location : location.toLowerCase();
+  // The physical project index validates each reserved entry in its actual directory. Keep
+  // those stored spellings while structurally parsing its result. Other listers own their casing.
+  const normalized = paths.routes
+    ? location.normalize('NFC').toUpperCase().toLowerCase()
+    : paths.caseSensitive(path)
+      ? location
+      : location.toLowerCase();
   if (!normalized.startsWith(`${directory}/rules/`) || !normalized.endsWith('.mdc'))
     throw new Error(`Rule path is outside ${directory}/rules: ${path}`);
   return segments.slice(0, -3).join('/') || '.';

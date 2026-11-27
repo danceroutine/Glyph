@@ -1,4 +1,9 @@
 //! Descriptor-bound inspection for private storage and mode-only filesystem replacements.
+#[path = "casing.rs"]
+pub mod filesystem_casing;
+#[cfg(target_os = "linux")]
+pub mod mount_table;
+pub mod workspace_paths;
 use std::io;
 use std::path::Path;
 

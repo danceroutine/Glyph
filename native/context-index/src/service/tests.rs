@@ -277,6 +277,7 @@ fn params(root: &Path) -> InitializeParams {
         sensitive_file_extensions: default_sensitive_file_extensions(),
         allowed_file_names: default_allowed_file_names(),
         excluded_paths: Vec::new(),
+        private_paths: Vec::new(),
         exclude_root: false,
         respect_git_ignore: true,
         max_files: DEFAULT_MAX_FILES,
@@ -1774,7 +1775,13 @@ fn direct_root_globs_observe_current_children_and_ignore_policy_with_a_truncated
     assert_eq!(
         direct("AGENTS.md").unwrap(),
         GlobResult {
-            files: vec!["agents.MD".into()],
+            files: root
+                .path()
+                .join("AGENTS.md")
+                .exists()
+                .then(|| "agents.MD".into())
+                .into_iter()
+                .collect(),
             truncated: false
         }
     );
@@ -1836,10 +1843,101 @@ fn private_directory_uses_the_entries_actual_filename_equivalence() {
     assert_eq!(policy.excludes(".ſkill-staging/fixture.txt"), equivalent);
     assert_eq!(
         workspace_walk(base.path(), &policy)
+            .unwrap()
+            .0
             .build()
             .flatten()
             .any(|entry| entry.file_name() == "fixture.txt"),
         !equivalent
     );
     assert_eq!(fixture_policy(&params(&stored)).exclude_root, equivalent);
+}
+
+#[test]
+fn instruction_globs_use_stored_role_names_inside_the_admitted_index() {
+    let root = tempdir().unwrap();
+    create_dir_all(root.path().join("sub/.glyph/ruleſ")).unwrap();
+    write(root.path().join("sub/AGENTſ.md"), "guidance").unwrap();
+    write(root.path().join("sub/.glyph/ruleſ/guide.mdc"), "guide").unwrap();
+    let mut service = ContextIndexService::new();
+    service.initialize(params(root.path())).unwrap();
+    for (pattern, canonical, stored) in [
+        ("**/?*/AGENTS.md", "sub/AGENTS.md", "sub/AGENTſ.md"),
+        (
+            "**/.glyph/rules/*.mdc",
+            "sub/.glyph/rules/guide.mdc",
+            "sub/.glyph/ruleſ/guide.mdc",
+        ),
+    ] {
+        let result = service
+            .glob(GlobParams {
+                pattern: pattern.into(),
+                target_directory: None,
+                root_files_only: false,
+                limit: 1,
+            })
+            .unwrap();
+        assert_eq!(
+            result.files.contains(&stored.to_owned()),
+            root.path().join(canonical).exists()
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn discards_lookups_if_an_explicit_private_location_is_redirected() {
+    let root = tempdir().unwrap();
+    let private = root.path().join("private");
+    let alias = root.path().join("permission-scope");
+    fs::create_dir(&private).unwrap();
+    std::os::unix::fs::symlink(&private, &alias).unwrap();
+    let mut cfg = params(root.path());
+    cfg.private_paths = vec![alias.clone()];
+    let mut service = ContextIndexService::new();
+    service.initialize(cfg).unwrap();
+    let context = service.content_search_context().unwrap();
+    let physical = initialized(&service).policy.physical().unwrap();
+    fs::remove_file(&alias).unwrap();
+    assert!(stable_result(&physical, ()).is_err());
+    assert!(physical
+        .assert_path(&root.path().join("ordinary"), None)
+        .is_err());
+    let request: crate::content_search::ContentSearchParams =
+        serde_json::from_value(serde_json::json!({
+            "pattern":"fixture","patternKind":"literal","outputMode":"count","limit":10,"offset":0,
+            "linesBefore":0,"linesAfter":0,"caseSensitive":true,"multiline":false
+        }))
+        .unwrap();
+    assert!(matches!(
+        context.search(request, &AtomicBool::new(false)),
+        Err(ContentSearchError::Internal(_))
+    ));
+    let mut malformed = params(root.path());
+    malformed.private_paths = vec!["relative".into()];
+    assert!(ContextIndexService::new().initialize(malformed).is_err());
+}
+
+#[test]
+fn explicit_exclusions_follow_the_filesystem_containing_the_file() {
+    let root = tempdir().unwrap();
+    let canonical = root.path().canonicalize().unwrap();
+    let private = canonical.join("record");
+    let sibling = canonical.join("Record");
+    fs::write(&private, "fixture").unwrap();
+    fs::write(&sibling, "ordinary").unwrap();
+    let mut configuration = params(&canonical);
+    configuration.case_sensitive = Some(false);
+    configuration.private_paths = vec![private.clone()];
+    configuration.excluded_paths = vec!["record".into()];
+    let result = scan_paths(
+        &canonical,
+        &fixture_policy(&configuration),
+        None,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(!result.paths.iter().any(|name| name == "record"));
+    let distinct = crate::service::filesystem_casing::detect(&canonical).unwrap();
+    assert_eq!(result.paths.iter().any(|name| name == "Record"), distinct);
 }

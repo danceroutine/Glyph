@@ -1,3 +1,4 @@
+use glyph_filesystem_metadata::workspace_paths::WorkspacePaths;
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -50,6 +51,8 @@ pub(crate) struct InitializeParams {
     #[serde(default)]
     pub(crate) excluded_paths: Vec<String>,
     #[serde(default)]
+    pub(crate) private_paths: Vec<PathBuf>,
+    #[serde(default)]
     pub(crate) exclude_root: bool,
     #[serde(default = "default_true")]
     pub(crate) respect_git_ignore: bool,
@@ -72,6 +75,7 @@ struct IndexPolicy {
     sensitive_file_extensions: Vec<String>,
     allowed_file_names: Vec<String>,
     excluded_paths: Vec<String>,
+    private_paths: Vec<PathBuf>,
     exclude_root: bool,
     respect_git_ignore: bool,
     max_files: u32,
@@ -101,7 +105,13 @@ impl IndexPolicy {
             sensitive_file_prefixes: normalize(&params.sensitive_file_prefixes),
             sensitive_file_extensions: normalize(&params.sensitive_file_extensions),
             allowed_file_names: normalize(&params.allowed_file_names),
-            excluded_paths: normalize(&params.excluded_paths),
+            excluded_paths: params.excluded_paths.clone(),
+            private_paths: params
+                .private_paths
+                .iter()
+                .cloned()
+                .chain(params.excluded_paths.iter().map(|p| root.join(p)))
+                .collect(),
             exclude_root: params.exclude_root || root.ancestors().any(private_alias),
             respect_git_ignore: params.respect_git_ignore,
             max_files: params.max_files,
@@ -111,6 +121,12 @@ impl IndexPolicy {
 }
 
 impl IndexPolicy {
+    fn physical(&self) -> Result<WorkspacePaths, ServiceError> {
+        WorkspacePaths::current(&self.private_paths).map_err(|error| {
+            ServiceError::internal(format!("Could not verify workspace access: {error}"))
+        })
+    }
+
     fn validate(&self) -> Result<(), ServiceError> {
         if self.max_files == 0 {
             return Err(ServiceError::invalid_request("maxFiles must be positive."));
@@ -150,13 +166,6 @@ impl IndexPolicy {
         {
             return true;
         }
-        let folded;
-        let relative_path = if self.case_sensitive {
-            relative_path
-        } else {
-            folded = relative_path.to_lowercase();
-            &folded
-        };
         if self
             .excluded_paths
             .iter()
@@ -164,6 +173,13 @@ impl IndexPolicy {
         {
             return true;
         }
+        let folded;
+        let relative_path = if self.case_sensitive {
+            relative_path
+        } else {
+            folded = relative_path.to_lowercase();
+            &folded
+        };
         let name = relative_path
             .rsplit_once('/')
             .map_or(relative_path, |(_, name)| name);
@@ -527,7 +543,8 @@ impl ContextIndexService {
             .index
             .lock()
             .map_err(|_| ServiceError::internal("The file index lock is poisoned."))?;
-        index
+        let physical = initialized.policy.physical()?;
+        let mut result = index
             .search(
                 params.query,
                 params.limit as usize,
@@ -536,7 +553,11 @@ impl ContextIndexService {
             )
             .map_err(|failure| match failure {
                 SearchFailure::Superseded => ServiceError::superseded(),
-            })
+            })?;
+        result
+            .matches
+            .retain(|entry| !physical.excludes(&initialized.root.join(&entry.path)));
+        stable_result(&physical, result)
     }
 
     pub(crate) fn content_search_context(&self) -> Result<ContentSearchContext, ServiceError> {
@@ -550,7 +571,8 @@ impl ContextIndexService {
             Arc::clone(&initialized.truncated),
             initialized.policy.case_sensitive,
             initialized.max_content_search_file_bytes,
-        ))
+        )
+        .with_access(initialized.policy.physical()?))
     }
 
     /// The initialized authority is a single user-rule directory; only its immediate files can be replaced.
@@ -621,7 +643,14 @@ impl ContextIndexService {
                 }
             }
         }
-        Ok(selected.into_iter().collect())
+        let physical = initialized.policy.physical()?;
+        stable_result(
+            &physical,
+            selected
+                .into_iter()
+                .filter(|path| !physical.excludes(&initialized.root.join(path)))
+                .collect(),
+        )
     }
 
     pub(crate) fn list_skill_packages(
@@ -671,7 +700,29 @@ impl ContextIndexService {
             .known_paths
             .read()
             .map_err(|_| ServiceError::internal("The known-path set lock is poisoned."))?;
-        find_matches(
+        let physical = initialized.policy.physical()?;
+        if let Some(query) = crate::catalog_names::InstructionQuery::from_pattern(&params.pattern)
+            .filter(|_| params.target_directory.is_none())
+        {
+            let mut names = crate::catalog_names::CatalogNames::new(&initialized.root);
+            let mut matches = paths.iter().filter(|path| {
+                !physical.excludes(&initialized.root.join(path)) && query.matches(&mut names, path)
+            });
+            let files = matches
+                .by_ref()
+                .take(params.limit as usize)
+                .cloned()
+                .collect();
+            return stable_result(
+                &physical,
+                GlobResult {
+                    files,
+                    truncated: initialized.truncated.load(Ordering::Acquire)
+                        || matches.next().is_some(),
+                },
+            );
+        }
+        let mut result = find_matches(
             &paths,
             &params.pattern,
             params.target_directory.as_deref(),
@@ -680,7 +731,11 @@ impl ContextIndexService {
             initialized.policy.case_sensitive,
             initialized.truncated.load(Ordering::Acquire),
         )
-        .map_err(ServiceError::invalid_request)
+        .map_err(ServiceError::invalid_request)?;
+        result
+            .files
+            .retain(|path| !physical.excludes(&initialized.root.join(path)));
+        stable_result(&physical, result)
     }
 
     pub(crate) fn refresh(&mut self) -> Result<IndexStatus, ServiceError> {
@@ -1048,10 +1103,23 @@ fn private_alias(path: &Path) -> bool {
 }
 
 /// Share ignore-file, directory exclusion, and link semantics with the resident catalog.
-fn workspace_walk(root: &Path, policy: &IndexPolicy) -> WalkBuilder {
+fn stable_result<T>(physical: &WorkspacePaths, result: T) -> Result<T, ServiceError> {
+    if physical.current_at_completion() {
+        Ok(result)
+    } else {
+        Err(ServiceError::internal(
+            "Workspace access boundaries changed during lookup.",
+        ))
+    }
+}
+
+fn workspace_walk(
+    root: &Path,
+    policy: &IndexPolicy,
+) -> Result<(WalkBuilder, WorkspacePaths), ServiceError> {
+    let physical = policy.physical()?;
+    let walk_policy = physical.clone();
     let ignored: HashSet<_> = policy.ignored_directories.iter().cloned().collect();
-    let excluded_paths = policy.excluded_paths.clone();
-    let filter_root = root.to_path_buf();
     let case_sensitive = policy.case_sensitive;
     let mut builder = WalkBuilder::new(root);
     builder
@@ -1063,6 +1131,9 @@ fn workspace_walk(root: &Path, policy: &IndexPolicy) -> WalkBuilder {
         .ignore(policy.respect_git_ignore)
         .parents(policy.respect_git_ignore)
         .filter_entry(move |entry| {
+            if walk_policy.excludes(entry.path()) {
+                return false;
+            }
             let is_directory = entry.file_type().is_some_and(|kind| kind.is_dir());
             if !is_directory {
                 return true;
@@ -1078,19 +1149,10 @@ fn workspace_walk(root: &Path, policy: &IndexPolicy) -> WalkBuilder {
             {
                 return false;
             }
-            normalize_relative_path(&filter_root, entry.path()).is_none_or(|relative| {
-                let normalized = if case_sensitive {
-                    relative
-                } else {
-                    relative.to_lowercase()
-                };
-                !excluded_paths
-                    .iter()
-                    .any(|excluded| path_is_excluded(&normalized, excluded))
-            })
+            true
         });
 
-    builder
+    Ok((builder, physical))
 }
 
 /// Read only direct children, independently of watcher lag, warm caches and nested index limits.
@@ -1101,10 +1163,12 @@ fn glob_root_files(
     let matcher =
         crate::path_glob::compile_matcher(&params.pattern, initialized.policy.case_sensitive)
             .map_err(ServiceError::invalid_request)?;
+    let mut names = crate::catalog_names::CatalogNames::new(&initialized.root);
+    let query = crate::catalog_names::InstructionQuery::from_pattern(&params.pattern);
     let mut files = BTreeSet::new();
     let mut truncated = false;
     if !initialized.policy.exclude_root {
-        let mut walk = workspace_walk(&initialized.root, &initialized.policy);
+        let (mut walk, physical) = workspace_walk(&initialized.root, &initialized.policy)?;
         for entry in walk.max_depth(Some(1)).build() {
             let entry = entry.map_err(|error| ServiceError::internal(error.to_string()))?;
             if let Some(error) = entry.error() {
@@ -1118,11 +1182,12 @@ fn glob_root_files(
             {
                 continue;
             }
-            if let Some(name) = entry
-                .file_name()
-                .to_str()
-                .filter(|name| matcher.is_match(name) && !initialized.policy.excludes(name))
-            {
+            if let Some(name) = entry.file_name().to_str().filter(|name| {
+                !initialized.policy.excludes(name)
+                    && query
+                        .as_ref()
+                        .map_or_else(|| matcher.is_match(name), |q| q.matches(&mut names, name))
+            }) {
                 files.insert(name.to_owned());
                 if files.len() > params.limit as usize {
                     files.pop_last();
@@ -1130,6 +1195,7 @@ fn glob_root_files(
                 }
             }
         }
+        stable_result(&physical, ())?;
     }
     Ok(GlobResult {
         files: files.into_iter().collect(),
@@ -1149,7 +1215,7 @@ fn scan_paths(
             truncated: false,
         });
     }
-    let builder = workspace_walk(root, policy);
+    let (builder, physical) = workspace_walk(root, policy)?;
 
     // WalkParallel::run joins its visitors before returning. Borrow the local
     // accumulator so no shared owner or fallible ownership recovery is needed.
@@ -1212,10 +1278,13 @@ fn scan_paths(
         .expect("scan accumulator cannot be poisoned");
     paths.sort_unstable();
     paths.dedup();
-    Ok(ScanResult {
-        paths,
-        truncated: truncated.load(Ordering::Acquire),
-    })
+    stable_result(
+        &physical,
+        ScanResult {
+            paths,
+            truncated: truncated.load(Ordering::Acquire),
+        },
+    )
 }
 
 fn normalize_relative_path(root: &Path, path: &Path) -> Option<String> {
@@ -1231,7 +1300,12 @@ fn normalize_relative_path(root: &Path, path: &Path) -> Option<String> {
 }
 
 fn cached_paths_are_allowed(cached: &CachedPaths, policy: &IndexPolicy) -> bool {
-    cached.paths.iter().all(|path| !policy.excludes(path))
+    policy.physical().is_ok_and(|physical| {
+        cached
+            .paths
+            .iter()
+            .all(|path| !policy.excludes(path) && !physical.excludes(&policy.root.join(path)))
+    })
 }
 
 fn elapsed_millis(started: Instant) -> u64 {
@@ -1319,136 +1393,7 @@ pub(crate) fn filesystem_name_policy(path: &Path) -> Result<FilesystemNamePolicy
     })
 }
 
-#[cfg(target_os = "macos")]
-mod filesystem_casing {
-    use std::{fs::File, io, os::fd::AsRawFd, path::Path};
-    pub(super) fn detect(path: &Path) -> io::Result<bool> {
-        let file = File::open(path)?;
-        // The open descriptor pins the volume even if a registered folder alias changes.
-        let value = unsafe { libc::fpathconf(file.as_raw_fd(), libc::_PC_CASE_SENSITIVE) };
-        case_setting(value)
-    }
-    pub(super) fn unicode_policy(path: &Path) -> io::Result<(bool, bool)> {
-        let file = File::open(path)?;
-        normalizing_volume(file.as_raw_fd())
-    }
-    pub(super) fn normalizing_volume(fd: libc::c_int) -> io::Result<(bool, bool)> {
-        let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
-        if unsafe { libc::fstatfs(fd, stat.as_mut_ptr()) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let stat = unsafe { stat.assume_init() };
-        let filesystem = unsafe { std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr()) };
-        let name = filesystem.to_bytes();
-        Ok((matches!(name, b"apfs" | b"hfs"), name == b"apfs"))
-    }
-    pub(super) fn case_setting(value: libc::c_long) -> io::Result<bool> {
-        match value {
-            -1 => Err(io::Error::last_os_error()),
-            value => Ok(value != 0),
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-mod filesystem_casing {
-    use std::{fs, io, path::Path};
-    pub(super) fn detect(path: &Path) -> io::Result<bool> {
-        let names: Vec<_> = fs::read_dir(path)?
-            .take(64)
-            .flatten()
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .collect();
-        if let Some(value) = observed_names(path, &names) {
-            return Ok(value);
-        }
-        empty_directory(path)
-    }
-
-    pub(super) fn observed_names(path: &Path, names: &[String]) -> Option<bool> {
-        for name in names {
-            let Some(position) = name.find(|c: char| c.is_ascii_alphabetic()) else {
-                continue;
-            };
-            let mut other = name.clone();
-            let letter = other.as_bytes()[position] ^ 32;
-            other.replace_range(position..position + 1, &(letter as char).to_string());
-            // Both spellings being separately listed proves they are distinct names, including hardlinks.
-            if names.contains(&other) {
-                return Some(true);
-            }
-            if let Some(sensitive) = compare(path, name, &other) {
-                return Some(sensitive);
-            }
-        }
-        None
-    }
-
-    #[cfg(unix)]
-    pub(super) fn compare(path: &Path, name: &str, other: &str) -> Option<bool> {
-        use std::os::unix::fs::MetadataExt;
-        let actual = fs::symlink_metadata(path.join(name)).ok()?;
-        match fs::symlink_metadata(path.join(other)) {
-            Ok(alias) if actual.dev() != alias.dev() || actual.ino() != alias.ino() => Some(true),
-            Ok(_) if actual.is_dir() || actual.nlink() == 1 => Some(false),
-            Ok(_) => None,
-            Err(error) => (error.kind() == io::ErrorKind::NotFound).then_some(true),
-        }
-    }
-
-    #[cfg(not(unix))]
-    fn compare(path: &Path, name: &str, other: &str) -> Option<bool> {
-        let actual = fs::canonicalize(path.join(name)).ok()?;
-        Some(fs::canonicalize(path.join(other)).map_or(true, |alias| actual != alias))
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn unicode_policy(path: &Path) -> io::Result<(bool, bool)> {
-        use std::os::fd::AsRawFd;
-        let directory = fs::File::open(path)?;
-        let fold = casefold_directory(directory.as_raw_fd());
-        Ok((fold, fold))
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub(super) fn unicode_policy(_path: &Path) -> io::Result<(bool, bool)> {
-        Ok((false, false))
-    }
-
-    #[cfg(target_os = "linux")]
-    fn casefold_directory(fd: libc::c_int) -> bool {
-        let mut flags: libc::c_long = 0;
-        // ext4 and F2FS enable canonical Unicode equivalence with their directory casefold flag.
-        let result = unsafe { libc::ioctl(fd, libc::FS_IOC_GETFLAGS, &mut flags) };
-        result == 0 && flags & 0x4000_0000 != 0
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn empty_directory(path: &Path) -> io::Result<bool> {
-        use std::os::fd::AsRawFd;
-        let directory = fs::File::open(path)?;
-        // FAT and exFAT names remain case-insensitive even when the directory has no entries.
-        let filesystem = filesystem_type(directory.as_raw_fd())?;
-        Ok(!matches!(filesystem, 0x4d44 | 0x2011_bab0)
-            && !casefold_directory(directory.as_raw_fd()))
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn filesystem_type(fd: libc::c_int) -> io::Result<u64> {
-        let mut filesystem = std::mem::MaybeUninit::<libc::statfs>::uninit();
-        if unsafe { libc::fstatfs(fd, filesystem.as_mut_ptr()) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // A successful fstatfs initializes the buffer. glibc and musl use different integer types for f_type.
-        #[allow(clippy::unnecessary_cast)]
-        Ok(unsafe { filesystem.assume_init() }.f_type as u64)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn empty_directory(_path: &Path) -> io::Result<bool> {
-        Ok(!cfg!(windows))
-    }
-}
+use glyph_filesystem_metadata::filesystem_casing;
 
 fn default_max_content_search_file_bytes() -> u64 {
     DEFAULT_MAX_CONTENT_SEARCH_FILE_BYTES

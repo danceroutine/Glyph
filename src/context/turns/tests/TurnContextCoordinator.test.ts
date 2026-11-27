@@ -65,6 +65,19 @@ const sources = [
 const catalog = () => ({ refresh: vi.fn(async () => sources) });
 
 describe(TurnContextCoordinator, () => {
+  it('retains file-pattern sources with no patterns as inactive across attachments and later reads', async () => {
+    const rule = source(
+      'empty',
+      AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      '.',
+      AgentInstructionActivationMode.FILE_PATTERN,
+    );
+    const coordinator = new TurnContextCoordinator({ refresh: async () => [rule] } as never);
+    const turn = await coordinator.beginTurn({ turnId: 'turn', attachmentPaths: ['one'] });
+    expect(turn.initialEnvelope().sources).toEqual([]);
+    expect(coordinator.disclosePaths('turn', ['two'])).toBeUndefined();
+  });
+
   it('prepares attachments, always-on sources, manual selections, and bounded candidates once', async () => {
     const coordinator = new TurnContextCoordinator(catalog() as never);
     const session = await coordinator.beginTurn({

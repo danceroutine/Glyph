@@ -37,9 +37,12 @@ export class WorkspaceAccessPolicy {
   readonly sensitiveFileExtensions: readonly string[];
   readonly allowedFileNames: readonly string[];
 
+  private privatePathSnapshot: readonly string[] = [];
+  private privatePathRevision = 0;
+
   constructor(
     options: WorkspaceAccessPolicyOptions = {},
-    private readonly privatePaths: readonly string[] = [],
+    private readonly privatePathSource: readonly string[] | (() => readonly string[]) = [],
   ) {
     const resolved = schema.parse(options);
     // Transaction journals, locks and rollback copies remain host-private under customized policies too.
@@ -48,6 +51,25 @@ export class WorkspaceAccessPolicy {
     this.sensitiveFilePrefixes = resolved.sensitiveFilePrefixes;
     this.sensitiveFileExtensions = resolved.sensitiveFileExtensions;
     this.allowedFileNames = resolved.allowedFileNames;
+  }
+
+  /** Absolute host exclusions, including profiles admitted after this policy was constructed. */
+  get privatePaths(): readonly string[] {
+    const paths = typeof this.privatePathSource === 'function' ? this.privatePathSource() : this.privatePathSource;
+    if (
+      paths.length !== this.privatePathSnapshot.length ||
+      paths.some((path, i) => path !== this.privatePathSnapshot[i])
+    ) {
+      this.privatePathSnapshot = Object.freeze([...paths]);
+      this.privatePathRevision++;
+    }
+    return this.privatePathSnapshot;
+  }
+
+  /** Monotonic generation used to reject results produced under an older host boundary. */
+  get revision(): number {
+    void this.privatePaths;
+    return this.privatePathRevision;
   }
 
   /** Project absolute host exclusions into the namespace of a single attached filesystem root. */
@@ -63,7 +85,10 @@ export class WorkspaceAccessPolicy {
       const pathKey = key(path);
       const relative = posix.relative(rootKey, pathKey);
       if (relative === '' || rootKey.startsWith(pathKey.endsWith('/') ? pathKey : pathKey + '/')) privateRoot = true;
-      else if (relative !== '..' && !relative.startsWith('../')) excludedPaths.push(relative);
+      else if (relative !== '..' && !relative.startsWith('../')) {
+        // The suffix can cross a mount whose casing differs from the attached root.
+        excludedPaths.push(resolve(path).split(sep).slice(-relative.split('/').length).join('/'));
+      }
     }
     return { privateRoot, excludedPaths };
   }

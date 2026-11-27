@@ -23,6 +23,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 
@@ -52,6 +53,58 @@ async function actualFileSystem() {
 }
 
 describe(FileSystemWorkspaceTextStore, () => {
+  it('admits each listed path and pins reads to the opened file before and after loading', async () => {
+    const root = await workspaceRoot('glyph-physical-workspace-');
+    const outside = join(root, 'excluded');
+    const checked: { path: string; handle: FileHandle | undefined }[] = [];
+    const disk = new FileSystemWorkspaceTextStore(root, {
+      caseSensitive: true,
+      excludedPaths: ['excluded'],
+      physicalAccess: {
+        assertWorkspacePath: async (path, privatePaths, options) => {
+          expect(privatePaths).toContain(outside);
+          if (path.endsWith('/hidden')) throw new Error('private');
+          checked.push({ path, handle: options?.handle });
+        },
+      },
+    });
+    await writeFile(join(root, 'public'), 'allowed');
+    await writeFile(join(root, 'hidden'), 'hidden');
+    expect((await disk.list(20)).files).toEqual(['public']);
+    checked.length = 0;
+    expect((await disk.read('public')).text).toBe('allowed');
+    expect(checked).toHaveLength(2);
+    expect(checked[0]!.handle).toBeDefined();
+    expect(checked[1]!.handle).toBe(checked[0]!.handle);
+    await expect(disk.exists('hidden')).rejects.toThrow('private');
+    await expect(disk.validateAccess('hidden')).rejects.toThrow('private');
+    await expect(disk.canonicalPath('hidden')).rejects.toThrow('private');
+    await expect(disk.read('hidden')).rejects.toThrow('private');
+    const changed = new FileSystemWorkspaceTextStore(root, {
+      physicalAccess: {
+        assertWorkspacePath: vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error('changed')),
+      },
+    });
+    await expect(changed.read('public')).rejects.toThrow('changed');
+  });
+
+  it('leaves alternate project spellings to the owning physical filesystem', async () => {
+    const root = await realpath(await workspaceRoot('glyph-ordinary-sibling-'));
+    const privatePath = join(root, 'record');
+    await writeFile(join(root, 'Record'), 'ordinary');
+    const policy = new WorkspaceAccessPolicy({}, [privatePath]);
+    const physicalAccess = {
+      assertWorkspacePath: vi.fn(async (path: string) => {
+        if (path === privatePath) throw new Error('private');
+      }),
+    };
+    const disk = new FileSystemWorkspaceTextStore(root, { caseSensitive: false, accessPolicy: policy, physicalAccess });
+    expect(disk.normalizePath('Record')).toBe('Record');
+    await disk.validateAccess('Record');
+    expect(physicalAccess.assertWorkspacePath.mock.calls[0]?.[0]).toBe(join(root, 'Record'));
+    expect(() => disk.normalizePath('record')).toThrow('excluded');
+  });
+
   it('checks ownership, current mode, and host access controls on the completed staging file', async () => {
     const root = await workspaceRoot('glyph-workspace-replacement-');
     const disk = new FileSystemWorkspaceTextStore(root);

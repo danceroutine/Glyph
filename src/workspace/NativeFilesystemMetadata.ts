@@ -1,11 +1,43 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import type { FileHandle } from 'node:fs/promises';
+import type { WorkspacePathAccess } from './WorkspacePathAccess.ts';
 import type { FilesystemMetadata } from './FilesystemMetadata.ts';
 
 /** The native inspector receives the caller's already-open inode on standard input. */
-export class NativeFilesystemMetadata implements FilesystemMetadata {
+export class NativeFilesystemMetadata implements FilesystemMetadata, WorkspacePathAccess {
   constructor(private readonly executable: string) {}
+
+  async assertWorkspacePath(
+    path: string,
+    privatePaths: readonly string[],
+    options?: { readonly handle?: FileHandle },
+  ): Promise<void> {
+    const inode = await options?.handle?.stat({ bigint: true });
+    const child = spawn(this.executable, ['--assert-workspace-path'], {
+      stdio: ['pipe', 'pipe', 'ignore'],
+      timeout: 5000,
+      env: {},
+    });
+    const input = new Promise<void>((resolve, reject) => {
+      child.stdin.once('error', reject);
+      child.stdin.end(
+        JSON.stringify({
+          path,
+          privatePaths,
+          identity: inode && [String(inode.dev), String(inode.ino)],
+        }),
+        resolve,
+      );
+    });
+    let acknowledgement = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      acknowledgement = (acknowledgement + chunk).slice(0, 10);
+    });
+    await Promise.all([input, once(child, 'close')]);
+    if (child.exitCode !== 0 || acknowledgement !== 'verified\n')
+      throw new Error('That path is excluded from project access or changed during inspection.');
+  }
 
   async inspect(handle: FileHandle, purpose: 'access' | 'replaceable'): Promise<void> {
     const child = spawn(this.executable, [`--assert-${purpose}-metadata`], {
