@@ -104,7 +104,8 @@ fn name_matches(path: &Path, expected: &str) -> bool {
     })
 }
 
-fn private_name(path: &Path) -> bool {
+/// Match host-reserved components using the containing filesystem's actual filename semantics.
+pub fn private_name(path: &Path) -> bool {
     name_matches(path, ".skill-staging")
 }
 
