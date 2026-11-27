@@ -136,6 +136,7 @@ describe(DesktopAttachmentAccess, () => {
       { ...base, uri: 'git:unbound' },
       { ...base, uri: 'capture' },
       { ...base, kind: Kind.RULE, uri: 'file:///workspace/rule' },
+      { ...base, kind: Kind.SKILL, uri: 'file:///workspace/skill' },
       { ...base, folderListing: { files: [], truncated: false } },
     ])
       await expect(access.admit([capture], signal)).rejects.toThrow('Unsupported attachment source');
