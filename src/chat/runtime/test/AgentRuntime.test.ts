@@ -278,12 +278,46 @@ describe(AgentRuntime, () => {
       }),
     ).rejects.toThrow('Workspace changed');
     expect(adapter.requests).toEqual([]);
+    expect(JSON.stringify(runtime.exportState())).not.toContain('review');
     if (phase === 'send')
       expect(begin).toHaveBeenCalledWith(
         expect.objectContaining({ attachmentPaths: ['old/renamed.md'] }),
         expect.any(AbortSignal),
       );
   });
+
+  it.each([false, true])(
+    'keeps a pending workspace result out of replay until delivery (revoked: %s)',
+    async revoked => {
+      const adapter = new ClaudeShapedAdapter();
+      let allowed = true;
+      const prepare = adapter.prepareStep.bind(adapter);
+      adapter.prepareStep = async (turn, context) => {
+        if (context.round === 2 && revoked) allowed = false;
+        return prepare(turn, context);
+      };
+      const source = mockTools(async (_name, _input, _signal, context) => {
+        context?.retainResultAccess?.(() => {
+          if (!allowed) throw new Error('Workspace changed');
+        });
+        return 'selected file contents';
+      });
+      const checkpoints: ChatProviderState[] = [];
+      const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, source);
+      const turn = runtime.send('start', {
+        signal: new AbortController().signal,
+        onText: () => {},
+        onStateCheckpoint: state => {
+          checkpoints.push(state);
+        },
+      });
+      if (revoked) await expect(turn).rejects.toThrow('Workspace changed');
+      else await turn;
+      expect(JSON.stringify(checkpoints)).not.toContain('selected file contents');
+      expect(JSON.stringify(runtime.exportState()).includes('selected file contents')).toBe(!revoked);
+      expect(JSON.stringify(adapter.requests).includes('selected file contents')).toBe(!revoked);
+    },
+  );
 
   it('releases its own failed turn while preserving an already admitted turn with the same id', async () => {
     const contexts = new TurnContextCoordinator(new AgentInstructionCatalog([]));
