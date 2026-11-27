@@ -407,7 +407,8 @@ it('recovers a published package with the file-only revision recorded by an earl
   await mkdir(join(root, skill.directory, 'templates'));
   const id = randomUUID();
   const legacy = packageRevision(aSkillDraft().packageFiles());
-  await new SkillTransactionJournal(root).write({
+  await mkdir(join(root, '.skill-staging', id), { mode: 0o700 });
+  await new SkillTransactionJournal(root, testFilesystemMetadata).write({
     id,
     root: await store.resolvePath('skills'),
     location: location.id,
