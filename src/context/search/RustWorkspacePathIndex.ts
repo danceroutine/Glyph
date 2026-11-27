@@ -30,6 +30,7 @@ enum PathIndexMethod {
   INITIALIZE = 'initialize',
   SEARCH = 'search',
   GLOB = 'glob',
+  LIST_SKILL_PACKAGES = 'listSkillPackages',
   FILTER_PATHS = 'filterPaths',
   LIST_DIRECTORIES = 'listDirectories',
   ASSERT_REPLACEABLE_METADATA = 'assertReplaceableMetadata',
@@ -247,6 +248,12 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
         options.signal,
       ),
     );
+  }
+
+  /** One indexed representative per package, preferring the manifest over an ordinary resource. */
+  async listSkillPackages(marker: string | null, signal?: AbortSignal): Promise<WorkspacePathGlobResult> {
+    await this.initialize(signal);
+    return globResultSchema.parse(await this.request(PathIndexMethod.LIST_SKILL_PACKAGES, marker, signal));
   }
 
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {

@@ -553,6 +553,24 @@ describe(RustWorkspacePathIndex, () => {
     });
   });
 
+  describe(RustWorkspacePathIndex.prototype.listSkillPackages, () => {
+    it('requests a package listing from the initialized resident index', async () => {
+      const worker = new FakeWorker(request => {
+        if (request.method === 'initialize') return indexState(1);
+        if (request.method === 'listSkillPackages')
+          return { files: ['.cursor/skills/example/SKILL.md'], truncated: false };
+        return { shutdown: true };
+      });
+      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      onTestFinished(() => index.dispose());
+      await expect(index.listSkillPackages('.cursor')).resolves.toEqual({
+        files: ['.cursor/skills/example/SKILL.md'],
+        truncated: false,
+      });
+      expect(worker.requests[1]).toMatchObject({ method: 'listSkillPackages', params: '.cursor' });
+    });
+  });
+
   describe(RustWorkspacePathIndex.prototype.glob, () => {
     it('initializes the index before the first glob', async () => {
       const worker = new FakeWorker(request => {

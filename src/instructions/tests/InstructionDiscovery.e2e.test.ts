@@ -1,5 +1,6 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
@@ -41,6 +42,24 @@ describe('Native instruction discovery', () => {
     await catalog.refresh();
     expect(catalog.resolve('src/app.ts')).toMatchObject([{ scope: 'Src', name: 'Style', content: 'Use clear names.' }]);
   });
+  it.skipIf(process.platform !== 'darwin')(
+    'rejects a user rule with an inherited current-user ACL before publication',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'glyph-user-rule-acl-'));
+      onTestFinished(() => rm(root, { recursive: true, force: true }));
+      const rules = join(root, 'rules');
+      await mkdir(rules);
+      execFileSync('/bin/chmod', ['+a', `user:${userInfo().username} allow readattr,file_inherit`, rules]);
+      const catalog = { refresh: vi.fn() };
+      const files = { refresh: vi.fn(), assertReplaceableMetadata: vi.fn() };
+      const metadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
+      const manager = new UserAgentRuleManager(new FileSystemWorkspaceTextStore(root), catalog, files, metadata);
+      await expect(manager.create('Example', 'model', 'Local fixture')).rejects.toThrow('access controls');
+      expect(await readdir(rules)).toEqual([]);
+      expect(catalog.refresh).not.toHaveBeenCalled();
+      expect(files.refresh).not.toHaveBeenCalled();
+    },
+  );
   it('indexes only the user rules directory and publishes managed changes before returning', async () => {
     const root = await mkdtemp(join(tmpdir(), 'glyph-user-rules-index-'));
     const rulesRoot = join(root, 'rules');

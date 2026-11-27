@@ -174,7 +174,7 @@ describe(UserAgentRuleManager, () => {
       expect.stringContaining('activation: model'),
       false,
       0o600,
-      undefined,
+      { inspectBeforeWrite: expect.any(Function) },
     );
     expect(refresh).toHaveBeenCalledOnce();
   });
@@ -210,6 +210,20 @@ describe(UserAgentRuleManager, () => {
       expect(parseAgentRuleFile(updated)).toMatchObject({ enabled: false, body: parseAgentRuleFile(text).body });
     }
   });
+  it('toggles only physical metadata lines and preserves embedded Unicode separators in comments', async () => {
+    const workspace = new FileSystemWorkspaceTextStore(root);
+    const manager = new UserAgentRuleManager(workspace, { refresh: async () => [] }, files, testFilesystemMetadata);
+    const example = '# example\u2028enabled: false\u2029---';
+    const text = ['---', example, 'activation: always', 'enabled: true', '---', 'RETAIN ME'].join('\r\n');
+    const original = await workspace.create('rules/example.mdc', text, true);
+    await manager.setEnabled(original.path, original.revision, false);
+    const updated = await workspace.read(original.path);
+    expect(updated.text).toBe(text.replace('enabled: true', 'enabled: false'));
+    expect(updated.byteOrderMark).toBe(true);
+    expect(parseAgentRuleFile(updated.text)).toMatchObject({ enabled: false, body: 'RETAIN ME' });
+    expect(withEnabled__TESTING_ONLY('---\n' + example + '\n---\nBody', true)).toContain(example + '\nenabled: true\n');
+  });
+
   it('updates an existing enabled field without replacing the rule body', () => {
     expect(withEnabled__TESTING_ONLY('---\nname: Test\nenabled: true\n---\n\nBody\n', false)).toBe(
       '---\nname: Test\nenabled: false\n---\n\nBody\n',

@@ -24,6 +24,7 @@ describe(WorkspaceAccessPolicy, () => {
       expect(policy.isIgnoredDirectory(spelling, true)).toBe(false);
     }
     expect(policy.isIgnoredDirectory('DIST', false)).toBe(true);
+    expect(policy.isIgnoredDirectory('.skill-staging', true)).toBe(true);
     expect(new WorkspaceAccessPolicy({}, ['/']).exclusionsFor('/nested', true).privateRoot).toBe(true);
   });
 

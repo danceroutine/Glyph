@@ -3,7 +3,7 @@ export function ruleFrontmatter(text: string) {
   const opening = /^---(\r?\n)/u.exec(text);
   if (!opening) return undefined;
   const start = opening[0].length;
-  const closing = /^---(?:\r?\n|$)/mu.exec(text.slice(start));
+  const closing = /(?:^|(?<=\n))---(?:\r?\n|$)/u.exec(text.slice(start));
   if (!closing) throw new Error('Rule frontmatter is missing its closing --- delimiter.');
   const end = start + closing.index;
   return {
@@ -22,8 +22,7 @@ export function withRuleEnabled(text: string, enabled: boolean): string {
     return ['---', line, '---', text].join(eol);
   }
   const { eol, metadata, closing } = frontmatter;
-  const next = /^enabled:/mu.test(metadata)
-    ? metadata.replace(/^enabled:[^\r\n]*/mu, line)
-    : `${metadata}${line}${eol}`;
+  const field = /(?:^|(?<=\n))enabled:[^\r\n]*/u;
+  const next = field.test(metadata) ? metadata.replace(field, line) : `${metadata}${line}${eol}`;
   return `---${eol}${next}${closing}`;
 }

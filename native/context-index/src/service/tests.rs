@@ -162,7 +162,11 @@ fn shutdown_during_catalog_io_does_not_publish_the_new_snapshot() {
 }
 
 fn fixture_policy(params: &InitializeParams) -> IndexPolicy {
-    IndexPolicy::new(params, params.case_sensitive.unwrap())
+    IndexPolicy::new(
+        params,
+        params.case_sensitive.unwrap(),
+        Path::new(&params.root),
+    )
 }
 
 #[test]
@@ -1162,6 +1166,10 @@ fn poisoned_shared_state_is_reported_as_an_internal_error() {
     let filter = paths_service
         .filter_paths(vec!["main.ts".to_owned()])
         .expect_err("filtering should fail");
+    assert_eq!(
+        paths_service.list_skill_packages(None).unwrap_err().code,
+        "INTERNAL"
+    );
     let glob = paths_service
         .glob(GlobParams {
             root_files_only: false,
@@ -1857,4 +1865,25 @@ fn package_directory_inventory_observes_policy_changes_and_bounds_empty_branches
     let mut service = ContextIndexService::new();
     service.initialize(config).unwrap();
     assert!(service.list_directories().unwrap().is_empty());
+}
+
+#[test]
+fn private_directory_uses_the_entries_actual_filename_equivalence() {
+    let base = tempdir().unwrap();
+    let stored = base.path().join(".ſkill-staging");
+    create_dir_all(&stored).unwrap();
+    write(stored.join("fixture.txt"), "fixture").unwrap();
+    let equivalent = base.path().join(".skill-staging").is_dir();
+    let mut configuration = params(base.path());
+    configuration.respect_git_ignore = false;
+    let policy = fixture_policy(&configuration);
+    assert_eq!(policy.excludes(".ſkill-staging/fixture.txt"), equivalent);
+    assert_eq!(
+        workspace_walk(base.path(), &policy)
+            .build()
+            .flatten()
+            .any(|entry| entry.file_name() == "fixture.txt"),
+        !equivalent
+    );
+    assert_eq!(fixture_policy(&params(&stored)).exclude_root, equivalent);
 }

@@ -1,9 +1,12 @@
-import { TurnContextSession } from '#src/context/turns/TurnContextSession.js';
 import { InstructionContextContributor } from '#src/context/turns/InstructionContextContributor.js';
 import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
-import { describe, expect, it, vi } from 'vitest';
+import { TurnContextSession } from '#src/context/turns/TurnContextSession.js';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
@@ -15,6 +18,12 @@ import {
   AgentInstructionSourceStatus,
   type AgentInstructionSource,
 } from '#src/instructions/AgentInstructionSource.js';
+
+async function temporaryWorkspace() {
+  const root = await mkdtemp(join(tmpdir(), 'glyph-turn-routes-'));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  return root;
+}
 
 const source = (
   id: string,
@@ -151,12 +160,13 @@ describe(TurnContextCoordinator, () => {
   });
 
   it('selects nested guidance and literal globs for the name policy of each attached volume', async () => {
+    const root = await temporaryWorkspace();
     const composed = 'café';
     const decomposed = composed.normalize('NFD');
     for (const normalizesUnicode of [false, true]) {
       const paths = new InstructionPaths(
         true,
-        new WorkspaceSourceRoutes([{ name: 'project', path: '/root', normalizesUnicode }]),
+        new WorkspaceSourceRoutes([{ name: 'project', path: root, normalizesUnicode }]),
       );
       const list = [
         source('nested', AgentInstructionSourceKind.AGENTS_MD, composed),
@@ -185,27 +195,36 @@ describe(TurnContextCoordinator, () => {
   });
 
   it('keeps a valid literal pattern within the source length limit when its comparison key expands', async () => {
+    const root = await temporaryWorkspace();
     const routes = new WorkspaceSourceRoutes([
-      { name: 'project', path: '/root', caseSensitive: false, normalizesUnicode: true, foldsUnicode: true },
+      { name: 'project', path: root, caseSensitive: false, normalizesUnicode: true, foldsUnicode: true },
     ]);
     const paths = new InstructionPaths(false, routes);
+    const component = 'ß'.repeat(100);
+    const pattern = [component, component, component].join('/');
+    const accessed = pattern.replaceAll('ß', 'ss');
+    expect(pattern.length).toBeLessThanOrEqual(512);
+    expect(accessed.length).toBeGreaterThan(512);
     const rule = source(
       'expanded',
       AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
       '.',
       AgentInstructionActivationMode.FILE_PATTERN,
-      ['ß'.repeat(300)],
+      [pattern],
     );
     const coordinator = new TurnContextCoordinator(
       new AgentInstructionCatalog([{ discover: async () => [rule] }], paths),
     );
-    const turn = await coordinator.beginTurn({ turnId: 'expand', attachmentPaths: ['ss'.repeat(300)] });
+    const turn = await coordinator.beginTurn({ turnId: 'expand', attachmentPaths: [accessed] });
     expect(turn.initialEnvelope().sources[0]?.id).toBe('expanded');
   });
   it('uses a scoped rule’s owning volume when another attached root routes the read', async () => {
+    const root = await temporaryWorkspace();
+    const mount = join(root, 'mount');
+    await mkdir(mount);
     const routes = new WorkspaceSourceRoutes([
-      { name: 'outer', path: '/workspace' },
-      { name: 'mount', path: '/workspace/mount', normalizesUnicode: true },
+      { name: 'outer', path: root },
+      { name: 'mount', path: mount, normalizesUnicode: true },
     ]);
     const paths = new InstructionPaths(
       new Map([

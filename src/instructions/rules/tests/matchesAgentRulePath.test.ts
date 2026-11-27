@@ -1,3 +1,8 @@
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
+import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { describe, expect, it } from 'vitest';
 import { AgentInstructionSourceKind, AgentInstructionSourceStatus } from '#src/instructions/AgentInstructionSource.js';
 import { globExpression, matchesAgentRulePath, RuleGlobBudget } from '#src/instructions/rules/matchesAgentRulePath.js';
@@ -23,6 +28,75 @@ describe(matchesAgentRulePath, () => {
     expect(matchesAgentRulePath({ ...source, scope: '.', globs: ['src**.ts'] }, 'src-main.ts')).toBe(true);
   });
 
+  it('counts stored characters in wildcards and compares each literal run with its volume policy', () => {
+    const folding = { normalizesUnicode: true, foldsUnicode: true };
+    const matches = (pattern: string, path: string) => globExpression(pattern, false, folding).test(path);
+    expect(matches('SS/?.txt', 'ß/ß.txt')).toBe(true);
+    expect(matches('ß/??.txt', 'ß/ß.txt')).toBe(false);
+    expect(matches('ß/?.txt', 'SS/ß.txt')).toBe(true);
+    expect(matches('*SS?ff', '📜ß💛ﬀ')).toBe(true);
+    expect(matches('?FF', 'ßﬀ')).toBe(true);
+    expect(matches('S*', 'ß')).toBe(true);
+    expect(matches('s?', 'ß')).toBe(false);
+    expect(matches('?s', 'ß')).toBe(false);
+    expect(matches('?s?', 'ßSx')).toBe(true);
+    expect(matches('?', 'e\u0301')).toBe(false);
+    expect(matches('??', 'e\u0301')).toBe(true);
+    expect(matches('e?', 'e\u0301')).toBe(true);
+    expect(matches('é?', 'e\u0301A')).toBe(true);
+    expect(matches('?é', 'Ae\u0301')).toBe(true);
+    expect(matches('ß'.repeat(510) + '?', 'ss'.repeat(510) + 'X')).toBe(true);
+    expect(matches('x' + '*'.repeat(235) + '?.ts', 'x'.repeat(400) + '.ts')).toBe(true);
+    expect(matches('ß?', 'ß/')).toBe(false);
+    expect(globExpression('SS/?.txt', true, { normalizesUnicode: true }).test('ß/ß.txt')).toBe(false);
+    expect(globExpression('é?', true).test('e\u0301x')).toBe(false);
+    expect(globExpression('ß/??.txt', true).test('ß/ss.txt')).toBe(true);
+  });
+
+  it('resolves a file-pattern rule against the actual directory entries on the mounted volume', () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'glyph-rule-character-width-')));
+    try {
+      mkdirSync(join(root, 'ß'));
+      writeFileSync(join(root, 'ß/ß.txt'), 'stored');
+      writeFileSync(join(root, 'e\u0301'), 'stored decomposed');
+      const foldsUnicode = existsSync(join(root, 'SS/ss.txt'));
+      const normalizesUnicode = existsSync(join(root, 'é'));
+      const routes = new WorkspaceSourceRoutes([{ name: 'workspace', path: root, normalizesUnicode, foldsUnicode }]);
+      const paths = new InstructionPaths(!foldsUnicode, routes);
+      const matches = (glob: string, path: string) =>
+        matchesAgentRulePath(
+          {
+            id: 'rule',
+            label: 'Rule',
+            path: 'rules/rule.mdc',
+            scope: '.',
+            kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+            status: AgentInstructionSourceStatus.ACTIVE,
+            globs: [glob],
+          },
+          path,
+          paths,
+        );
+      expect(matches('SS/?.txt', 'ß/ß.txt')).toBe(foldsUnicode);
+      expect(matches('ß/?.txt', 'ß/ß.txt')).toBe(true);
+      expect(matches('ß/??.txt', 'ß/ß.txt')).toBe(false);
+      if (foldsUnicode) {
+        expect(matches('SS/?.txt', 'SS/ss.txt')).toBe(true);
+      } else {
+        mkdirSync(join(root, 'SS'));
+        writeFileSync(join(root, 'SS/ss.txt'), 'distinct');
+        expect(matches('SS/??.txt', 'SS/ss.txt')).toBe(true);
+      }
+      expect(matches('ß/??.txt', 'SS/ss.txt')).toBe(false);
+      if (normalizesUnicode) {
+        expect(matches('?', 'é')).toBe(false);
+        expect(matches('??', 'é')).toBe(true);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('handles overlapping wildcards in bounded work and caps metadata complexity', () => {
     expect(globExpression('a*'.repeat(140) + 'z').test('a'.repeat(350))).toBe(false);
     expect(globExpression('**/ß?.ts').test('a/ß🟡.ts')).toBe(true);
@@ -39,8 +113,6 @@ describe(matchesAgentRulePath, () => {
 });
 
 it('reuses each evaluation across distinct rules and matches workspace-wide rules through overlapping roots', async () => {
-  const { InstructionPaths } = await import('#src/instructions/InstructionPaths.js');
-  const { WorkspaceSourceRoutes } = await import('#src/workspace/WorkspaceSourceRoutes.js');
   const roots = [
     { name: 'Repo', path: '/repo' },
     { name: 'App', path: '/repo/sub' },

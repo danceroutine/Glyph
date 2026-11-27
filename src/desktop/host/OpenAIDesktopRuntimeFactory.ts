@@ -439,7 +439,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         listFiles: async signal => {
           await mkdir(skillRoot, { recursive: true });
           await userInstructionStore.canonicalPath('skills');
-          const result = await userSkillIndex.glob('**/*', { limit: 10_000, ...(signal ? { signal } : {}) });
+          const result = await userSkillIndex.listSkillPackages(null, signal);
           return { ...result, files: result.files.map(path => `skills/${path}`) };
         },
         refreshIndex: async () => {
@@ -490,8 +490,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 binaryStore: part.disk,
                 ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
                 uriForPath: path => userRuleUri(part.disk.root, path),
-                listFiles: signal =>
-                  part.index.glob(`**/${location}/skills/**/*`, { limit: 10_000, ...(signal ? { signal } : {}) }),
+                listFiles: signal => part.index.listSkillPackages(location, signal),
                 refreshIndex: async () => {
                   await part.index.refresh();
                 },

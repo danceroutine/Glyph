@@ -164,6 +164,28 @@ describe('Skill turn limits and tool authority', () => {
     expect(await session.activateSource('missing', 'model', 'Not advertised')).toBeUndefined();
   });
 
+  it('normalizes each offered path once per origin and preserves order for repeated and overlapping scopes', async () => {
+    const key = vi.fn((path: string) => path.toLowerCase());
+    const scopes = ['src/nested', 'src', 'none', 'src', '.'];
+    const skills = scopes.map((scope, i) => aSkillDescriptor({ id: String(i), scope }));
+    const catalog = new SkillCatalog([
+      {
+        id: 'project',
+        origin: skills[0]!.origin,
+        scopePathKey: key,
+        discover: async () => skills,
+        capture: async skill => aSkillPackage(skill),
+        refreshIndex: async () => {},
+      },
+    ]);
+    const paths = Array.from({ length: 100 }, (_, i) => 'SRC/NESTED/' + i);
+    expect(catalog.applicableSkills(skills, [...paths, ...paths]).map(skill => skill.id)).toEqual(['0', '1', '3', '4']);
+    expect(key).toHaveBeenCalledTimes(103);
+    const capped = Array.from({ length: 51 }, (_, i) => aSkillDescriptor({ id: String(i), name: String(i) }));
+    const session = new SkillTurnContext('capped', capped, capped, catalog);
+    expect(session.initialEnvelope().skillCandidates).toHaveLength(50);
+    expect(session.disclosePaths(paths)).toBeUndefined();
+  });
   it('caps catalog metadata and activated bodies, while explicit user selection remains independent of model advertising', async () => {
     const sources = Array.from({ length: 60 }, (_, i) =>
       aSkillDescriptor({ id: `skill-${i}`, name: `example-${i}`, description: 'x'.repeat(1024) }),

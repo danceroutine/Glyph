@@ -82,6 +82,7 @@ const openWorkspaceMutations = NativeWorkspaceMutations.open;
 let isolatedUserDirectory: string;
 beforeEach(async () => {
   vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'assertHostPaths').mockResolvedValue(undefined);
   isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
   onTestFinished(() => rm(isolatedUserDirectory, { recursive: true, force: true }));
   vi.spyOn(NativeWorkspaceMutations, 'open').mockImplementation(async (_executable, root) => {
@@ -96,6 +97,13 @@ beforeEach(async () => {
     vi.spyOn(instance, 'createStage').mockImplementation(mutations.createStage);
     vi.spyOn(instance, 'stagePackage').mockImplementation(mutations.stagePackage);
     return instance;
+  });
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'listSkillPackages').mockImplementation(function (
+    this: RustWorkspacePathIndex,
+    marker,
+    signal,
+  ) {
+    return this.glob(marker ? `**/${marker}/skills/**/*` : '**/*', { limit: 10_000, ...(signal ? { signal } : {}) });
   });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({ files: [], truncated: false });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'listDirectories').mockResolvedValue([]);
