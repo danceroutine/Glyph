@@ -85,14 +85,23 @@ export class AgentInstructionSet {
    * Visits the ancestor buckets for each equivalent workspace route and orders the matched sources. The returned array does not expose the stored buckets.
    */
   forPath(path: string, includeUnavailableGuidance = false): readonly AgentInstructionSource[] {
+    return this.forPaths([path], includeUnavailableGuidance);
+  }
+
+  /** Resolve each applicable scope bucket once for an entire disclosure. */
+  forPaths(paths: readonly string[], includeUnavailableGuidance: boolean): readonly AgentInstructionSource[] {
     const result = new Set(this.byScope.get('.'));
-    for (const route of this.paths.equivalents(path)) {
-      let scope = '';
-      for (const segment of this.paths.key(route).split('/')) {
-        scope = scope ? `${scope}/${segment}` : segment;
-        if (scope === '.') continue;
-        const bucket = this.byScope.get(scope);
-        if (bucket) for (const source of bucket) result.add(source);
+    const visited = new Set(['.']);
+    for (const path of paths) {
+      for (const route of this.paths.equivalents(path)) {
+        let scope = '';
+        for (const segment of this.paths.key(route).split('/')) {
+          scope = scope ? `${scope}/${segment}` : segment;
+          if (visited.has(scope)) continue;
+          visited.add(scope);
+          const bucket = this.byScope.get(scope);
+          if (bucket) for (const source of bucket) result.add(source);
+        }
       }
     }
     const ordered = [...result].toSorted((left, right) => this.order.get(left)! - this.order.get(right)!);

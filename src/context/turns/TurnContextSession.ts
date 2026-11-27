@@ -178,8 +178,8 @@ export class TurnContextSession {
     upfront: readonly AgentInstructionSource[] = [],
   ): readonly AgentInstructionSource[] {
     const applicable = new Set([...this.scopeIndex.forPath('.'), ...upfront]);
-    for (const path of paths) {
-      for (const source of this.scopeIndex.forPath(path, true)) {
+    if (paths.length > 0) {
+      for (const source of this.scopeIndex.forPaths(paths, true)) {
         if (isUnavailableGuidance(source))
           throw new Error(`Required instruction ${source.path} could not be loaded. ${source.message ?? ''}`.trimEnd());
         applicable.add(source);
