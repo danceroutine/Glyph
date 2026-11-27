@@ -161,6 +161,24 @@ describe(TurnContextCoordinator, () => {
     }
   });
 
+  it('keeps a valid literal pattern within the source length limit when its comparison key expands', async () => {
+    const routes = new WorkspaceSourceRoutes([
+      { name: 'project', path: '/root', caseSensitive: false, normalizesUnicode: true, foldsUnicode: true },
+    ]);
+    const paths = new InstructionPaths(false, routes);
+    const rule = source(
+      'expanded',
+      AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      '.',
+      AgentInstructionActivationMode.FILE_PATTERN,
+      ['ß'.repeat(300)],
+    );
+    const coordinator = new TurnContextCoordinator(
+      new AgentInstructionCatalog([{ discover: async () => [rule] }], paths),
+    );
+    const turn = await coordinator.beginTurn({ turnId: 'expand', attachmentPaths: ['ss'.repeat(300)] });
+    expect(turn.initialEnvelope().sources[0]?.id).toBe('expanded');
+  });
   it('uses a scoped rule’s owning volume when another attached root routes the read', async () => {
     const routes = new WorkspaceSourceRoutes([
       { name: 'outer', path: '/workspace' },
