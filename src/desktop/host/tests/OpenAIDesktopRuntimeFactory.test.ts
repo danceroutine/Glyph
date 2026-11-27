@@ -1,4 +1,5 @@
 import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -203,6 +204,7 @@ vi.mock('#src/providers/openai/OpenAIProviderFactory.js', async importOriginal =
 
 let isolatedUserDirectory: string;
 beforeEach(async () => {
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
   isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
   onTestFinished(async () => {
     await rm(isolatedUserDirectory, { recursive: true, force: true });
@@ -957,6 +959,11 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await writeFile(join(isolatedUserDirectory, 'notes.md'), 'PUBLIC REFERENCE');
       useFilesystemIndex();
       vi.spyOn(RustWorkspacePathIndex.prototype, 'assertReplaceableMetadata').mockResolvedValue();
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_owner, request) => {
+        if (request.type !== GlyphEditorRequestType.CHECK_USER_WORKING_COPIES)
+          throw new Error('Expected a user-rule working-copy check');
+        return { operationId: request.operationId, ok: true, workingCopiesClean: true };
+      });
       vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({
         root: rules,
         fileCount: 3,
