@@ -94,8 +94,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     return normalized;
   }
 
-  async canonicalPath(input: string, mutation = false): Promise<string> {
+  async canonicalPath(
+    input: string,
+    mutation = false,
+    onManagedPathAdmitted?: (physicalPath: string) => void,
+  ): Promise<string> {
     const key = (await this.resolvePath(input, mutation)).split(sep).join('/');
+    if (mutation && this.options.physicalAccess && this.options.managedDirectories) onManagedPathAdmitted?.(key);
     return this.caseSensitive ? key : key.toLocaleLowerCase('en-US');
   }
 

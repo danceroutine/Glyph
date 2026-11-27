@@ -48,9 +48,13 @@ export class MultiRootWorkspaceTextStore implements WorkspaceTextStore {
     return this.join(route.name, route.store.normalizePath(route.relativePath));
   }
 
-  canonicalPath(path: string, mutation?: boolean): Promise<string> {
+  canonicalPath(
+    path: string,
+    mutation?: boolean,
+    onManagedPathAdmitted?: (physicalPath: string) => void,
+  ): Promise<string> {
     const route = this.fileRoute(path);
-    return route.store.canonicalPath(route.relativePath, mutation);
+    return route.store.canonicalPath(route.relativePath, mutation, onManagedPathAdmitted);
   }
 
   async list(

@@ -63,6 +63,58 @@ describe(SkillProjectMutationPolicy, () => {
     expect(guard.getDenial('/profiles')).toContain('skills.propose_change');
   });
 
+  it('separates a native-admitted filename from the case-folded mutation collision key', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-verified-ordinary-')));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    await mkdir(join(root, '.GLYPH/SKILLS/example'), { recursive: true });
+    const ordinary = '.GLYPH/SKILLS/example/notes.md';
+    await writeFile(join(root, ordinary), 'ordinary');
+    await mkdir(join(root, 'project/inner/.glyph/skills/catalogued'), { recursive: true });
+    const manifest = join(root, 'project/inner/.glyph/skills/catalogued/SKILL.md');
+    await writeFile(manifest, 'fixture');
+    const catalog = {
+      skills: [aSkillDescriptor({ uri: '' }), aSkillDescriptor({ uri: pathToFileURL(manifest).href })],
+    };
+    const guard = new SkillProjectMutationPolicy([], catalog);
+    const workspace = new FileSystemWorkspaceTextStore(root, {
+      physicalAccess: { assertWorkspacePath: async () => {} },
+      managedDirectories: [],
+      caseSensitive: false,
+    });
+    const checked = vi.fn();
+    const canonical = await workspace.canonicalPath(ordinary, true, checked);
+    expect(canonical).toBe(join(root, ordinary).toLowerCase());
+    expect(checked).toHaveBeenCalledWith(join(root, ordinary));
+    expect(guard.getDenial(canonical, checked.mock.calls[0]![0])).toBeUndefined();
+    const unchecked = vi.fn();
+    await workspace.canonicalPath(ordinary, false, unchecked);
+    expect(unchecked).not.toHaveBeenCalled();
+    const project = join(root, 'project');
+    expect(guard.getDenial(project, project)).toContain('skills.propose_change');
+    const sibling = join(root, 'standalone');
+    await mkdir(sibling);
+    expect(guard.getDenial(sibling, sibling)).toBeUndefined();
+    expect(new SkillProjectMutationPolicy().getDenial(sibling, sibling)).toBeUndefined();
+    expect(guard.getDenial(sibling + '/future', sibling + '/future')).toBeUndefined();
+
+    const stage = vi.fn();
+    const runtime = new ProjectToolRuntime(
+      {} as ProjectAccess,
+      new EditProposalService(workspace, new JsDiffTextDiffer(), new EnvironmentConfigurationProvider({}).editing),
+      { stage, activeReviews: [] } as unknown as ProposalReviewManager,
+      undefined,
+      undefined,
+      guard,
+    );
+    const patch = ['*** Begin Patch', '*** Add File: .GLYPH/SKILLS/ordinary.md', '+ordinary', '*** End Patch'].join(
+      '\n',
+    );
+    expect(JSON.parse(await runtime.execute(ProjectToolName.PROPOSE_PATCH, patch))).toMatchObject({
+      status: 'STAGED_FOR_REVIEW',
+    });
+    expect(stage).toHaveBeenCalledOnce();
+  });
+
   it('handles an empty location list and a catalog nested below a filesystem root', () => {
     expect(new SkillProjectMutationPolicy().getDenial('/folder/file.txt')).toBeUndefined();
     const catalog = { skills: [aSkillDescriptor({ uri: 'file:///workspace/service/.glyph/skills/example/SKILL.md' })] };

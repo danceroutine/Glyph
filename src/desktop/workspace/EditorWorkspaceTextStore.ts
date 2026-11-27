@@ -65,8 +65,12 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     return fromRoot.split(sep).join('/');
   }
 
-  canonicalPath(input: string, mutation?: boolean): Promise<string> {
-    return this.client.canonicalPath(this.normalizePath(input), mutation);
+  canonicalPath(
+    input: string,
+    mutation?: boolean,
+    onManagedPathAdmitted?: (physicalPath: string) => void,
+  ): Promise<string> {
+    return this.client.canonicalPath(this.normalizePath(input), mutation, onManagedPathAdmitted);
   }
 
   async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
