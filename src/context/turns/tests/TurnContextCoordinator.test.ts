@@ -153,7 +153,7 @@ describe(TurnContextCoordinator, () => {
         turn
           .initialEnvelope()
           .sources.map(item => item.id)
-          .sort(),
+          .toSorted(),
       ).toEqual(normalizesUnicode ? ['glob', 'nested'] : []);
       expect(coordinator.disclosePaths('unicode', [composed + '/file.txt'])?.sources.length).toBe(
         normalizesUnicode ? undefined : 2,
