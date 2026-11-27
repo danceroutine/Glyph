@@ -96,13 +96,13 @@ vi.mock('#src/context/search/RustWorkspacePathIndex.js', async importOriginal =>
   return {
     ...actual,
     RustWorkspacePathIndex: class extends actual.RustWorkspacePathIndex {
-      static override async filesystemCaseSensitive(_binary: string, root: string) {
-        return new FileSystemWorkspaceTextStore(root).caseSensitive;
-      }
       constructor(...arguments_: ConstructorParameters<typeof actual.RustWorkspacePathIndex>) {
         super(...arguments_);
         captured.indexOptions.push(arguments_[0]);
         captured.indexes.push(this);
+      }
+      static override async filesystemCaseSensitive(_binary: string, root: string) {
+        return new FileSystemWorkspaceTextStore(root).caseSensitive;
       }
     },
   };

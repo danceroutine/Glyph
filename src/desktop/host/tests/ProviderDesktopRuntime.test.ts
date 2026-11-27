@@ -616,7 +616,9 @@ describe(ProviderDesktopRuntime, () => {
         await checked;
         expect((await harness.runtime.snapshot()).runs[0]?.steering?.length ?? 0).toBe(accepted ? 1 : 0);
         finish.resolve();
-        await vi.waitFor(async () => expect((await harness.runtime.snapshot()).runs[0]?.status).toBe('failed'));
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe('failed');
+        });
       } finally {
         prepare.resolve();
         finish.resolve();

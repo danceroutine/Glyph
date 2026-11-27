@@ -1609,8 +1609,8 @@ it('reads consistent dirty catalog snapshots from logical and physical buffers a
 });
 
 it('accepts dirty text only from the matching filesystem spelling', async () => {
-  const services = editorServices(),
-    adapter = createAdapter(services);
+  const services = editorServices();
+  const adapter = createAdapter(services);
   const real = textModel(URI.file('/workspace/api.mdc'), 'lower');
   services.models.push(real);
   services.dirty.add('/workspace/API.mdc');

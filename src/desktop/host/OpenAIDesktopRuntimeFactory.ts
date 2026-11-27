@@ -150,7 +150,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     const policy = new WorkspaceAccessPolicy();
     const logger = new FileLogger(configuration.traceFile);
     const casing = await Promise.all(
-      roots.map(root => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, root.path)),
+      roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, workspaceRoot.path)),
     );
     const parts = roots.map((workspaceRoot, i) => {
       const excludedPaths = [configuration.stateDirectory, configuration.traceFile, artifactRoot].flatMap(target => {
@@ -310,7 +310,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       // Agent-facing sources cannot acquire the host's preference and credential authority.
       const userInstructionPolicy = new WorkspaceAccessPolicy(
         {},
-        [configuration.stateDirectory, configuration.traceFile, artifactRoot].map(resolveAvailableIdentity),
+        [configuration.stateDirectory, configuration.traceFile, artifactRoot].map(path =>
+          resolveAvailableIdentity(path),
+        ),
       );
       const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
         accessPolicy: userInstructionPolicy,
