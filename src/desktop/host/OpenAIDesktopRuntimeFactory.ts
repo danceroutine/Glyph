@@ -464,10 +464,10 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       // Reconcile a single bounded package under the same live policy as its source provider.
       const packageIndex =
         (catalogPolicy: typeof policy, caseSensitive: boolean, respectGitIgnore: boolean) =>
-        (root: string, maxFiles: number) =>
+        (packageRoot: string, maxFiles: number) =>
           new RustWorkspacePathIndex({
             binaryPath: indexExecutable,
-            access: new WorkspaceRootAccess(catalogPolicy, root, caseSensitive),
+            access: new WorkspaceRootAccess(catalogPolicy, packageRoot, caseSensitive),
             maxFiles,
             respectGitIgnore,
           });
