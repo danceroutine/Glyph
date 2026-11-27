@@ -100,6 +100,35 @@ describe(FileSkillDiscoveryProvider, () => {
     const provider = fixture.provider([]);
     expect(provider.matchesLegacyId('.glyph/skills/example', 'previous', { remaining: 1 })).toBe(false);
   });
+  it('uses user scope for indexed packages and keeps the most specific route when providers overlap', async () => {
+    const fixture = await skillFixture();
+    const manifestPath = 'skills/example/SKILL.md';
+    await fixture.write(manifestPath, manifest());
+    const provider = (id: string, directory: string) =>
+      new FileSkillDiscoveryProvider({
+        origin: { id, label: id, scope: 'user', compatibility: 'glyph' },
+        directory: 'skills',
+        workspace: fixture.store,
+        packageId: () => 'same',
+        listPackages: async () => ({ truncated: false, packages: [{ directory, manifest: manifestPath }] }),
+        captureFiles: async () => ({ truncated: false, files: [] }),
+        uriForPath: path => pathToFileURL(join(fixture.root, path)).href,
+        refreshIndex: async () => {},
+      });
+    const refresh = vi.fn();
+    const catalog = new SkillCatalog(
+      [
+        provider('long', 'prefix/skills/example'),
+        provider('owner', 'skills/example'),
+        provider('alias', 'root/skills/example'),
+      ],
+      undefined,
+      undefined,
+      refresh,
+    );
+    expect(await catalog.refresh()).toMatchObject([{ id: 'same', scope: '.', origin: { id: 'owner' } }]);
+    expect(refresh).toHaveBeenCalledOnce();
+  });
   it('charges actual bytes for rejected reads and retains later valid manifests', async () => {
     const fixture = await skillFixture();
     const names = Array.from({ length: 32 }, (_, i) => 'bad-' + String(i).padStart(2, '0'));
