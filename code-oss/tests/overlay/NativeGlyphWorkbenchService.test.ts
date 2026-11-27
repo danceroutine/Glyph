@@ -501,12 +501,17 @@ describe(NativeGlyphWorkbenchService, () => {
     ]);
   });
   it('wires editor and composer context callbacks into the desktop adapters', async () => {
-    const { service, host, editor, context } = await workbench();
+    const skillTargets = [{ id: 'project', label: 'Project', uri: 'file:///project/.glyph/skills' }];
+    const { service, host, editor, context } = await workbench({ extra: { skillTargets } });
     const request = { requestId: 'read', type: 'read' };
+    const checkMutation = vi.fn(async () => {});
 
-    await (host.handleEditorRequest as (value: unknown) => Promise<unknown>)(request);
+    await (host.handleEditorRequest as (value: unknown, check: () => Promise<void>) => Promise<unknown>)(
+      request,
+      checkMutation,
+    );
 
-    expect(editor.handle).toHaveBeenCalledWith(request, undefined);
+    expect(editor.handle).toHaveBeenCalledWith(request, skillTargets, checkMutation);
     expect((context.composer as unknown as () => unknown)()).toBe(service.composer);
     expect(service.ideContext).toBe((context as unknown as { ide: unknown }).ide);
   });
