@@ -1,9 +1,13 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { assertShellRuntimePathIsolation, pathsOverlap } from '#src/shell/ShellRuntimePathPolicy.js';
+import {
+  assertShellRuntimePathIsolation,
+  pathsOverlap,
+  resolveAvailableIdentity,
+} from '#src/shell/ShellRuntimePathPolicy.js';
 
 vi.mock('node:fs', { spy: true });
 
@@ -48,5 +52,22 @@ describe(pathsOverlap, () => {
 
     expect(pathsOverlap('/unavailable/state', '/unavailable/project')).toBe(false);
     expect(pathsOverlap('/unavailable/project', '/unavailable/project/nested')).toBe(true);
+  });
+});
+
+describe(resolveAvailableIdentity, () => {
+  it('uses the filesystem spelling for equivalent profile aliases and preserves distinct names', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-profile-name-')));
+    temporaryDirectories.push(root);
+    const original = join(root, 'cafe\u0301');
+    const other = join(root, 'café');
+    await mkdir(original);
+    if (!existsSync(other)) await mkdir(other);
+    const alias = join(root, 'profile');
+    await symlink(other, alias);
+    expect(resolveAvailableIdentity(join(alias, 'rules'))).toBe(join(await realpath(other), 'rules'));
+    expect(resolveAvailableIdentity(original) === resolveAvailableIdentity(alias)).toBe(
+      (await realpath(original)) === (await realpath(other)),
+    );
   });
 });
