@@ -77,7 +77,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     await this.options.physicalAccess?.assertWorkspacePath(
       absolute,
       [...this.options.accessPolicy.privatePaths, ...this.options.excludedPaths.map(path => resolve(this.root, path))],
-      { handle },
+      handle ? { handle } : undefined,
     );
   }
 

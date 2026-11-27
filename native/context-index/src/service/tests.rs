@@ -1840,6 +1840,7 @@ fn private_directory_uses_the_entries_actual_filename_equivalence() {
     assert_eq!(
         workspace_walk(base.path(), &policy)
             .unwrap()
+            .0
             .build()
             .flatten()
             .any(|entry| entry.file_name() == "fixture.txt"),
@@ -1877,4 +1878,38 @@ fn instruction_globs_use_stored_role_names_inside_the_admitted_index() {
             root.path().join(canonical).exists()
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn discards_lookups_if_an_explicit_private_location_is_redirected() {
+    let root = tempdir().unwrap();
+    let private = root.path().join("private");
+    let alias = root.path().join("permission-scope");
+    fs::create_dir(&private).unwrap();
+    std::os::unix::fs::symlink(&private, &alias).unwrap();
+    let mut cfg = params(root.path());
+    cfg.private_paths = vec![alias.clone()];
+    let mut service = ContextIndexService::new();
+    service.initialize(cfg).unwrap();
+    let context = service.content_search_context().unwrap();
+    let physical = initialized(&service).policy.physical().unwrap();
+    fs::remove_file(&alias).unwrap();
+    assert!(stable_result(&physical, ()).is_err());
+    assert!(physical
+        .assert_path(&root.path().join("ordinary"), None)
+        .is_err());
+    let request: crate::content_search::ContentSearchParams =
+        serde_json::from_value(serde_json::json!({
+            "pattern":"fixture","patternKind":"literal","outputMode":"count","limit":10,"offset":0,
+            "linesBefore":0,"linesAfter":0,"caseSensitive":true,"multiline":false
+        }))
+        .unwrap();
+    assert!(matches!(
+        context.search(request, &AtomicBool::new(false)),
+        Err(ContentSearchError::Internal(_))
+    ));
+    let mut malformed = params(root.path());
+    malformed.private_paths = vec!["relative".into()];
+    assert!(ContextIndexService::new().initialize(malformed).is_err());
 }
