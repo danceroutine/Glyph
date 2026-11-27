@@ -1,26 +1,29 @@
 import { outsideWorkspace, trustedHostExecutable, type HostExecutable } from '#src/shell/TrustedHostExecutable.js';
+import { HostProcessLeases, type HostWorkspaceRoots } from './HostProcessLeases.ts';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 
-/** Current attached roots, including peer windows and roots retained during reconnection. */
-export type HostWorkspaceRoots = readonly string[] | (() => readonly string[]);
+export type { HostWorkspaceRoots } from './HostProcessLeases.ts';
 
 /**
  * Binds host tools and their inputs to locations outside attached workspaces.
- * Admission retains logical and physical paths. Call validate immediately
- * before each subprocess, including a retry, to consult the latest roots and
- * native filesystem identity. A validated command still runs under its chosen
- * execution profile.
+ * Admission retains logical and physical paths. Repository children launch through
+ * run so peer workspace admission covers deferred helper invocations through
+ * child close. A storage lease covers allocation through cleanup. Other
+ * launchers consume the guard from validate at their handoff.
  */
 export class HostExecutionAuthority {
   private readonly paths = new Set<string>();
 
+  private readonly processes: HostProcessLeases;
   constructor(
-    private readonly roots: HostWorkspaceRoots,
+    workspace: HostWorkspaceRoots | HostProcessLeases,
     private readonly host: HostFilesystemAuthority,
-  ) {}
+  ) {
+    this.processes = workspace instanceof HostProcessLeases ? workspace : new HostProcessLeases(workspace);
+  }
 
   get workspaceRoots(): readonly string[] {
-    return typeof this.roots === 'function' ? this.roots() : this.roots;
+    return this.processes.workspaceRoots;
   }
 
   admit(path: string): string {
@@ -34,11 +37,40 @@ export class HostExecutionAuthority {
     return this.admit(trustedHostExecutable(name, this.workspaceRoots));
   }
 
+  /** Enable an optional transport only when its installation has independent native authority. */
+  async optionalExecutable(name: HostExecutable): Promise<string | undefined> {
+    try {
+      const path = trustedHostExecutable(name, this.workspaceRoots);
+      await this.checkPaths([path], this.workspaceRoots);
+      return this.admit(path);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Reauthorize at handoff. The operation settles after its child closes or its temporary store is removed. */
+  async run<T>(signal: AbortSignal, launch: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    signal.throwIfAborted();
+    const paths = [...this.paths];
+    const assertCurrent = await this.guard(paths);
+    signal.throwIfAborted();
+    assertCurrent();
+    return this.processes.run(roots => this.checkPaths(paths, roots), signal, launch);
+  }
+
   /** Verify the physical paths and return a final root check for synchronous process handoff. */
-  async validate(): Promise<() => void> {
+  validate(): Promise<() => void> {
+    return this.guard([...this.paths]);
+  }
+
+  private async checkPaths(paths: readonly string[], roots: readonly string[]): Promise<void> {
+    for (const path of paths) outsideWorkspace(path, roots);
+    await this.host.assertHostPaths(paths, roots);
+  }
+
+  private async guard(paths: readonly string[]): Promise<() => void> {
     const roots = [...this.workspaceRoots];
-    for (const path of this.paths) outsideWorkspace(path, roots);
-    await this.host.assertHostPaths([...this.paths], roots);
+    await this.checkPaths(paths, roots);
     const assertCurrent = () => {
       if (roots.join('\0') !== this.workspaceRoots.join('\0'))
         throw new Error('Attached workspace authority changed while validating host execution. Retry the preview.');

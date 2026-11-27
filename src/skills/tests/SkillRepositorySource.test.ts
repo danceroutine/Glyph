@@ -1,16 +1,27 @@
+import { existsSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { Deferred } from '#src/shared/Deferred.js';
+import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import { testSkillSource } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const opened = vi.hoisted(() => vi.fn<(storage: string, signal: AbortSignal) => void>());
 const git = vi.hoisted(() => vi.fn<(args: string[], maxOutput?: number) => Promise<Buffer>>());
 vi.mock('#src/skills/SkillRepositoryGit.js', () => ({
   SkillRepositoryGit: class {
     initialize = vi.fn();
     run = git;
+    constructor(storage: string, signal: AbortSignal) {
+      opened(storage, signal);
+    }
   },
 }));
-afterEach(() => git.mockReset());
+afterEach(() => {
+  git.mockReset();
+  opened.mockReset();
+});
 const manifest = Buffer.from('---\nname: example\ndescription: Fixture\n---\nReviewed workflow');
 const source = {
   kind: 'repository' as const,
@@ -33,6 +44,38 @@ describe('Repository package source boundary', () => {
     const sourceReader = testSkillSource('unused', [], testFilesystemMetadata, new WorkspaceAccessPolicy(), roots);
     expect((await sourceReader.read(source)).name).toBe('example');
     expect(roots).toHaveBeenCalled();
+  });
+  it('cleans up a private repository store before a peer can attach it between Git commands', async () => {
+    const leases = new HostProcessLeases([]);
+    const root = new Deferred<string>();
+    const revoked = new Deferred<void>();
+    const finishCommand = new Deferred<Buffer>();
+    opened.mockImplementation((storage, signal) => {
+      root.resolve(dirname(storage));
+      signal.addEventListener(
+        'abort',
+        () => {
+          revoked.resolve();
+        },
+        { once: true },
+      );
+    });
+    git.mockReturnValueOnce(finishCommand.promise);
+    const sourceReader = testSkillSource('unused', [], testFilesystemMetadata, new WorkspaceAccessPolicy(), leases);
+    const result = sourceReader.read(source);
+    const rejected = expect(result).rejects.toThrow('preview stopped');
+    const temporary = await root.promise;
+    expect(existsSync(temporary)).toBe(true);
+    const publish = vi.fn(() => {
+      expect(existsSync(temporary)).toBe(false);
+    });
+    const admission = leases.admitWorkspace(() => [temporary], publish);
+    await revoked.promise;
+    expect(publish).not.toHaveBeenCalled();
+    finishCommand.reject(new Error('preview stopped'));
+    await rejected;
+    await admission;
+    expect(publish).toHaveBeenCalledOnce();
   });
   it('derives the same root package name when the repository URL has trailing slashes', async () => {
     repository();

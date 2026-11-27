@@ -5,7 +5,8 @@ import { SkillRepositoryGit } from './SkillRepositoryGit.ts';
 import { indexedPackageDirectories, type SkillFileIndex } from './listSkillPackageFiles.ts';
 import { inventoryPackage } from './skillPackageInventory.ts';
 import { basename, dirname, join, resolve } from 'node:path';
-import { mkdir, mkdtemp, rm, lstat } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, rm, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
@@ -13,7 +14,8 @@ import { SkillPackageDraft } from './SkillPackageDraft.ts';
 import { optionalStat } from './SkillPackageStorage.ts';
 import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
-import type { HostWorkspaceRoots } from '#src/shell/HostExecutionAuthority.js';
+import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
+import type { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import type { WorkspacePathAccess } from '#src/workspace/WorkspacePathAccess.js';
 import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
@@ -45,7 +47,7 @@ export class SkillPackageSourceReader {
       WorkspacePathAccess &
       Pick<NativeFilesystemMetadata, 'sourceOrigins' | 'assertUnlinkedDirectory'>,
     private readonly accessPolicy: WorkspaceAccessPolicy,
-    private readonly hostWorkspaceRoots: HostWorkspaceRoots,
+    private readonly repositoryProcesses: HostProcessLeases,
   ) {}
   async read(input: SkillPackageSource, signal?: AbortSignal): Promise<SkillPackageDraft> {
     const source = skillPackageSourceSchema.parse(input);
@@ -148,21 +150,8 @@ export class SkillPackageSourceReader {
       .join('/');
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/u.test(source.revision) || source.revision.includes('..'))
       throw new Error('Select a commit, branch or tag.');
-    const currentRoots =
-      typeof this.hostWorkspaceRoots === 'function' ? this.hostWorkspaceRoots() : this.hostWorkspaceRoots;
-    const temporary = await mkdtemp(join(outsideWorkspace(tmpdir(), currentRoots), 'glyph-skill-repository-'));
-    const deadline = AbortSignal.timeout(60_000);
-    try {
-      await inspectPrivateDirectory(this.metadata, temporary);
-      const storage = join(temporary, '.skill-staging');
-      await mkdir(storage, { mode: 0o700 });
-      await inspectPrivateDirectory(this.metadata, storage);
-      const transport = new SkillRepositoryGit(
-        storage,
-        signal ? AbortSignal.any([signal, deadline]) : deadline,
-        this.hostWorkspaceRoots,
-        this.metadata,
-      );
+    return this.withRepositoryStore(signal, async (storage, processSignal) => {
+      const transport = new SkillRepositoryGit(storage, processSignal, this.repositoryProcesses, this.metadata);
       const git = async (...args: string[]) => {
         const bytes = await transport.run(args);
         try {
@@ -221,8 +210,29 @@ export class SkillPackageSourceReader {
         files,
         directories,
       });
-    } finally {
-      await rm(temporary, { recursive: true, force: true });
-    }
+    });
+  }
+
+  /** Reserve the private directory from creation through recursive cleanup, including gaps between Git children. */
+  private async withRepositoryStore<T>(
+    signal: AbortSignal | undefined,
+    read: (storage: string, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const authority = new HostExecutionAuthority(this.repositoryProcesses, this.metadata);
+    const parent = outsideWorkspace(tmpdir(), authority.workspaceRoots);
+    const temporary = authority.admit(join(parent, 'glyph-skill-repository-' + randomUUID()));
+    const deadline = AbortSignal.timeout(60_000);
+    return authority.run(signal ? AbortSignal.any([signal, deadline]) : deadline, async processSignal => {
+      await mkdir(temporary, { mode: 0o700 });
+      try {
+        await inspectPrivateDirectory(this.metadata, temporary);
+        const storage = join(temporary, '.skill-staging');
+        await mkdir(storage, { mode: 0o700 });
+        await inspectPrivateDirectory(this.metadata, storage);
+        return await read(storage, processSignal);
+      } finally {
+        await rm(temporary, { recursive: true, force: true });
+      }
+    });
   }
 }

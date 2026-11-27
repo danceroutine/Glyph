@@ -69,43 +69,46 @@ export async function captureRepositoryEnvironment(
   const environment = repositoryEnvironment(authority.workspaceRoots);
   const executable = authority.executable('git');
   authority.admit(cwd);
-  await authority.validate();
-  const executionDirectory = await new Promise<string>((accept, reject) => {
-    execFile(
-      executable,
-      ['--exec-path'],
-      { signal, timeout: 5000, maxBuffer: 16 * 1024, encoding: 'utf8', env: environment },
-      (error, output) => {
-        if (error) reject(new Error(error.message, { cause: error }));
-        else accept(output.trim());
-      },
+  const readGit = (args: string[], maxBuffer: number, input?: Buffer) =>
+    authority.run(
+      signal,
+      processSignal =>
+        new Promise<Buffer>((accept, reject) => {
+          let failure: Error | null;
+          let output: Buffer;
+          const child = execFile(
+            executable,
+            args,
+            { cwd, env: environment, signal: processSignal, timeout: 5000, maxBuffer, encoding: 'buffer' },
+            (error, bytes) => {
+              failure ??= error;
+              output = bytes;
+            },
+          );
+          // Node can invoke execFile's callback on abort before the child has exited.
+          // Keep its host inputs leased until the process and its pipes have closed.
+          child.once('close', () => {
+            if (failure) reject(new Error(failure.message, { cause: failure }));
+            else accept(output);
+          });
+          child.stdin!.once('error', error => {
+            failure ??= error;
+          });
+          child.stdin!.end(input);
+        }),
     );
-  });
+  const executionDirectory = (await readGit(['--exec-path'], 16 * 1024)).toString('utf8').trim();
   authority.admit(executionDirectory);
   for (const helper of ['git-remote-https', 'git-upload-pack'])
     authority.admit(join(executionDirectory, helper + (process.platform === 'win32' ? '.exe' : '')));
   environment.GIT_EXEC_PATH = executionDirectory;
   const config = async (args: string[], input?: Buffer) => {
-    await authority.validate();
-    return new Promise<Buffer>((accept, reject) => {
-      const child = execFile(
-        executable,
-        [...(gitDirectory && input === undefined ? ['--git-dir=' + gitDirectory] : []), 'config', '--null', ...args],
-        {
-          cwd,
-          env: environment,
-          signal,
-          timeout: 5000,
-          maxBuffer: 1024 * 1024,
-          encoding: 'buffer',
-        },
-        (error, output) => {
-          if (error) reject(new Error(error.message, { cause: error }));
-          else accept(output);
-        },
-      );
-      child.stdin!.end(input);
-    }).then(bytes => new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes));
+    const bytes = await readGit(
+      [...(gitDirectory && input === undefined ? ['--git-dir=' + gitDirectory] : []), 'config', '--null', ...args],
+      1024 * 1024,
+      input,
+    );
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   };
   // This command parses settings only. It does not contact a remote or run a configured helper.
   const output = await config(['--show-scope', '--show-origin', '--includes', '--list']);
@@ -173,7 +176,7 @@ export async function captureRepositoryEnvironment(
     await handle.close();
   }
   authority.admit(path);
-  const ssh = authority.executable('ssh');
+  const ssh = await authority.optionalExecutable('ssh');
   await authority.validate();
   return {
     ...environment,
@@ -182,7 +185,12 @@ export async function captureRepositoryEnvironment(
     GIT_CONFIG_NOSYSTEM: '1',
     // SSH config may itself contain executable ProxyCommand/LocalCommand directives.
     // Use the admitted system client with its default keys/agent and no command-bearing config.
-    GIT_SSH_COMMAND:
-      "'" + ssh.replaceAll("'", "'\\''") + "' -F " + (process.platform === 'win32' ? 'NUL' : '/dev/null'),
+    ...(ssh
+      ? {
+          GIT_ALLOW_PROTOCOL: 'https:ssh:file',
+          GIT_SSH_COMMAND:
+            "'" + ssh.replaceAll("'", "'\\''") + "' -F " + (process.platform === 'win32' ? 'NUL' : '/dev/null'),
+        }
+      : {}),
   };
 }

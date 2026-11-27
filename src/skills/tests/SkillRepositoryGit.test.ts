@@ -1,8 +1,9 @@
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
-import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { it, expect, vi, onTestFinished } from 'vitest';
+import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import { SkillRepositoryGit } from '#src/skills/SkillRepositoryGit.js';
 
 async function fixture() {
@@ -60,6 +61,50 @@ it.skipIf(process.platform === 'win32')(
     await vi.waitFor(() => {
       expect(() => process.kill(helper, 0)).toThrow();
     });
+  },
+);
+it.skipIf(process.platform === 'win32')(
+  'holds the configured credential helper through transport close and releases it for the next preview',
+  async () => {
+    const base = await fixture();
+    const cwd = join(base, 'preview');
+    const helpers = join(base, 'helpers');
+    await Promise.all([mkdir(cwd), mkdir(helpers)]);
+    const helper = join(helpers, 'fixture-helper');
+    await writeFile(helper, '#!/bin/sh\nexit 0\n');
+    await chmod(helper, 0o700);
+    await writeFile(join(base, 'trusted.config'), '[credential]\nhelper = ' + helper + '\n');
+    let roots: string[] = [];
+    const leases = new HostProcessLeases(() => roots);
+    const cancel = new AbortController();
+    onTestFinished(() => {
+      cancel.abort();
+    });
+    const transport = new SkillRepositoryGit(cwd, cancel.signal, leases, testFilesystemMetadata);
+    const running = transport.run([
+      '-c',
+      'alias.wait-for-peer=!sleep 30 & echo $! > helper-pid; wait',
+      'wait-for-peer',
+    ]);
+    const rejected = expect(running).rejects.toThrow('workspace is attaching');
+    let pid = 0;
+    await vi.waitFor(async () => {
+      pid = Number(await readFile(join(cwd, 'helper-pid'), 'utf8'));
+      expect(pid).toBeGreaterThan(0);
+    });
+    await leases.admitWorkspace(
+      () => [helpers],
+      () => {
+        roots = [helpers];
+      },
+    );
+    await rejected;
+    await vi.waitFor(() => {
+      expect(() => process.kill(pid, 0)).toThrow();
+    });
+    await expect(transport.run(['--version'])).rejects.toThrow('outside writable workspaces');
+    roots = [];
+    expect((await transport.run(['--version'])).toString()).toContain('git version');
   },
 );
 it('bounds each Git object read and propagates missing-command diagnostics', async () => {

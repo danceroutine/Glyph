@@ -1,6 +1,7 @@
 import { repositoryEnvironment } from '#src/shell/TrustedHostExecutable.js';
 import { captureRepositoryEnvironment } from './SkillRepositoryConfiguration.ts';
 import { HostExecutionAuthority, type HostWorkspaceRoots } from '#src/shell/HostExecutionAuthority.js';
+import type { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 import { spawn } from 'node:child_process';
@@ -41,10 +42,10 @@ export class SkillRepositoryGit {
   constructor(
     private readonly cwd: string,
     private readonly signal: AbortSignal,
-    workspaceRoots: HostWorkspaceRoots,
+    workspace: HostWorkspaceRoots | HostProcessLeases,
     private readonly metadata: FilesystemMetadata & HostFilesystemAuthority,
   ) {
-    this.authority = new HostExecutionAuthority(workspaceRoots, metadata);
+    this.authority = new HostExecutionAuthority(workspace, metadata);
     this.authority.admit(cwd);
   }
   async initialize(url: string): Promise<void> {
@@ -99,8 +100,22 @@ export class SkillRepositoryGit {
     const argv = windows
       ? gitArgs
       : ['-c', 'ulimit -f "$1" || exit 1; shift; exec "$@"', 'glyph-git', String(blocks), executable, ...gitArgs];
-    await this.authority.validate();
-    const result = await new Promise<Buffer>((accept, reject) => {
+    const result = await this.authority.run(this.signal, signal => this.spawn(command, argv, env, maxOutput, signal));
+    this.signal.throwIfAborted();
+    await storageBytes(this.cwd);
+    return result;
+  }
+
+  /** The process group owns credential and transport helpers. Release its lease after cancellation and pipe closure. */
+  private spawn(
+    command: string,
+    argv: string[],
+    env: NodeJS.ProcessEnv,
+    maxOutput: number,
+    signal: AbortSignal,
+  ): Promise<Buffer> {
+    const windows = process.platform === 'win32';
+    return new Promise((accept, reject) => {
       const child = spawn(command, argv, {
         cwd: this.cwd,
         env,
@@ -113,7 +128,8 @@ export class SkillRepositoryGit {
       let bytes = 0,
         errBytes = 0,
         failure: Error | undefined,
-        inspecting: Promise<void> | undefined;
+        inspecting: Promise<void> | undefined,
+        terminating: Promise<void> | undefined;
       const stop = (reason: Error) => {
         if (failure) return;
         failure = reason;
@@ -123,8 +139,13 @@ export class SkillRepositoryGit {
             windowsHide: true,
             stdio: 'ignore',
           });
-          kill.on('error', () => {
-            child.kill('SIGKILL');
+          terminating = new Promise<void>(resolve => {
+            // Spawn failure also emits close, which handles a direct-child fallback.
+            kill.once('error', () => {});
+            kill.once('close', code => {
+              if (code !== 0) child.kill('SIGKILL');
+              resolve();
+            });
           });
         } else {
           try {
@@ -135,10 +156,10 @@ export class SkillRepositoryGit {
         }
       };
       const abort = () => {
-        stop(this.signal.reason instanceof Error ? this.signal.reason : new Error('Repository fetch cancelled.'));
+        stop(signal.reason instanceof Error ? signal.reason : new Error('Repository fetch cancelled.'));
       };
-      this.signal.addEventListener('abort', abort, { once: true });
-      if (this.signal.aborted) abort();
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
       const watch = setInterval(() => {
         inspecting ??= storageBytes(this.cwd)
           .then(
@@ -166,8 +187,8 @@ export class SkillRepositoryGit {
       });
       child.once('close', code => {
         clearInterval(watch);
-        this.signal.removeEventListener('abort', abort);
-        void Promise.resolve(inspecting).then(() => {
+        signal.removeEventListener('abort', abort);
+        void Promise.all([inspecting, terminating]).then(() => {
           if (failure) reject(failure);
           else if (code !== 0)
             reject(new Error(Buffer.concat(err).toString('utf8').trim() || 'Git repository access failed.'));
@@ -175,8 +196,5 @@ export class SkillRepositoryGit {
         }, reject);
       });
     });
-    this.signal.throwIfAborted();
-    await storageBytes(this.cwd);
-    return result;
   }
 }

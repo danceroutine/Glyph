@@ -19,8 +19,10 @@ describe(HostExecutionAuthority, () => {
     const authority = new HostExecutionAuthority(() => roots, testFilesystemMetadata);
     authority.admit(path);
     expect(authority.executable('git')).toContain('git');
-    await expect(authority.validate()).resolves.toBeUndefined();
+    const handoff = await authority.validate();
+    expect(handoff).not.toThrow();
     roots = [project, config];
+    expect(handoff).toThrow('workspace authority changed');
     await expect(authority.validate()).rejects.toThrow('outside writable workspaces');
     expect(() => new HostExecutionAuthority([config], testFilesystemMetadata).admit(path)).toThrow(
       'outside writable workspaces',
@@ -36,7 +38,8 @@ describe(HostExecutionAuthority, () => {
     const authority = new HostExecutionAuthority([peer], testFilesystemMetadata);
     authority.admit(path);
     expect(authority.executable('git')).toContain('git');
-    await expect(authority.validate()).resolves.toBeUndefined();
+    const handoff = await authority.validate();
+    expect(handoff).not.toThrow();
     expect(() => authority.admit(join(peer, 'future'))).toThrow('outside writable workspaces');
   });
 

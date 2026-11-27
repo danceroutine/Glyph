@@ -54,7 +54,7 @@ export function repositoryEnvironment(roots: readonly string[]): NodeJS.ProcessE
         : '/usr/bin:/bin:/usr/sbin:/sbin',
     GIT_TERMINAL_PROMPT: '0',
     GIT_LFS_SKIP_SMUDGE: '1',
-    GIT_ALLOW_PROTOCOL: 'https:ssh:file',
+    GIT_ALLOW_PROTOCOL: 'https:file',
   };
   for (const key of [
     'HOME',

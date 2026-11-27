@@ -1,35 +1,63 @@
+import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
+import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
+import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
+import { Deferred } from '#src/shared/Deferred.js';
 import { captureRepositoryEnvironment } from '#src/skills/SkillRepositoryConfiguration.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 
 const parser = vi.hoisted(() => ({
   replies: [] as (string | Error)[],
   executionDirectory: '/fixture/git-core' as string | Error,
+  commands: [] as string[][],
+  started: undefined as ((child: EventEmitter, signal: AbortSignal) => void) | undefined,
+  sshAvailable: true,
+  inputError: false,
 }));
 vi.mock('node:child_process', () => ({
   execFile: (
     _path: string,
     args: string[],
-    _options: unknown,
+    options: { signal: AbortSignal },
     callback: (error: Error | null, output: Buffer | string) => void,
   ) => {
+    parser.commands.push(args);
+    const child = new EventEmitter();
+    const stdin = new EventEmitter();
     const complete = () => {
+      if (parser.started) {
+        options.signal.addEventListener(
+          'abort',
+          () => {
+            callback(new Error('Parser cancelled'), Buffer.alloc(0));
+          },
+          {
+            once: true,
+          },
+        );
+        parser.started(child, options.signal);
+        return;
+      }
       const next = args.includes('--exec-path') ? parser.executionDirectory : parser.replies.shift()!;
       queueMicrotask(() => {
+        if (parser.inputError) stdin.emit('error', new Error('Configuration input closed'));
         if (next instanceof Error) callback(next, Buffer.alloc(0));
-        else callback(null, args.includes('--exec-path') ? next : Buffer.from(next));
+        else callback(null, Buffer.from(next));
+        child.emit('close', next instanceof Error ? 1 : 0);
       });
     };
-    if (args.includes('--exec-path')) complete();
-    return { stdin: { end: complete } };
+    return Object.assign(child, { stdin: Object.assign(stdin, { end: complete }) });
   },
 }));
 vi.mock('#src/shell/TrustedHostExecutable.js', async importOriginal => ({
   ...(await importOriginal<typeof import('#src/shell/TrustedHostExecutable.js')>()),
-  trustedHostExecutable: () => '/fixture/git',
+  trustedHostExecutable: (name: string) => {
+    if (name === 'ssh' && !parser.sshAvailable) throw new Error('SSH unavailable');
+    return '/fixture/' + name;
+  },
 }));
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
 afterEach(() => {
@@ -45,9 +73,14 @@ async function fixture(contents = '[core]\neditor = trusted\n') {
   vi.stubEnv('GIT_CONFIG_GLOBAL', config);
   vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
   parser.replies = [];
+  parser.commands = [];
+  parser.started = undefined;
+  parser.sshAvailable = true;
+  parser.inputError = false;
   parser.executionDirectory = '/fixture/git-core';
   return {
     config,
+    root,
     capture: () => captureRepositoryEnvironment([], root, new AbortController().signal, testFilesystemMetadata),
   };
 }
@@ -84,4 +117,92 @@ it('stops capture when Git cannot resolve its credential helper installation', a
   parser.replies.push(`global\0file:${f.config}\0${value}`, value);
   parser.executionDirectory = new Error('Git installation unavailable');
   await expect(f.capture()).rejects.toThrow('Git installation unavailable');
+});
+
+it.each([1, 2])('rechecks workspace authority at the handoff to configuration child %s', async target => {
+  const f = await fixture();
+  let roots: string[] = [];
+  let checks = 0;
+  let arm = false;
+  const readRoots = () => {
+    if (arm) {
+      arm = false;
+      queueMicrotask(() => {
+        roots = [f.root];
+      });
+    }
+    return roots;
+  };
+  const metadata = {
+    ...testFilesystemMetadata,
+    assertHostPaths: async () => {
+      arm = ++checks === target;
+    },
+  };
+  const authority = new HostExecutionAuthority(readRoots, metadata);
+  await expect(
+    captureRepositoryEnvironment([], f.root, new AbortController().signal, metadata, undefined, authority),
+  ).rejects.toThrow('workspace authority changed');
+  expect(parser.commands).toHaveLength(target - 1);
+});
+
+it('holds a cancelled configuration process lease until child close, including an early execFile callback', async () => {
+  const f = await fixture();
+  const leases = new HostProcessLeases([]);
+  const authority = new HostExecutionAuthority(leases, testFilesystemMetadata);
+  const started = new Deferred<EventEmitter>();
+  const stopped = new Deferred<void>();
+  parser.started = (child, signal) => {
+    signal.addEventListener(
+      'abort',
+      () => {
+        stopped.resolve();
+      },
+      { once: true },
+    );
+    started.resolve(child);
+  };
+  const parsing = captureRepositoryEnvironment(
+    [],
+    f.root,
+    new AbortController().signal,
+    testFilesystemMetadata,
+    undefined,
+    authority,
+  );
+  const rejected = expect(parsing).rejects.toThrow('Parser cancelled');
+  const child = await started.promise;
+  const publish = vi.fn();
+  const admission = leases.admitWorkspace(() => [f.root], publish);
+  await stopped.promise;
+  expect(publish).not.toHaveBeenCalled();
+  child.emit('close', 1);
+  await rejected;
+  await admission;
+  expect(publish).toHaveBeenCalledOnce();
+  parser.started = undefined;
+  parser.replies.push('');
+  await expect(f.capture()).resolves.toHaveProperty('GIT_CONFIG_GLOBAL');
+});
+
+it.each(['missing', 'denied'])('allows only HTTPS and file when the trusted SSH installation is %s', async kind => {
+  const f = await fixture();
+  parser.sshAvailable = kind !== 'missing';
+  parser.replies.push('');
+  const metadata = {
+    ...testFilesystemMetadata,
+    assertHostPaths: async (paths: readonly string[]) => {
+      if (paths.includes('/fixture/ssh')) throw new Error('SSH is workspace-controlled');
+    },
+  };
+  const env = await captureRepositoryEnvironment([], f.root, new AbortController().signal, metadata);
+  expect(env.GIT_ALLOW_PROTOCOL).toBe('https:file');
+  expect(env.GIT_SSH_COMMAND).toBeUndefined();
+  expect(parser.commands.some(args => args.includes('config'))).toBe(true);
+});
+
+it('settles a parser whose input pipe closes before Git completes', async () => {
+  const f = await fixture();
+  parser.inputError = true;
+  await expect(f.capture()).rejects.toThrow('Configuration input closed');
 });
