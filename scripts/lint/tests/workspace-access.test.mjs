@@ -12,6 +12,9 @@ const name = 'glyph-access/mediated-workspace-access';
 
 /** @type {[string, string, boolean][]} */
 const cases = [
+  ['src/skills/LocalIntake.ts', "import { readHostFile } from './readHostFile.ts';", true],
+  ['src/skills/LocalSkillSourceAuthority.ts', "import { open } from 'node:fs/promises';", false],
+  ['src/skills/AdHocIntake.ts', "import * as intake from './LocalSkillSourceAuthority.ts';", true],
   ['src/skills/Outside.ts', 'const read = skill.inspectResource;', true],
   ['src/skills/Other.ts', "selected['packageFiles']();", true],
   ['src/skills/SkillScriptRunner.ts', 'selected.packageFiles();', false],
