@@ -159,6 +159,7 @@ mod tests {
     fn uses_the_project_marker_or_immediate_user_packages_and_the_volume_case_policy() {
         let root = tempfile::tempdir().unwrap();
         let files = [
+            "ordinary/.glyph/skills/example/SKILL.md",
             "sub/.GLYPH/SKILLS/example/SKILL.md",
             "kelvin/.glyph/sKills/example/SKILL.md",
             "user/SKILL.md",
@@ -172,6 +173,7 @@ mod tests {
         let paths = files.map(String::from).into();
         let project = list(&paths, Some(".glyph"), root.path(), 40, false, |_| true);
         let expected = [
+            "ordinary/.glyph/skills/example/SKILL.md",
             "kelvin/.glyph/skills/example/SKILL.md",
             "sub/.glyph/skills/example/SKILL.md",
         ]
@@ -187,7 +189,7 @@ mod tests {
             expected
         );
         let user = list(&paths, None, root.path(), 40, false, |_| true);
-        assert_eq!(user.packages.len(), 3);
+        assert_eq!(user.packages.len(), 4);
         assert_eq!(
             user.packages.last().unwrap().manifest.as_deref(),
             Some("user/SKILL.md")
