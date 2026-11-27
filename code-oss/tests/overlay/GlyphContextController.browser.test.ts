@@ -55,6 +55,7 @@ function controllerServices() {
   const fileChanges = new Emitter<readonly { resource: URI; type: number }[]>();
   const registrations = new Emitter<{ scheme: string }>();
   const modelAdded = new Emitter<{ uri: URI }>();
+  const modelRemoved = new Emitter<{ uri: URI }>();
   const editorAdded = new Emitter<ReturnType<typeof codeEditor>>();
   const folderOf = (uri: URI) =>
     folders.find(folder => uri.path === folder.uri.path || uri.path.startsWith(`${folder.uri.path}/`));
@@ -71,6 +72,7 @@ function controllerServices() {
     fileChanges,
     registrations,
     modelAdded,
+    modelRemoved,
     models,
     stats,
     editorAdded,
@@ -120,6 +122,7 @@ function controllerServices() {
     editors: { activeTextEditorControl: undefined as unknown, openEditor: vi.fn(async () => undefined) },
     modelService: {
       onModelAdded: modelAdded.event,
+      onModelRemoved: modelRemoved.event,
       getModels: () => models,
       getModel: (uri: URI) => models.find(model => model.uri.toString() === uri.toString()) ?? null,
     },
@@ -217,6 +220,44 @@ describe(GlyphContextController, () => {
       edits.fire();
       await vi.advanceTimersByTimeAsync(300);
       expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+  it('stops scheduling refreshes when an open model loses its last rule reference', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const edits = new Emitter<void>();
+    const uri = URI.file('/workspace/former-reference.md');
+    services.models.push({ uri, onDidChangeContent: edits.event } as never);
+    services.instructionSources.push({
+      id: 'project',
+      path: '.glyph/rules/old.mdc',
+      status: 'active',
+      referenceResources: [{ uri: uri.toString(), caseSensitive: true }],
+    });
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    try {
+      controller.setInstructionRefresh(refresh);
+      controller.notifyInstructionsChanged();
+      services.instructionSources.length = 0;
+      controller.notifyInstructionsChanged();
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(refresh).not.toHaveBeenCalled();
+      services.instructionSources.push({
+        id: 'new',
+        path: '.glyph/rules/new.mdc',
+        status: 'active',
+        referenceResources: [{ uri: uri.toString(), caseSensitive: true }],
+      });
+      controller.notifyInstructionsChanged();
+      services.modelRemoved.fire(services.models[0]);
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(refresh).not.toHaveBeenCalled();
     } finally {
       controller.dispose();
       vi.useRealTimers();

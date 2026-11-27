@@ -154,6 +154,14 @@ describe(FileSystemWorkspaceTextStore, () => {
       reason: EditFailureReason.UNSUPPORTED,
     });
   });
+  it('cancels a disk-backed catalog listing and keeps directories out of file reads', async () => {
+    const root = await workspaceRoot('glyph-catalog-cancel-');
+    const disk = new FileSystemWorkspaceTextStore(root);
+    await mkdir(join(root, 'nested'));
+    await expect(disk.read('nested')).rejects.toThrow('regular file');
+    const signal = AbortSignal.abort(new Error('catalog cancelled'));
+    await expect(disk.list(10, '**/*', undefined, signal)).rejects.toThrow('catalog cancelled');
+  });
   it.each(['\uD800', '\uDC00', 'folder/\uD800.txt', 'folder/\uDC00.txt'])(
     'rejects malformed Unicode path %j before resolving a filesystem key',
     async path => {

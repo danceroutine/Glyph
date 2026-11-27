@@ -1,4 +1,9 @@
-import { normalizeVolumeName, type FilesystemNamePolicy } from './FilesystemNamePolicy.ts';
+import { DirectoryNamePolicies } from './DirectoryNamePolicies.ts';
+import {
+  normalizeVolumeName,
+  type FilesystemNamePolicy,
+  type ReadDirectoryNamePolicies,
+} from './FilesystemNamePolicy.ts';
 import fs, { realpathSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
@@ -6,6 +11,7 @@ import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 /** A physical workspace root can have several editor routes, including routes through an enclosing root. */
 export class WorkspaceSourceRoutes {
   private readonly filenameKeys = new Map<string, string>();
+  private readonly directories?: DirectoryNamePolicies;
   constructor(
     private readonly roots: readonly {
       name: string;
@@ -15,23 +21,76 @@ export class WorkspaceSourceRoutes {
       foldsUnicode?: boolean;
       uri?: string;
     }[],
-  ) {}
+    readPolicies?: ReadDirectoryNamePolicies,
+  ) {
+    if (readPolicies) {
+      this.directories = new DirectoryNamePolicies(readPolicies);
+      for (const root of roots) {
+        if (root.caseSensitive !== undefined && root.normalizesUnicode !== undefined && root.foldsUnicode !== undefined)
+          this.directories.remember(root.path, {
+            caseSensitive: root.caseSensitive,
+            normalizesUnicode: root.normalizesUnicode,
+            foldsUnicode: root.foldsUnicode,
+          });
+      }
+    }
+  }
+
+  /** Prime all component comparisons together; a synchronous disclosure needs at most one metadata batch. */
+  prepare(routes: readonly string[]): void {
+    if (!this.directories) return;
+    const parents = new Set<string>();
+    for (const route of routes) {
+      const physical = this.physicalPath(route);
+      if (!physical) continue;
+      const root = this.rootFor(route)!;
+      for (let dir = dirname(physical); dir.length >= root.path.length && !parents.has(dir); dir = dirname(dir)) {
+        parents.add(dir);
+        if (dir === root.path) break;
+      }
+    }
+    this.directories.prepare(parents);
+  }
+
+  /** One policy per physical name in this logical route. Root labels belong to the router. */
+  componentPolicies(route: string): readonly FilesystemNamePolicy[] | undefined {
+    if (!this.directories || !this.physicalPath(route)) return undefined;
+    const root = this.rootFor(route)!;
+    let parent = root.path;
+    return route
+      .split('/')
+      .slice(this.roots.length === 1 ? 0 : 1)
+      .map(segment => {
+        const policy = this.directories!.get(parent);
+        parent = join(parent, segment);
+        return policy;
+      });
+  }
 
   /** Confirm a changed comparison key against the owning directory when either spelling already exists. */
   scopeKey(route: string, sensitive: boolean): string | undefined {
     const segments = route.split('/');
     const name = this.roots.length === 1 ? undefined : segments.shift();
     const root = this.roots.length === 1 ? this.roots[0] : this.roots.find(root => root.name === name);
-    if (!root?.normalizesUnicode || !this.physicalPath(route)) return undefined;
+    if (!root || (!this.directories && !root.normalizesUnicode) || !this.physicalPath(route)) return undefined;
     const keys = name === undefined ? [] : [name];
     let parent = root.path;
     for (const segment of segments) {
-      const normalized = normalizeVolumeName(segment, root);
-      const key = sensitive ? normalized : normalized.toLowerCase();
+      const policy = this.directories?.get(parent);
+      const normalized = normalizeVolumeName(segment, policy ?? root);
+      const key = (policy?.caseSensitive ?? sensitive) ? normalized : normalized.toLowerCase();
       keys.push(segment === key ? key : this.confirmKey(parent, segment, key));
       parent = join(parent, segment);
     }
     return keys.join('/');
+  }
+
+  /** Catalog compatibility follows an existing scope directory across every attachment, including bind aliases. */
+  physicalScopeKey(route: string): string | undefined {
+    const physical = this.physicalPath(route);
+    if (!physical) return undefined;
+    const info = fs.statSync(physical, { bigint: true, throwIfNoEntry: false });
+    return info?.isDirectory() ? '\0' + info.dev + ':' + info.ino : undefined;
   }
 
   /** Apply only the routed volume's normalization policy. Logical root labels are exact. */
@@ -40,7 +99,7 @@ export class WorkspaceSourceRoutes {
   }
 
   namePolicy(route: string): Readonly<Partial<FilesystemNamePolicy>> | undefined {
-    return this.roots.length === 1 ? this.roots[0] : this.roots.find(root => root.name === route.split('/')[0]);
+    return this.rootFor(route);
   }
 
   /** A single-character glob counts characters in the directory entry's stored spelling. */
@@ -48,7 +107,7 @@ export class WorkspaceSourceRoutes {
     const parts = route.split('/');
     const root = this.roots.length === 1 ? this.roots[0] : this.roots.find(root => root.name === parts[0]);
     const physical = this.physicalPath(route);
-    if (!root?.normalizesUnicode || !physical) return route;
+    if (!root || (!this.directories && !root.normalizesUnicode) || !physical) return route;
     const tail: string[] = [];
     let prefix = physical;
     const boundary = join(root.path, '.');
@@ -56,7 +115,17 @@ export class WorkspaceSourceRoutes {
       try {
         const stored = realpathSync.native(prefix);
         // Retain only a spelling alias. A resolved symlink's unrelated destination is outside this comparison.
-        if (normalizeVolumeName(stored, root) !== normalizeVolumeName(prefix, root)) return route;
+        if (this.directories) {
+          const storedParts = relative(root.path, stored).split(sep);
+          const givenParts = relative(root.path, prefix).split(sep);
+          if (storedParts.length !== givenParts.length) return route;
+          let parent = root.path;
+          for (const [i, segment] of givenParts.entries()) {
+            if (segment !== storedParts[i] && this.confirmKey(parent, segment, storedParts[i]!) !== storedParts[i])
+              return route;
+            parent = join(parent, segment);
+          }
+        } else if (normalizeVolumeName(stored, root) !== normalizeVolumeName(prefix, root)) return route;
         const segments = stored.split(sep).filter(Boolean).slice(root.path.split(sep).filter(Boolean).length);
         return [...(this.roots.length === 1 ? [] : [root.name]), ...segments, ...tail].join('/');
       } catch (error) {
@@ -88,11 +157,18 @@ export class WorkspaceSourceRoutes {
           return root.caseSensitive === false ? normalized.toLowerCase() : normalized;
         };
         const path = relative(key(root.path), key(target));
-        if (!contained(path)) return [];
+        if (!this.directories && !contained(path)) return [];
         const depth = root.path.split(sep).filter(Boolean).length;
         const tail = target.split(sep).filter(Boolean).slice(depth);
         const ancestor = tail.reduce(value => dirname(value), target);
-        if (root.normalizesUnicode && root.path !== ancestor && this.confirmKey('', root.path, ancestor) !== ancestor)
+        if (this.directories) {
+          if (target.split(sep).filter(Boolean).length < depth) return [];
+          if (root.path !== ancestor && !this.sameExistingDirectory(root.path, ancestor)) return [];
+        } else if (
+          root.normalizesUnicode &&
+          root.path !== ancestor &&
+          this.confirmKey('', root.path, ancestor) !== ancestor
+        )
           return [];
         return [{ root, spelling: tail.join('/') }];
       })
@@ -127,6 +203,16 @@ export class WorkspaceSourceRoutes {
     if (this.roots.length === 1) return [route, this.roots[0]!.name + '/' + route];
     return [...new Set(this.equivalents(route).flatMap(path => [path, path.split('/').slice(1).join('/')]))];
   }
+  private rootFor(route: string) {
+    return this.roots.length === 1 ? this.roots[0] : this.roots.find(root => root.name === route.split('/')[0]);
+  }
+
+  private sameExistingDirectory(left: string, right: string): boolean {
+    const a = fs.lstatSync(left, { bigint: true, throwIfNoEntry: false });
+    const b = fs.lstatSync(right, { bigint: true, throwIfNoEntry: false });
+    return a !== undefined && a.dev === b?.dev && a.ino === b.ino;
+  }
+
   private confirmKey(parent: string, segment: string, key: string): string {
     const path = join(parent, segment);
     const comparison = join(parent, key);

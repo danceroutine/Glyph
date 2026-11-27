@@ -101,3 +101,17 @@ describe(listInstructionFilesAcrossRoots, () => {
     await expect(listInstructionFilesAcrossRoots([roots[1]!], 10, '**/*.mdc')).rejects.toThrow('Unavailable');
   });
 });
+
+it.each(['root', 'nested', 'project'])('stops all remaining queries when the %s lookup is cancelled', async stage => {
+  const control = new AbortController();
+  const glob = vi.fn(async (pattern: string, options: { signal?: AbortSignal }) => {
+    expect(options.signal).toBe(control.signal);
+    if (stage !== 'nested' || pattern !== 'AGENTS.md') control.abort(new Error('stop discovery'));
+    return { files: [], truncated: false };
+  });
+  const roots = ['one', 'two'].map(name => ({ name, index: { glob } }));
+  await expect(
+    listInstructionFilesAcrossRoots(roots, 10, stage === 'project' ? '**/*.mdc' : '**/AGENTS.md', true, control.signal),
+  ).rejects.toThrow('stop discovery');
+  expect(glob).toHaveBeenCalledTimes(stage === 'nested' ? 3 : 1);
+});

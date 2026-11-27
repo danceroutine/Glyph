@@ -2,10 +2,12 @@ import { normalizeVolumeName, type FilesystemNamePolicy } from '#src/workspace/F
 import type { AgentInstructionSource } from '#src/instructions/AgentInstructionSource.js';
 import { defaultInstructionPaths, type InstructionPaths } from '#src/instructions/InstructionPaths.js';
 
-type GlobNamePolicy = Partial<Pick<FilesystemNamePolicy, 'normalizesUnicode' | 'foldsUnicode'>>;
+type GlobNamePolicy = Partial<FilesystemNamePolicy>;
+
+type ConfirmLiteral = (component: number, literal: string) => boolean;
 
 interface GlobMatcher {
-  test(path: string, budget?: RuleGlobBudget): boolean;
+  test(path: string, budget?: RuleGlobBudget, confirm?: ConfirmLiteral): boolean;
 }
 
 /** Bound the aggregate cost of evaluating all file-pattern rules for one disclosure. */
@@ -23,17 +25,26 @@ export class RuleGlobBudget {
     return stored;
   }
 
-  matches(pattern: string, path: string, sensitive: boolean, policy?: GlobNamePolicy): boolean {
-    const key = JSON.stringify([sensitive, policy?.normalizesUnicode, policy?.foldsUnicode, pattern]);
+  matches(
+    pattern: string,
+    path: string,
+    sensitive: boolean,
+    policy?: GlobNamePolicy,
+    components?: readonly FilesystemNamePolicy[],
+    physicalPath?: string,
+    confirm?: ConfirmLiteral,
+  ): boolean {
+    const key = JSON.stringify([sensitive, policy?.normalizesUnicode, policy?.foldsUnicode, components, pattern]);
     let evaluation = this.patterns.get(key);
     if (!evaluation) {
-      evaluation = { matcher: globExpression(pattern, sensitive, policy), results: new Map() };
+      evaluation = { matcher: globExpression(pattern, sensitive, policy, components), results: new Map() };
       this.patterns.set(key, evaluation);
     }
-    const cached = evaluation.results.get(path);
+    const candidate = physicalPath === undefined ? path : physicalPath + '\0' + path;
+    const cached = evaluation.results.get(candidate);
     if (cached !== undefined) return cached;
-    const matched = evaluation.matcher.test(path, this);
-    evaluation.results.set(path, matched);
+    const matched = evaluation.matcher.test(path, this, confirm);
+    evaluation.results.set(candidate, matched);
     return matched;
   }
 
@@ -49,11 +60,25 @@ export class RuleGlobBudget {
 /** Resolve each participating scope and evaluate shared rule patterns once per disclosure. */
 export class RulePathBatch {
   private readonly scopes = new Map<string, ReturnType<RulePathBatch['resolveScope']>>();
+  private readonly inputsByScope = new Map<string, string[]>();
   constructor(
     private readonly inputs: readonly string[],
     private readonly paths: InstructionPaths,
     private readonly budget = new RuleGlobBudget(),
-  ) {}
+  ) {
+    paths.prepare(inputs);
+    for (const path of inputs) {
+      for (const key of paths.ancestorKeys(path)) {
+        const bucket = this.inputsByScope.get(key);
+        if (bucket) bucket.push(path);
+        else this.inputsByScope.set(key, [path]);
+      }
+    }
+  }
+
+  get scopeKeys(): Iterable<string> {
+    return this.inputsByScope.keys();
+  }
 
   matching(scope: string, globs?: readonly string[]): readonly string[] {
     let resolved = this.scopes.get(scope);
@@ -72,7 +97,7 @@ export class RulePathBatch {
   }
 
   private resolveScope(scope: string) {
-    const paths = this.inputs.filter(path => this.paths.contains(scope, path));
+    const paths = scope === '.' ? this.inputs : (this.inputsByScope.get(this.paths.key(scope)) ?? []);
     const routes = new Map<number, ReturnType<RulePathBatch['resolveRoutes']>>();
     const patterns = new Map<string, Map<number, boolean>>();
     const matches = (index: number, pattern: string): boolean => {
@@ -97,27 +122,42 @@ export class RulePathBatch {
 
   private resolveRoutes(scope: string, path: string) {
     const paths = this.paths;
-    return (scope === '.' ? paths.equivalents(path) : [path]).map(route => {
-      const relative = paths.relativeToScope(scope, route);
-      const owner = scope === '.' ? route : scope;
-      const policy = paths.routes?.namePolicy(owner);
-      const sensitive = paths.caseSensitive(owner);
-      let stored: string | undefined;
-      return (pattern: string): boolean => {
-        const candidate = pattern.includes('?')
-          ? (stored ??= paths.relativeToScope(scope, this.budget.storedSpelling(route, paths)))
-          : relative;
-        const matched = this.budget.matches(pattern, candidate, sensitive, policy);
-        if (!matched || !paths.routes) return matched;
-        const components = pattern.split('/');
-        const wildcard = components.findIndex(component => /[?*]/u.test(component));
-        const prefix = (wildcard < 0 ? components : components.slice(0, wildcard)).join('/');
-        if (!prefix || relative === prefix || relative.startsWith(prefix + '/')) return true;
+    const routes = paths.equivalents(path);
+    const scopeKey = paths.key(scope);
+    return routes
+      .filter(route => scope === '.' || paths.key(route) === scopeKey || paths.key(route).startsWith(scopeKey + '/'))
+      .map(route => {
+        const relative =
+          scope === '.'
+            ? paths.relativeToScope(scope, route)
+            : route.split('/').slice(scope.split('/').length).join('/');
+        const policy = paths.routes?.namePolicy(route);
+        const sensitive = paths.caseSensitive(route);
+        const policies = paths.routes?.componentPolicies(route)?.slice(-relative.split('/').length);
+        const physical = paths.routes?.physicalPath(route);
+        const components = relative.split('/');
         const root = route.split('/')[0]!;
         const base = scope === '.' && paths.isWorkspaceRoot(root) ? root : scope;
-        return paths.contains(paths.reference(base, prefix), route);
-      };
-    });
+        const confirm: ConfirmLiteral = (index, literal) => {
+          const prefix = [...components.slice(0, index), literal].join('/');
+          return paths.contains(paths.reference(base, prefix), route);
+        };
+        let stored: string | undefined;
+        return (pattern: string): boolean => {
+          const candidate = pattern.includes('?')
+            ? (stored ??= paths.relativeToScope(scope, this.budget.storedSpelling(route, paths)))
+            : relative;
+          return this.budget.matches(
+            pattern,
+            candidate,
+            sensitive,
+            policy,
+            policies,
+            physical,
+            physical === undefined ? undefined : confirm,
+          );
+        };
+      });
   }
 }
 
@@ -135,7 +175,12 @@ export function matchesAgentRulePath(
  * Wildcards advance between stored Unicode scalars. A literal run may span a different number of
  * scalars in the pattern and the file (for example, SS and ß on a folding volume).
  */
-export function globExpression(pattern: string, sensitive = true, policy?: GlobNamePolicy): GlobMatcher {
+export function globExpression(
+  pattern: string,
+  sensitive = true,
+  policy?: GlobNamePolicy,
+  components?: readonly FilesystemNamePolicy[],
+): GlobMatcher {
   if (
     !pattern ||
     pattern.length > 512 ||
@@ -144,61 +189,92 @@ export function globExpression(pattern: string, sensitive = true, policy?: GlobN
     /[\\[\]{}()!]/u.test(pattern)
   )
     throw new Error(`Invalid rule glob: ${pattern || '(empty)'}`);
-  const key = (value: string) => {
-    const normalized = normalizeVolumeName(value, policy);
-    return sensitive ? normalized : normalized.toLowerCase();
+  const comparison = (value: string, owner?: GlobNamePolicy): string => {
+    const normalized = normalizeVolumeName(value, owner);
+    return (owner?.caseSensitive ?? sensitive) ? normalized : normalized.toLowerCase();
   };
-  if (!/[?*]/u.test(pattern)) {
-    const literal = key(pattern);
-    return {
-      test(path, budget) {
-        budget?.spend(path.length + 1);
-        return literal === key(path);
-      },
-    };
-  }
   const countsStoredCharacters = pattern.includes('?');
-  const tokenPattern = countsStoredCharacters ? pattern : key(pattern);
-  const tokens = tokenPattern.match(/\*\*\/|\*\*|[?*]|[^?*]+/gu)!.map(token => {
-    const literal = key(token);
-    return { token, literal, width: literal.normalize('NFD').length };
-  });
+  const raw = pattern.match(/\*\*\/|\*\*|[?*/]|[^?*/]+/gu)!;
+  const complete = raw.map(
+    (token, i) =>
+      !/[?*/]/u.test(token) && (i === 0 || raw[i - 1]!.endsWith('/')) && (i === raw.length - 1 || raw[i + 1] === '/'),
+  );
+  const compiled = new Map<GlobNamePolicy | undefined, { literal: string; width: number }[]>();
+  const literals = (owner?: GlobNamePolicy) => {
+    let result = compiled.get(owner);
+    if (!result) {
+      result = raw.map(token => {
+        const literal = comparison(token, owner);
+        return { literal, width: literal.normalize('NFD').length };
+      });
+      compiled.set(owner, result);
+    }
+    return result;
+  };
   return {
-    test(storedPath, budget) {
-      // Star-only patterns retain their ordinary volume-normalized matching. A question mark requires stored boundaries.
-      const path = countsStoredCharacters ? storedPath : key(storedPath);
-      budget?.spend(path.length + 1);
-      const characters = Array.from(path);
+    test(storedPath, budget, confirm) {
+      const parts = storedPath.split('/');
+      const confirmed = (i: number, expected: string) => parts[i] === expected || !confirm || confirm(i, expected);
+      if (!/[?*]/u.test(pattern)) {
+        budget?.spend(storedPath.length + 1);
+        const expected = pattern.split('/');
+        return (
+          parts.length === expected.length &&
+          parts.every((part, i) => {
+            const owner = components?.[i] ?? policy;
+            return comparison(expected[i]!, owner) === comparison(part, owner) && confirmed(i, expected[i]!);
+          })
+        );
+      }
+      const characters: string[] = [];
+      const owners: (GlobNamePolicy | undefined)[] = [];
+      const segment: number[] = [];
       const offsets = [0];
       const widths = [0];
       const boundaries = new Map([[0, 0]]);
-      // Canonical decomposition preserves total width across composition and reordering.
-      // Index by that width, then compare the complete candidate run under the actual volume policy.
-      for (const [index, character] of characters.entries()) {
-        offsets.push(offsets[index]! + character.length);
-        const width = widths[index]! + key(character).normalize('NFD').length;
-        widths.push(width);
-        boundaries.set(width, index + 1);
+      for (const [i, part] of parts.entries()) {
+        const owner = components?.[i] ?? policy;
+        const spelling = countsStoredCharacters ? part : comparison(part, owner);
+        for (const character of (i ? '/' : '') + spelling) {
+          characters.push(character);
+          owners.push(owner);
+          segment.push(i);
+          offsets.push(offsets.at(-1)! + character.length);
+          const width = widths.at(-1)! + comparison(character, owner).normalize('NFD').length;
+          widths.push(width);
+          boundaries.set(width, characters.length);
+        }
       }
-      const equalsRun = (start: number, end: number, literal: string) => {
+      const path = characters.join('');
+      budget?.spend(path.length + 1);
+      const runStart = (token: number, end: number) => {
+        const owner = owners[end - 1];
+        const { literal, width } = literals(owner)[token]!;
+        const start = boundaries.get(widths[end]! - width);
+        if (start === undefined) return -1;
         budget?.spend(offsets[end]! - offsets[start]!);
-        return key(path.slice(offsets[start], offsets[end])) === literal;
+        if (comparison(path.slice(offsets[start], offsets[end]), owner) !== literal) return -1;
+        if (
+          complete[token] &&
+          (start === 0 || characters[start - 1] === '/') &&
+          (end === characters.length || characters[end] === '/') &&
+          !confirmed(segment[end - 1]!, raw[token]!)
+        )
+          return -1;
+        return start;
       };
-      const first = tokens[0]!;
-      if (!/[?*]/u.test(first.token)) {
-        const end = boundaries.get(first.width);
-        if (end === undefined || !equalsRun(0, end, first.literal)) return false;
+      const first = raw[0];
+      if (!/[?*]/u.test(first)) {
+        const end = boundaries.get(literals(owners[0])[0]!.width);
+        if (end === undefined || runStart(0, end) !== 0) return false;
       }
-      const last = tokens.at(-1)!;
-      if (!/[?*]/u.test(last.token)) {
-        const start = boundaries.get(widths[characters.length]! - last.width);
-        if (start === undefined || !equalsRun(start, characters.length, last.literal)) return false;
-      }
-      budget?.spend(tokens.length * (characters.length + 1));
+      const last = raw.length - 1;
+      if (!/[?*]/u.test(raw[last]!) && runStart(last, characters.length) < 0) return false;
+      budget?.spend(raw.length * (characters.length + 1));
       let previous = new Uint8Array(characters.length + 1);
       let next = new Uint8Array(previous.length);
       previous[0] = 1;
-      for (const { token, literal, width } of tokens) {
+      for (const [t, token] of raw.entries()) {
         const star = token === '*' || token === '**';
         next[0] = star || token === '**/' ? previous[0]! : 0;
         let prefix = false;
@@ -210,8 +286,9 @@ export function globExpression(pattern: string, sensitive = true, policy?: GlobN
             next[index] = Number(previous[index] === 1 || (next[index - 1] === 1 && (token === '**' || char !== '/')));
           else if (token === '?') next[index] = Number(previous[index - 1] === 1 && char !== '/');
           else {
-            const start = boundaries.get(widths[index]! - width);
-            next[index] = Number(start !== undefined && previous[start] === 1 && equalsRun(start, index, literal));
+            const owner = owners[index - 1];
+            const start = boundaries.get(widths[index]! - literals(owner)[t]!.width);
+            next[index] = Number(start !== undefined && previous[start] === 1 && runStart(t, index) === start);
           }
         }
         [previous, next] = [next, previous];
