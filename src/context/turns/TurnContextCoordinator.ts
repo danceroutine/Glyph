@@ -1,5 +1,10 @@
+import { authorizeSources, enrollSources } from '#src/workspace/SourceDisclosure.js';
+import { TurnDisclosure } from './TurnDisclosure.ts';
 import type { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
-import { AgentInstructionActivationReason } from '#src/instructions/AgentInstructionSource.js';
+import {
+  AgentInstructionActivationReason,
+  AgentInstructionSourceStatus,
+} from '#src/instructions/AgentInstructionSource.js';
 import type {
   AgentInstructionContext,
   AgentInstructionTurnSnapshot,
@@ -17,6 +22,7 @@ export interface BeginTurnContextInput {
 export class TurnContextCoordinator {
   private readonly sessions = new Map<string, TurnContextSession>();
 
+  private readonly disclosures = new WeakMap<TurnContextSession, TurnDisclosure>();
   private readonly pending = new Set<string>();
 
   constructor(private readonly instructions: AgentInstructionCatalog) {}
@@ -32,11 +38,23 @@ export class TurnContextCoordinator {
       const session = new TurnContextSession({
         turnId: input.turnId,
         sources,
+        origins: await enrollSources(
+          sources.filter(source => source.status === AgentInstructionSourceStatus.ACTIVE && source.enabled !== false),
+          signal,
+        ),
         paths: this.instructions.paths,
         scopeIndex: this.instructions.scopeIndex?.(sources),
         attachmentPaths: input.attachmentPaths,
         manualRuleIds: input.manualRuleIds ?? [],
       });
+      const check = await authorizeSources(session.disclosurePins(), signal);
+      check();
+      this.disclosures.set(
+        session,
+        new TurnDisclosure(() => {
+          if (this.sessions.get(input.turnId) !== session) throw new Error('This turn has ended.');
+        }),
+      );
       this.sessions.set(input.turnId, session);
       return session;
     } finally {
@@ -45,23 +63,52 @@ export class TurnContextCoordinator {
   }
 
   /** Disclose newly applicable instructions after project paths enter context. */
-  disclosePaths(turnId: string, paths: readonly string[]): AgentInstructionContext | undefined {
-    return this.sessions.get(turnId)?.disclosePaths(paths);
+  disclosePaths(turnId: string, paths: readonly string[], signal?: AbortSignal) {
+    return this.disclose(turnId, session => session.disclosePaths(paths), signal);
   }
 
   /** Disclose rules selected by attachments introduced while steering a live turn. */
-  discloseAttachments(turnId: string, paths: readonly string[]): AgentInstructionContext | undefined {
-    return this.sessions.get(turnId)?.discloseAttachments(paths);
+  discloseAttachments(turnId: string, paths: readonly string[], signal?: AbortSignal) {
+    return this.disclose(turnId, session => session.discloseAttachments(paths), signal);
   }
 
   /** Activate explicit manual rule selections introduced while steering. */
-  activateManualRules(turnId: string, ruleIds: readonly string[]): AgentInstructionContext | undefined {
-    return this.sessions.get(turnId)?.activateManualRules(ruleIds);
+  activateManualRules(turnId: string, ruleIds: readonly string[], signal?: AbortSignal) {
+    return this.disclose(turnId, session => session.activateManualRules(ruleIds), signal);
   }
 
   /** Activate a model-selected rule by stable identity. */
-  activateRule(turnId: string, ruleId: string): AgentInstructionContext | undefined {
-    return this.sessions.get(turnId)?.activateRule(ruleId, AgentInstructionActivationReason.MODEL);
+  activateRule(turnId: string, ruleId: string, signal?: AbortSignal) {
+    return this.disclose(
+      turnId,
+      session => session.activateRule(ruleId, AgentInstructionActivationReason.MODEL),
+      signal,
+    );
+  }
+
+  /** Authorize all source material replayed by the provider, after asynchronous request preparation. */
+  authorizeDisclosure(turnId: string, signal?: AbortSignal): Promise<() => void> {
+    const session = this.sessions.get(turnId);
+    if (!session) throw new Error('This turn has ended.');
+    return authorizeSources(session.disclosurePins(), signal).then(check => () => {
+      if (this.sessions.get(turnId) !== session) throw new Error('This turn has ended.');
+      check();
+    });
+  }
+
+  private async disclose(
+    turnId: string,
+    operation: (session: TurnContextSession) => AgentInstructionContext | undefined,
+    signal?: AbortSignal,
+  ): Promise<AgentInstructionContext | undefined> {
+    const session = this.sessions.get(turnId);
+    if (!session) return undefined;
+    return this.disclosures.get(session)!.publish(
+      () => session.checkpointSteering(),
+      () => operation(session),
+      context => (context ? session.disclosurePins(context) : []),
+      signal,
+    );
   }
 
   /** Snapshot a live turn without removing it, for durable checkpoints and inspection. */

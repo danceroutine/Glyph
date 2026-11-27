@@ -1,3 +1,5 @@
+import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { sourceReads, type SourceRead } from '#src/workspace/SourceDisclosure.js';
 import { workspaceReadFailureBytes } from '#src/workspace/WorkspaceReadFailure.js';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import { createHash } from 'node:crypto';
@@ -22,6 +24,7 @@ export interface AgentRuleInstructionProviderOptions {
   readonly kind: Exclude<AgentInstructionSourceKind, AgentInstructionSourceKind.AGENTS_MD>;
   /** Directory below the store root that owns `rules/`. Use `.` for a store rooted at `~/.glyph`. */
   readonly directory: '.glyph' | '.cursor' | '.';
+  readonly authority?: PinnedSourceAuthority;
   readonly maxFiles?: number;
   readonly maxBytes?: number;
   readonly paths?: InstructionPaths;
@@ -113,7 +116,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
         throw new Error('Model-selected rules require a description.');
       if (activation === AgentInstructionActivationMode.FILE_PATTERN && parsed.globs.length === 0)
         throw new Error('Matching-files rules require at least one glob.');
-      const { content, revision, references } = await this.expandRule(
+      const { content, revision, references, reads } = await this.expandRule(
         parsed,
         normalized,
         scope,
@@ -130,6 +133,14 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
         path: `${this.options.displayPrefix ?? ''}${normalized}`,
         scope,
         status: AgentInstructionSourceStatus.ACTIVE,
+        ...(this.options.authority
+          ? {
+              [sourceReads]: {
+                authority: this.options.authority,
+                files: [{ uri: uri!, identity: snapshot.identity }, ...reads],
+              },
+            }
+          : {}),
         content,
         revision,
         sourceRevision,
@@ -163,6 +174,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
   ) {
     const contents: string[] = [];
     const references: string[] = [];
+    const reads: SourceRead[] = [];
     const revisions = [sourceRevision];
     const cache = new Map<string, { parsed: AgentRuleFile; revision: string }>();
     // Indexed catalog references open existing entries. Their stored spelling identifies repeat reads
@@ -192,6 +204,8 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
         if (!entry) {
           const reference = await this.read(target, budget, dependencies);
           signal?.throwIfAborted();
+          if (this.options.authority)
+            reads.push({ uri: this.options.uriForPath!(target), identity: reference.identity });
           entry = { parsed: parseAgentRuleFile(reference.text), revision: reference.revision };
           cache.set(key, entry);
         }
@@ -210,6 +224,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     }
     return {
       content: contents.join('\n\n'),
+      reads,
       references,
       revision: createHash('sha256').update(revisions.join('\0')).digest('hex'),
     };

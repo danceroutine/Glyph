@@ -129,6 +129,9 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       signal,
       turnId,
       round,
+      ...(this.turnContexts?.authorizeDisclosure
+        ? { authorizeDisclosure: () => this.turnContexts!.authorizeDisclosure(turnId, signal) }
+        : {}),
       mode: AgentMode.resolve(mode),
       ...(boundaryInstructions ? { instructionContext: boundaryInstructions } : {}),
       onText: options.onText,
@@ -179,7 +182,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       for (;;) {
         signal.throwIfAborted();
         for (const steering of options.takeSteering?.(false) ?? []) {
-          boundaryInstructions = this.steeringInstructions(turnId, steering);
+          boundaryInstructions = await this.steeringInstructions(turnId, steering, signal);
           turn = await this.adapter.steerTurn(turn, modelInput(steering), context(round));
           this.state = this.persistentState(this.adapter.snapshot(turn));
           hasToolCheckpoint = true;
@@ -194,7 +197,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           const steering = options.takeSteering?.(true) ?? [];
           if (steering.length > 0) {
             for (const instruction of steering) {
-              boundaryInstructions = this.steeringInstructions(turnId, instruction);
+              boundaryInstructions = await this.steeringInstructions(turnId, instruction, signal);
               turn = await this.adapter.steerTurn(turn, modelInput(instruction), context(round));
             }
             this.state = this.persistentState(this.adapter.snapshot(turn));
@@ -281,13 +284,18 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     }
   }
 
-  private steeringInstructions(turnId: string, request: ChatRequest): AgentInstructionContext | undefined {
+  private async steeringInstructions(
+    turnId: string,
+    request: ChatRequest,
+    signal: AbortSignal,
+  ): Promise<AgentInstructionContext | undefined> {
     const contexts = [
-      this.turnContexts?.discloseAttachments(
+      await this.turnContexts?.discloseAttachments(
         turnId,
         request.attachments.map(attachment => attachment.path),
+        signal,
       ),
-      this.turnContexts?.activateManualRules(turnId, request.manualRuleIds ?? []),
+      await this.turnContexts?.activateManualRules(turnId, request.manualRuleIds ?? [], signal),
     ].filter((value): value is AgentInstructionContext => value !== undefined);
     if (contexts.length === 0) return undefined;
     return {

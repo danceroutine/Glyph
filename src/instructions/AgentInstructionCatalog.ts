@@ -36,8 +36,10 @@ export class AgentInstructionCatalog {
     signal?.throwIfAborted();
     if (generation < this.published) return this.current.sources;
     this.published = generation;
-    if (JSON.stringify(discovered.sources) !== JSON.stringify(this.current.sources)) {
-      this.current = discovered;
+    const changed = JSON.stringify(discovered.sources) !== JSON.stringify(this.current.sources);
+    // Equal bytes can belong to a replacement route. Keep the current read receipts even when the UI is unchanged.
+    this.current = discovered;
+    if (changed) {
       for (const listener of this.listeners) listener(this.current.sources);
     }
     return this.current.sources;
