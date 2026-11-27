@@ -33,9 +33,10 @@ const importedDraft = skillPackageDraftSchema.extend({
 });
 export type SkillPackageDraftInput = z.input<typeof importedDraft>;
 
+/** Revalidates a local import's physical read authority at preview and publication. Each successful check covers that
+ * operation. The manager repeats it immediately before disclosing a preview or publishing reviewed bytes. */
 export interface SkillSourceAccess {
-  assertCurrent(): void;
-  readonly acquire: ((signal?: AbortSignal) => Promise<() => void>) | undefined;
+  assertCurrent(): Promise<void>;
 }
 
 /** Complete immutable candidate package. Its revision binds previews and approvals to every reviewed byte. */

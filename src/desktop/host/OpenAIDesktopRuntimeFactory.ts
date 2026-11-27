@@ -1,3 +1,5 @@
+import { StartupUserProfile } from '#src/workspace/policy/StartupUserProfile.js';
+import { readSourcePathAliases, type SourcePathAliases } from '#src/workspace/SourcePathAliases.js';
 import { UserSkillDirectory } from '#src/skills/UserSkillDirectory.js';
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { projectIntersection, WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
@@ -39,7 +41,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import { mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join, relative, isAbsolute, resolve, sep } from 'node:path';
+import { basename, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
@@ -97,27 +99,52 @@ import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinato
 import { RuleToolRuntime } from '#src/instructions/rules/RuleToolRuntime.js';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { UserAgentRuleManager } from '#src/instructions/rules/UserAgentRuleManager.js';
-import { WorkspaceProtectedPathRegistry } from '#src/workspace/policy/WorkspaceProtectedPathRegistry.js';
 import { UserRuleDirectory } from '#src/instructions/rules/UserRuleDirectory.js';
 import { listUserRuleFiles } from '#src/instructions/rules/listUserRuleFiles.js';
+
+const artifactRoot = resolve(import.meta.dirname, '../../..');
+function nativeExecutable(name: string): string {
+  return join(
+    artifactRoot,
+    'native',
+    `${process.platform}-${process.arch}`,
+    name + (process.platform === 'win32' ? '.exe' : ''),
+  );
+}
 
 /** Composition root for shared credentials and workspace-scoped production services. */
 export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntimeFactory {
   private readonly configuration = new EnvironmentConfigurationProvider();
   private readonly accounts = new OpenAIAccountService(new FileOpenAIAccountStore(this.configuration.stateDirectory));
   private initialized: Promise<void> | undefined;
-  /** Runtime services are shared only by workspaces attached to the same physical profile. */
-  private readonly privatePaths = new WorkspaceProtectedPathRegistry();
-  private readonly managedSkillDirectories = new WorkspaceProtectedPathRegistry();
-  private readonly skillStates = new Map<string, SkillStateStore>();
-  private readonly userRuleIndexes = new Map<string, RustWorkspacePathIndex>();
-  private readonly userSkillIndexes = new Map<string, RustWorkspacePathIndex>();
+  /** All windows and sandbox launches use the same startup selection, including prospective profile paths. */
+  private readonly profile: StartupUserProfile;
+  /** Resolve visible physical routes afresh for each host editor decision; retained routes belong to its transaction. */
+  readonly sourcePathAliases: SourcePathAliases = (path, descendants) =>
+    readSourcePathAliases(nativeExecutable('glyph-context-index'), path, descendants);
+  private readonly privatePaths: readonly string[];
+  private readonly managedSkillDirectories: readonly string[];
+  private skillState?: SkillStateStore;
+  private userRuleIndex?: RustWorkspacePathIndex;
+  private userSkillIndex?: RustWorkspacePathIndex;
 
   constructor(
     private readonly editors: EditorRpcRouter,
     private readonly transport?: typeof fetch,
-    private readonly userDirectory = join(homedir(), '.glyph'),
-  ) {}
+    userDirectory = join(homedir(), '.glyph'),
+  ) {
+    this.profile = new StartupUserProfile(userDirectory);
+    this.privatePaths = [
+      ...new Set([
+        ...[this.configuration.stateDirectory, this.configuration.traceFile, artifactRoot].flatMap(path => [
+          path,
+          resolveAvailableIdentity(path),
+        ]),
+        join(this.profile.path, 'skill-state.json'),
+      ]),
+    ];
+    this.managedSkillDirectories = [join(this.profile.path, 'skills')];
+  }
 
   async create(input: Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0]): Promise<ProviderDesktopRuntime> {
     await (this.initialized ??= this.accounts.initialize().catch(error => {
@@ -150,13 +177,10 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       authority,
       roots,
     };
-    const artifactRoot = resolve(import.meta.dirname, '../../..');
-    const native = join(artifactRoot, 'native', `${process.platform}-${process.arch}`);
-    const suffix = process.platform === 'win32' ? '.exe' : '';
-    const indexExecutable = join(native, `glyph-context-index${suffix}`);
+    const indexExecutable = nativeExecutable('glyph-context-index');
     const filesystemMetadata = new NativeFilesystemMetadata(indexExecutable);
-    const sandboxExecutable = join(native, `glyph-shell-sandbox${suffix}`);
-    const workspaceMutationsExecutable = join(native, `glyph-workspace-mutations${suffix}`);
+    const sandboxExecutable = nativeExecutable('glyph-shell-sandbox');
+    const workspaceMutationsExecutable = nativeExecutable('glyph-workspace-mutations');
     const openMutations = (physicalRoot: string) =>
       NativeWorkspaceMutations.open(workspaceMutationsExecutable, physicalRoot);
     assertShellRuntimePathIsolation(
@@ -164,18 +188,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       configuration.stateDirectory,
       configuration.traceFile,
     );
-    const canonicalUserDirectory = resolveAvailableIdentity(this.userDirectory);
-    this.privatePaths.admit(
-      [
-        configuration.stateDirectory,
-        configuration.traceFile,
-        artifactRoot,
-        join(this.userDirectory, 'skill-state.json'),
-        join(canonicalUserDirectory, 'skill-state.json'),
-      ].flatMap(path => [path, resolveAvailableIdentity(path)]),
-    );
-    this.managedSkillDirectories.admit([join(this.userDirectory, 'skills'), join(canonicalUserDirectory, 'skills')]);
-    const policy = new WorkspaceAccessPolicy({}, () => this.privatePaths.current);
+    const canonicalUserDirectory = this.profile.path;
+    const policy = new WorkspaceAccessPolicy({}, this.privatePaths);
     const logger = new FileLogger(configuration.traceFile);
     const namePolicies = await Promise.all(
       roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemNamePolicy(indexExecutable, workspaceRoot.path)),
@@ -192,7 +206,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         accessPolicy: policy,
         excludedPaths,
         physicalAccess: filesystemMetadata,
-        managedDirectories: () => this.managedSkillDirectories.current,
+        managedDirectories: this.managedSkillDirectories,
       });
       const index: RustWorkspacePathIndex = new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
@@ -216,7 +230,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           ),
       });
       const workspace = new EditorWorkspaceTextStore(workspaceRoot.path, disk.caseSensitive, {
-        canonicalPath: (path, mutation) => disk.canonicalPath(path, mutation),
+        canonicalPath: (path, mutation, onManagedPathAdmitted) =>
+          disk.canonicalPath(path, mutation, onManagedPathAdmitted),
         listPaths: (limit, glob = '**/*', targetDirectory) =>
           index.glob(glob, {
             limit,
@@ -348,12 +363,20 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         return { ...listed, files: routes.uniqueFiles(listed.files) };
       };
       const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
+      this.profile.verify();
       const userRuleRoot = canonicalUserDirectory;
+      const profileMetadata = {
+        inspect: (...args: Parameters<NativeFilesystemMetadata['inspect']>) =>
+          this.profile.access(() => filesystemMetadata.inspect(...args)),
+        assertWorkspacePath: (...args: Parameters<NativeFilesystemMetadata['assertWorkspacePath']>) =>
+          this.profile.access(() => filesystemMetadata.assertWorkspacePath(...args)),
+      };
       const userNamePolicy = await RustWorkspacePathIndex.filesystemNamePolicy(
         indexExecutable,
         filesystemPolicyDirectory(userRuleRoot),
       ).catch(() => undefined);
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
+        physicalAccess: profileMetadata,
         caseSensitive: userNamePolicy?.caseSensitive ?? workspaceCaseSensitivity(userRuleRoot),
       });
       const mutationRoots = new Map(
@@ -371,31 +394,38 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         foldsUnicode: true,
       };
       // Agent-facing sources cannot acquire the host's preference and credential authority.
-      const userInstructionPolicy = new WorkspaceAccessPolicy({}, () => this.privatePaths.current);
+      const userInstructionPolicy = new WorkspaceAccessPolicy({}, () => {
+        this.profile.verify();
+        return this.privatePaths;
+      });
       const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
         accessPolicy: userInstructionPolicy,
         caseSensitive: userRuleStore.caseSensitive,
-        physicalAccess: filesystemMetadata,
+        physicalAccess: profileMetadata,
       });
-      let userRuleIndex = this.userRuleIndexes.get(userRuleRoot);
-      if (!userRuleIndex) {
-        userRuleIndex = new RustWorkspacePathIndex({
-          binaryPath: indexExecutable,
-          root: join(userRuleRoot, 'rules'),
-          caseSensitive: userRuleStore.caseSensitive,
-          accessPolicy: userInstructionPolicy,
-          // User-owned rules retain their existing behavior regardless of home-directory Git ignores.
-          respectGitIgnore: false,
-        });
-        this.userRuleIndexes.set(userRuleRoot, userRuleIndex);
-      }
+      const userRuleIndex = (this.userRuleIndex ??= new RustWorkspacePathIndex({
+        binaryPath: indexExecutable,
+        root: join(userRuleRoot, 'rules'),
+        caseSensitive: userRuleStore.caseSensitive,
+        accessPolicy: userInstructionPolicy,
+        // User-owned rules retain their existing behavior regardless of home-directory Git ignores.
+        respectGitIgnore: false,
+      }));
       const paths = new InstructionPaths(
         parts.length === 1 ? workspace.caseSensitive : new Map(parts.map(part => [part.name, part.disk.caseSensitive])),
         routes,
       );
-      const userRuleDirectory = new UserRuleDirectory(userRuleRoot, userRuleStore.caseSensitive, roots, paths);
+      const userRuleDirectory = new UserRuleDirectory(
+        userRuleRoot,
+        userRuleStore.caseSensitive,
+        roots,
+        paths,
+        this.sourcePathAliases,
+      );
       const listProjectRules = async (maxFiles: number, pattern: string) => {
         const listed = await listProjectInstructions(maxFiles, pattern);
+        this.profile.verify();
+        userRuleDirectory.refresh();
         return { ...listed, files: listed.files.filter(path => !userRuleDirectory.ownsProjectRule(path)) };
       };
       instructionCatalog = new AgentInstructionCatalog(
@@ -411,10 +441,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             },
             async maxFiles => {
               // The index root must obey the store's no-symlink rule too, not just its children.
-              await mkdir(userRuleRoot, { recursive: true, mode: 0o700 });
+              this.profile.ensureDirectory();
               await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
               await userInstructionStore.canonicalPath('rules');
-              return listUserRuleFiles(userRuleIndex, maxFiles);
+              userRuleDirectory.refresh();
+              return this.profile.access(() => listUserRuleFiles(userRuleIndex, maxFiles));
             },
           ),
           new AgentsMdInstructionProvider(catalogWorkspace, { paths, uriForPath: projectUri }, listProjectInstructions),
@@ -436,19 +467,19 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         ],
         paths,
       );
-      const userSkillDirectory = new UserSkillDirectory(userRuleRoot, userRuleStore.caseSensitive);
+      const userSkillDirectory = new UserSkillDirectory(
+        userRuleRoot,
+        userRuleStore.caseSensitive,
+        this.sourcePathAliases,
+      );
       const skillRoot = userSkillDirectory.path;
-      let userSkillIndex = this.userSkillIndexes.get(userRuleRoot);
-      if (!userSkillIndex) {
-        userSkillIndex = new RustWorkspacePathIndex({
-          binaryPath: indexExecutable,
-          root: skillRoot,
-          accessPolicy: userInstructionPolicy,
-          caseSensitive: userRuleStore.caseSensitive,
-          respectGitIgnore: false,
-        });
-        this.userSkillIndexes.set(userRuleRoot, userSkillIndex);
-      }
+      const userSkillIndex = (this.userSkillIndex ??= new RustWorkspacePathIndex({
+        binaryPath: indexExecutable,
+        root: skillRoot,
+        accessPolicy: userInstructionPolicy,
+        caseSensitive: userRuleStore.caseSensitive,
+        respectGitIgnore: false,
+      }));
       const userSkills = new FileSkillDiscoveryProvider({
         origin: { id: 'user:glyph', label: 'User skill', scope: 'user', compatibility: 'glyph' },
         directory: 'skills',
@@ -460,10 +491,10 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         binaryStore: userInstructionStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),
         listPackages: async signal => {
-          await mkdir(userRuleRoot, { recursive: true, mode: 0o700 });
+          this.profile.ensureDirectory();
           await mkdir(skillRoot, { recursive: true });
           await userInstructionStore.canonicalPath('skills');
-          const result = await userSkillIndex.listSkillPackages(null, signal);
+          const result = await this.profile.access(() => userSkillIndex.listSkillPackages(null, signal));
           return {
             truncated: result.truncated,
             packages: result.packages.map(({ directory, manifest }) => ({
@@ -476,22 +507,19 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           await userSkillIndex.refresh();
         },
       });
-      let skillState = this.skillStates.get(userRuleRoot);
-      if (!skillState) {
-        skillState = new SkillStateStore(userRuleStore, filesystemMetadata);
-        this.skillStates.set(userRuleRoot, skillState);
-      }
+      const skillState = (this.skillState ??= new SkillStateStore(userRuleStore, profileMetadata));
       let userMutations = mutationRoots.get(userRuleRoot);
       let openingUserMutations: Promise<NativeWorkspaceMutations> | undefined;
       const ensureSkillsReady = async () => {
+        this.profile.ensureDirectory();
         if (!userMutations) {
-          await mkdir(userRuleRoot, { recursive: true, mode: 0o700 });
           userMutations = await (openingUserMutations ??= openMutations(userRuleRoot).catch(error => {
             openingUserMutations = undefined;
             throw error;
           }));
         }
         await skillState.initialize();
+        userSkillDirectory.refresh();
       };
       const skillIdentities = new Map<string, ProjectSkillIdentity>();
       skills = new SkillCatalog(
@@ -502,7 +530,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               const identity = new ProjectSkillIdentity(part.disk.root, location);
               skillIdentities.set(identity.originId, identity);
               return new FileSkillDiscoveryProvider({
-                includeDirectory: directory => !userSkillDirectory.ownsStore(dirname(join(part.disk.root, directory))),
+                includeDirectory: directory => !userSkillDirectory.ownsPackage(join(part.disk.root, directory)),
                 scopePathKey: paths.key.bind(paths),
                 packageId: directory => identity.forDirectory(directory),
                 matchesLegacyId: (directory, previousId, budget) =>
@@ -555,7 +583,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             get mutations() {
               return userMutations!;
             },
-            assertClean: path =>
+            sourcePathAliases: this.sourcePathAliases,
+            assertClean: (path, retainedAliases) =>
               assertUserWorkingCopiesClean(
                 this.editors,
                 input.identity,
@@ -563,7 +592,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 basename(path),
                 userWorkingCopyPolicy,
                 path,
-                this.userDirectory,
+                userRuleRoot,
+                this.sourcePathAliases,
+                retainedAliases,
               ),
             store: userRuleStore,
             workspace: userRuleStore,
@@ -591,17 +622,29 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               updateOnly: userSkillDirectory.ownsStore(join(part.disk.root, '.glyph/skills')),
               ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
               mutations: mutationRoots.get(part.disk.root)!,
-              assertClean: (path: string) => {
+              admitsPackage: (path: string) => {
+                userSkillDirectory.refresh();
+                return !userSkillDirectory.ownsPackage(path);
+              },
+              sourcePathAliases: this.sourcePathAliases,
+              assertClean: (path: string, retainedAliases?: readonly string[]) => {
                 const logicalRoot = input.roots.find(
                   candidate => getGlyphWorkspaceRootId(candidate, input.roots) === part.name,
                 )!;
                 const logicalDirectory = pathToFileURL(
                   join(fileURLToPath(logicalRoot.uri), relative(part.disk.root, path)),
                 ).toString();
-                const intersections = input.roots.flatMap((attached, rootIndex) => {
-                  const uri = projectIntersection(attached, roots[rootIndex]!.path, path);
-                  return uri && uri !== logicalDirectory ? [uri] : [];
-                });
+                const intersections = () => {
+                  const visible = new Set([...this.sourcePathAliases(path, true), ...(retainedAliases ?? [])]);
+                  return input.roots.flatMap((attached, index) =>
+                    [...visible].flatMap(alias => {
+                      const uri = projectIntersection(attached, roots[index]!.path, alias);
+                      return uri && uri !== logicalDirectory
+                        ? [{ directoryUri: uri, physicalPackageUri: pathToFileURL(alias).href }]
+                        : [];
+                    }),
+                  );
+                };
                 return assertSkillPackageClean(
                   this.editors,
                   input.identity,
@@ -610,6 +653,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                   logicalDirectory,
                   intersections,
                   part.namePolicy,
+                  retainedAliases,
                 );
               },
               store: part.disk,
@@ -637,7 +681,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         userRuleStore,
         instructionCatalog,
         userRuleIndex,
-        filesystemMetadata,
+        profileMetadata,
         filename =>
           assertUserWorkingCopiesClean(
             this.editors,
@@ -646,7 +690,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             filename,
             userWorkingCopyPolicy,
             join(userRuleRoot, 'rules', filename),
-            this.userDirectory,
+            userRuleRoot,
+            this.sourcePathAliases,
           ),
       );
     }
@@ -679,15 +724,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         protectedPaths: [artifactRoot],
         privatePaths: () => [
           configuration.traceFile,
-          ...this.userRuleIndexes.keys(),
-          ...(input.trusted
-            ? [
-                canonicalUserDirectory,
-                ...[this.userDirectory, ...parts.map(part => join(part.disk.root, '.skill-staging'))].filter(path =>
-                  existsSync(path),
-                ),
-              ]
-            : []),
+          canonicalUserDirectory,
+          ...parts.map(part => join(part.disk.root, '.skill-staging')).filter(path => existsSync(path)),
         ],
         accessPolicy: policy,
       }),
@@ -896,6 +934,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               roots.map(workspaceRoot => workspaceRoot.path),
               filesystemMetadata,
               input.hostWorkspaceRoots,
+              policy,
             ),
           }
         : {}),
@@ -911,11 +950,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     await this.initialized;
     try {
       const results = await Promise.allSettled(
-        [...this.userRuleIndexes.values(), ...this.userSkillIndexes.values()].map(index => index.dispose()),
+        [this.userRuleIndex, this.userSkillIndex].map(index => index?.dispose()),
       );
       const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
       if (failed) throw failed.reason;
     } finally {
+      this.profile.dispose();
       await this.accounts.dispose();
     }
   }

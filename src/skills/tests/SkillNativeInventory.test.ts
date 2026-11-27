@@ -78,9 +78,7 @@ describe('Skill package inventory boundaries', () => {
     await writeFile(join(root, 'SKILL.md'), '---\nname: example\ndescription: Fixture\n---\nExample');
     let paths: string[] = [];
     const policy = new WorkspaceAccessPolicy({}, () => paths);
-    const release = vi.fn();
-    const acquire = vi.fn(async () => release);
-    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, [], policy, acquire);
+    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, [], policy);
     const listing = { files: ['SKILL.md'], truncated: false };
     native.glob.mockImplementationOnce(async () => {
       paths = [join(root, 'future-private')];
@@ -94,8 +92,6 @@ describe('Skill package inventory boundaries', () => {
     paths = [join(root, 'SKILL.md')];
     const signal = new AbortController().signal;
     await expect(manager.apply(preview.id, signal)).rejects.toThrow('Host-private locations changed');
-    expect(acquire).toHaveBeenCalledWith(root, signal);
-    expect(release).toHaveBeenCalledTimes(1);
     expect(await store.exists('skills/example')).toBe(false);
 
     paths = [];
@@ -107,14 +103,47 @@ describe('Skill package inventory boundaries', () => {
       paths = [join(root, 'SKILL.md')];
     });
     await expect(manager.apply(pending.id)).rejects.toThrow('Host-private locations changed');
-    expect(release).toHaveBeenCalledTimes(2);
     expect(await store.exists('skills/example')).toBe(false);
 
     paths = [];
     const current = await reader.read({ kind: 'local', path: root });
     const allowed = await manager.prepare(location.id, current);
     await expect(manager.apply(allowed.id)).resolves.toMatchObject({ applied: true });
-    expect(release).toHaveBeenCalledTimes(3);
+  });
+
+  it('rechecks physical source intersections at publication even when the configured private paths stay fixed', async () => {
+    const temporary = await mkdtemp(join(tmpdir(), 'glyph-import-intersection-'));
+    onTestFinished(() => rm(temporary, { recursive: true, force: true }));
+    const root = join(temporary, 'example');
+    await mkdir(root);
+    await writeFile(join(root, 'SKILL.md'), '---\nname: example\ndescription: Fixture\n---\nExample');
+    const privatePaths = [join(temporary, 'credentials')];
+    let intersects = false;
+    const metadata = {
+      ...testFilesystemMetadata,
+      assertHostPaths: vi.fn(async () => {
+        if (intersects) throw new Error('The source intersects a host-private object.');
+      }),
+    };
+    native.glob.mockResolvedValue({ files: ['SKILL.md'], truncated: false });
+    const reader = new SkillPackageSourceReader(
+      'native',
+      [],
+      metadata,
+      [],
+      new WorkspaceAccessPolicy({}, privatePaths),
+    );
+    const draft = await reader.read({ kind: 'local', path: root });
+    const { manager, location, store } = await aSkillLifecycle();
+    const preview = await manager.prepare(location.id, draft);
+    const stage = location.mutations.stagePackage.bind(location.mutations);
+    vi.spyOn(location.mutations, 'stagePackage').mockImplementationOnce(async (...args) => {
+      await stage(...args);
+      intersects = true;
+    });
+    await expect(manager.apply(preview.id)).rejects.toThrow('intersects a host-private object');
+    expect(metadata.assertHostPaths).toHaveBeenLastCalledWith([root], privatePaths);
+    expect(await store.exists('skills/example')).toBe(false);
   });
 
   it('rejects a truncated local index before requesting file bodies', async () => {

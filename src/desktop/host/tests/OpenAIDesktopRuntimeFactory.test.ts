@@ -1501,15 +1501,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
 
     it('uses the physical profile for discovery and resolves a formerly shared project rule only through its user owner', async () => {
       const profile = join(isolatedUserDirectory, 'current');
-      const fixture = await factoryFixture({ userDirectory: profile });
-      useFilesystemIndex();
-      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
-      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
-        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected metadata query');
-        return { operationId: request.operationId, ok: true };
-      });
-      const first = await fixture.folder('first');
-      const second = await fixture.folder('second');
+      const first = join(isolatedUserDirectory, 'first');
+      const second = join(isolatedUserDirectory, 'second');
       for (const root of [first, second]) {
         const skill = basename(root);
         await mkdir(join(root, '.glyph/skills', skill), { recursive: true });
@@ -1526,6 +1519,13 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         await writeFile(join(root, 'context.md'), 'Project context');
       }
       await symlink(join(first, '.glyph'), profile);
+      const fixture = await factoryFixture({ userDirectory: profile });
+      useFilesystemIndex();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected metadata query');
+        return { operationId: request.operationId, ok: true };
+      });
       await fixture.create([first], undefined, false);
       const old = 'glyph_project_rule:.glyph/rules/shared.mdc';
       for (const root of [first, second]) {
@@ -1536,36 +1536,37 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         }
         const runtime = await fixture.create([root]);
         const snapshot = await runtime.snapshot();
-        expect(snapshot.skills!.map(skill => skill.name)).toEqual([basename(root)]);
-        expect(snapshot.instructionWatchRoots).toContain(pathToFileURL(join(root, '.glyph/skills')).href);
+        expect(snapshot.skills!.map(skill => skill.name).toSorted()).toEqual(
+          root === first ? ['first'] : ['first', 'second'],
+        );
+        expect(snapshot.instructionWatchRoots).toContain(pathToFileURL(join(first, '.glyph/skills')).href);
         const sources = snapshot.instructionSources!;
-        const user = sources.find(source => source.path.endsWith('shared.mdc'))!;
+        const user = sources.find(source => source.kind === 'glyph_user_rule')!;
         if (root === second) {
           expect(captured.sandboxOptions).toHaveLength(3);
           for (const launcher of captured.sandboxOptions) {
             const masks = launcher.privatePaths;
-            expect(typeof masks === 'function' && masks()).toEqual(
-              expect.arrayContaining([join(first, '.glyph'), join(second, '.glyph')]),
-            );
+            expect(typeof masks === 'function' && masks()).toContain(join(first, '.glyph'));
+            expect(typeof masks === 'function' && masks()).not.toContain(join(second, '.glyph'));
           }
           await runtime.handle({
             type: Command.SET_SKILL_ENABLED,
             skillId: snapshot.skills![0]!.id,
             enabled: false,
           });
-          expect(await readFile(join(root, '.glyph/skill-state.json'), 'utf8')).toContain(snapshot.skills![0]!.id);
-          await expect(readFile(join(first, '.glyph/skill-state.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+          expect(await readFile(join(first, '.glyph/skill-state.json'), 'utf8')).toContain(snapshot.skills![0]!.id);
+          await expect(readFile(join(second, '.glyph/skill-state.json'))).rejects.toMatchObject({ code: 'ENOENT' });
         }
-        expect(sources).toHaveLength(root === first ? 1 : 2);
+        expect(sources).toHaveLength(root === first ? 1 : 3);
         expect(user.kind).toBe('glyph_user_rule');
         expect(user.legacyIds).toBeUndefined();
-        expect(runtime.resolveRuleReference(old)).toBe(user.id);
+        if (root === first) expect(runtime.resolveRuleReference(old)).toBe(user.id);
         const turn = await captured.providerFactories
           .at(-1)![4]!
-          .beginTurn({ turnId: 'manual', attachmentPaths: [], manualRuleIds: [old] });
+          .beginTurn({ turnId: 'manual', attachmentPaths: [], manualRuleIds: [root === first ? old : user.id] });
         const bodies = turn.initialEnvelope().sources.map(source => source.content);
         expect(bodies).toHaveLength(1);
-        expect(bodies[0]).toContain(basename(root) + ' profile context');
+        expect(bodies[0]).toContain('first profile context');
         expect(bodies[0]).not.toContain('Project context');
       }
     });
@@ -2326,7 +2327,7 @@ it('keeps an admitted physical profile private while its files are temporarily a
   expect(typeof paths === 'function' && paths()).toContain(fixture.userDirectory);
 });
 
-it('updates existing workspace boundaries when a shared profile alias is retargeted during an editor read', async () => {
+it('keeps the startup boundaries across a profile alias change during an editor read', async () => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'glyph-live-profile-boundary-')));
   onTestFinished(() => rm(base, { recursive: true, force: true }));
   const oldProfile = join(base, 'old');
@@ -2355,13 +2356,13 @@ it('updates existing workspace boundaries when a shared profile alias is retarge
     await rm(alias);
     await symlink(newProfile, alias);
     await fixture.create([await fixture.folder('peer')]);
-    return editorResponse(wire, request.path, 'private preferences');
+    return editorResponse(wire, request.path, 'ordinary fixture');
   });
-  await expect(client.request(request)).rejects.toThrow();
+  await expect(client.request(request)).resolves.toMatchObject({ ok: true });
   const projected = policy.exclusionsFor(base, true).excludedPaths;
   expect(projected).toContain('old/skill-state.json');
-  expect(projected).toContain('new/skill-state.json');
-  await expect(client.request(request)).rejects.toThrow();
+  expect(projected).not.toContain('new/skill-state.json');
+  await expect(client.request({ ...request, path: 'old/skill-state.json' })).rejects.toThrow();
 });
 
 it('creates a new profile with owner-only access even under a group-writable process umask', async () => {

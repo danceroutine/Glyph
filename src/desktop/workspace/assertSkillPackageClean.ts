@@ -6,14 +6,20 @@ import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/G
 import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { EditorRpcRouter } from './EditorRpcRouter.ts';
 
-/** Checks unsaved editor state for a host-authorized physical package destination. No buffer contents leave the editor. */
+type OwnerIntersections = readonly (string | { directoryUri: string; physicalPackageUri: string })[];
+
+/**
+ * Verifies one lifecycle decision against dirty editor buffers across physically intersecting workspace routes.
+ * The host supplies the destination and any pre-swap aliases. Live owner routes and peer membership are checked again
+ * after editor replies. Publication must repeat this check when it reaches another guarded mutation boundary.
+ */
 export async function assertSkillPackageClean(
   editors: Pick<EditorRpcRouter, 'request' | 'trustedSkillEditors'>,
   identity: GlyphConnectionIdentity,
   scope: 'project',
   absolutePackageDirectory: string,
   logicalProjectDirectoryUri?: string,
-  ownerIntersections: readonly (string | { directoryUri: string; physicalPackageUri: string })[] = [],
+  ownerIntersections: OwnerIntersections | (() => OwnerIntersections) = [],
   namePolicy?: FilesystemNamePolicy,
   retainedAliases?: readonly string[],
 ): Promise<void> {
@@ -22,6 +28,7 @@ export async function assertSkillPackageClean(
   const { CHECK_SKILL_WORKING_COPIES } = GlyphEditorRequestType;
   const peers = editors.trustedSkillEditors(identity, absolutePackageDirectory, retainedAliases);
   const physicalPackageUri = pathToFileURL(absolutePackageDirectory).toString();
+  const ownerRoutes = typeof ownerIntersections === 'function' ? ownerIntersections() : ownerIntersections;
   const operationId = randomUUID();
   const comparison = namePolicy ? { namePolicy } : {};
   const checks = [
@@ -37,9 +44,7 @@ export async function assertSkillPackageClean(
       } as const,
     },
     ...[
-      ...new Map(
-        ownerIntersections.map(value => [typeof value === 'string' ? value : value.directoryUri, value]),
-      ).values(),
+      ...new Map(ownerRoutes.map(value => [typeof value === 'string' ? value : value.directoryUri, value])).values(),
     ].map(value => ({
       identity,
       request: {
@@ -77,6 +82,8 @@ export async function assertSkillPackageClean(
       if (!response.packageClean) throw new Error('Save or discard unsaved skill edits before managing the package.');
     }),
   );
+  if (typeof ownerIntersections === 'function' && JSON.stringify(ownerIntersections()) !== JSON.stringify(ownerRoutes))
+    throw new Error('Project editor routes changed during the working-copy check. Retry the change.');
   const current = editors.trustedSkillEditors(identity, absolutePackageDirectory, retainedAliases);
   const peerKey = (peer: (typeof peers)[number]) =>
     JSON.stringify([peer.connectionId, peer.directoryUri, peer.physicalPackageUri]);

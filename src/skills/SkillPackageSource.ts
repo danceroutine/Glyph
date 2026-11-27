@@ -37,18 +37,25 @@ export class SkillPackageSourceReader {
     private readonly metadata: FilesystemMetadata & HostFilesystemAuthority & WorkspacePathAccess,
     private readonly hostWorkspaceRoots: HostWorkspaceRoots = workspaceRoots,
     private readonly accessPolicy = new WorkspaceAccessPolicy(),
-    private readonly acquireLocalSource?: (root: string, signal?: AbortSignal) => Promise<() => void>,
   ) {}
   async read(input: SkillPackageSource, signal?: AbortSignal): Promise<SkillPackageDraft> {
     const source = skillPackageSourceSchema.parse(input);
     if (source.kind === 'local') {
       const root = resolve(source.path);
       const revision = this.accessPolicy.revision;
-      const assertSourceCurrent = () => {
+      const assertGeneration = () => {
         if (revision !== this.accessPolicy.revision)
           throw new Error('Host-private locations changed during this local import. Preview the source again.');
       };
-      await this.metadata.assertWorkspacePath(root, this.accessPolicy.privatePaths);
+      // The complete imported tree must remain disjoint from private names, including newly mounted aliases.
+      // Recheck the native namespace for each disclosure and publication; an unchanged path list alone cannot prove it.
+      const assertSourceCurrent = async () => {
+        assertGeneration();
+        await this.metadata.assertWorkspacePath(root, this.accessPolicy.privatePaths);
+        await this.metadata.assertHostPaths([root], this.accessPolicy.privatePaths);
+        assertGeneration();
+      };
+      await assertSourceCurrent();
       if ((await lstat(root)).isSymbolicLink()) throw new Error('Skill sources cannot be symlinked directories.');
       await inspectFileMetadata(this.metadata, root, 'replaceable');
       const store = new FileSystemWorkspaceTextStore(root, {
@@ -96,7 +103,7 @@ export class SkillPackageSourceReader {
             encoding: 'base64' as const,
           });
         }
-        assertSourceCurrent();
+        await assertSourceCurrent();
         return new SkillPackageDraft(
           {
             name: basename(root),
@@ -104,7 +111,7 @@ export class SkillPackageSourceReader {
             files,
             directories: [...modes].map(([path, mode]) => ({ path, mode })),
           },
-          { assertCurrent: assertSourceCurrent, acquire: this.acquireLocalSource?.bind(undefined, root) },
+          { assertCurrent: assertSourceCurrent },
         );
       } finally {
         await index.dispose();
