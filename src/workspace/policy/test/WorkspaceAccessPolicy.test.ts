@@ -43,7 +43,9 @@ describe(WorkspaceAccessPolicy, () => {
 
   it('uses actual containing-directory aliases independently of configurable filename ignores', () => {
     const root = mkdtempSync(join(tmpdir(), 'glyph-private-name-'));
-    onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+    onTestFinished(() => {
+      rmSync(root, { recursive: true, force: true });
+    });
     const policy = new WorkspaceAccessPolicy();
     const name = '.SKILL-STAGING';
     const path = join(root, name);
