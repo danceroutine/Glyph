@@ -9,6 +9,6 @@ export interface WorkspaceMutationOptions {
   /** Check working-copy state immediately before creating or deleting a file. */
   readonly beforePublish?: () => Promise<void>;
   /** Recheck host-owned metadata immediately before publishing a staged filesystem replacement. */
-  readonly beforeReplace?: () => Promise<void>;
+  readonly beforeReplace?: (stagedPath: string) => Promise<void>;
   readonly interruptedRename?: NonNullable<WorkspaceReadOptions['interruptedRename']>;
 }

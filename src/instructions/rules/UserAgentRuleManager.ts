@@ -1,3 +1,4 @@
+import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import { withPrivateFileLock } from '#src/workspace/withPrivateFileLock.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -22,6 +23,7 @@ export class UserAgentRuleManager {
     >,
     private readonly catalog: Pick<AgentInstructionCatalog, 'refresh'>,
     private readonly files: UserRuleFileAuthority,
+    private readonly metadata: FilesystemMetadata,
     private readonly assertClean?: (filename: string) => Promise<void>,
   ) {}
 
@@ -73,12 +75,17 @@ export class UserAgentRuleManager {
       const text = withRuleEnabled(current.text, enabled);
       if (Buffer.byteLength(text) + (current.byteOrderMark ? 3 : 0) > MAX_AGENT_RULE_BYTES)
         throw new Error('User rules can contain at most 64 KiB. Shorten the rule before changing its enablement.');
-      await this.files.assertReplaceableMetadata(filename);
-      const beforeReplace = async () => {
+      const checkSource = async () => {
         await this.assertClean?.(filename);
         await this.files.assertReplaceableMetadata(filename);
       };
-      await this.workspace.replace(normalized, expectedRevision, text, current.byteOrderMark, { beforeReplace });
+      await checkSource();
+      await this.workspace.replace(normalized, expectedRevision, text, current.byteOrderMark, {
+        beforeReplace: async stagedPath => {
+          await inspectFileMetadata(this.metadata, stagedPath, 'replaceable');
+          await checkSource();
+        },
+      });
     });
     await this.refreshDiscovery();
   }
@@ -99,7 +106,7 @@ export class UserAgentRuleManager {
   }
 
   private mutate<T>(work: () => Promise<T>): Promise<T> {
-    return withPrivateFileLock(join(this.workspace.root, '.skill-staging', 'user-rules.sqlite'), work);
+    return withPrivateFileLock(this.metadata, join(this.workspace.root, '.skill-staging', 'user-rules.sqlite'), work);
   }
 
   /** Publish managed mutations immediately, without waiting for native watcher reconciliation. */

@@ -142,3 +142,19 @@ fn fails_to_start_when_the_service_thread_cannot_be_created() {
     assert_eq!(code, Some(1));
     assert!(stderr.starts_with("glyph-context-index: could not start the context index service:"));
 }
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn verifies_metadata_for_inherited_descriptors() {
+    use std::process::{Command, Stdio};
+    let fixture = tempfile::NamedTempFile::new().unwrap();
+    for argument in ["--assert-access-metadata", "--assert-replaceable-metadata"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_glyph-context-index"))
+            .arg(argument)
+            .stdin(Stdio::from(fixture.reopen().unwrap()))
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"verified\n");
+    }
+}
