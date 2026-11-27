@@ -39,6 +39,36 @@ describe(ShellSessionManager, () => {
       expect.objectContaining({ transient: true }),
     );
   });
+  it('rejects changed program authority before approval or before allocating a process after approval', async () => {
+    const { manager, authorize } = await fixture();
+    const validate = vi.fn<() => Promise<void>>(async () => {
+      throw new Error('Host path attached');
+    });
+    const program = new ShellProgram(
+      process.execPath,
+      ['-e', 'throw new Error("must not execute")'],
+      'Reviewed',
+      validate,
+    );
+    await expect(manager.executeProgram(program, { signal: new AbortController().signal })).rejects.toThrow(
+      'Host path attached',
+    );
+    expect(authorize).not.toHaveBeenCalled();
+    validate.mockResolvedValueOnce(undefined);
+    await expect(manager.executeProgram(program, { signal: new AbortController().signal })).rejects.toThrow(
+      'Host path attached',
+    );
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(manager.sessions).toEqual([]);
+    validate.mockResolvedValue(undefined);
+    const safe = new ShellProgram(process.execPath, ['-e', 'process.stdout.write("safe")'], 'Reviewed', validate);
+    await expect(manager.executeProgram(safe, { signal: new AbortController().signal })).resolves.toMatchObject({
+      output: 'safe',
+      exitCode: 0,
+    });
+    expect(validate).toHaveBeenCalledTimes(5);
+  });
+
   describe('command lifecycle', () => {
     it('leaves the wake subscription unchanged when full-access input is rejected', async () => {
       const { manager } = await fixture(ShellSandboxProfile.FULL_ACCESS);

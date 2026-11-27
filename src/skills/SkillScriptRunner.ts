@@ -1,4 +1,6 @@
-import { trustedHostExecutable, type HostExecutable } from '#src/shell/TrustedHostExecutable.js';
+import { type HostExecutable } from '#src/shell/TrustedHostExecutable.js';
+import { HostExecutionAuthority, type HostWorkspaceRoots } from '#src/shell/HostExecutionAuthority.js';
+import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 import { ShellProgram } from '#src/shell/ShellProgram.js';
 import { constants } from 'node:fs';
 import { mkdir, mkdtemp, realpath, open, type FileHandle } from 'node:fs/promises';
@@ -25,9 +27,10 @@ export class SkillScriptRunner {
   constructor(
     private readonly shells: Pick<ShellSessionManager, 'executeProgram'>,
     private readonly roots: readonly SkillExecutionRoot[],
-    private readonly metadata: FilesystemMetadata,
+    private readonly metadata: FilesystemMetadata & HostFilesystemAuthority,
     private readonly openCleanup: (root: string) => Promise<Pick<WorkspaceDirectoryMutations, 'removeTree'>>,
     private readonly stagingRoot = tmpdir(),
+    private readonly hostWorkspaceRoots: HostWorkspaceRoots = roots.map(root => root.directory),
   ) {}
 
   /** Public target metadata contains logical identifiers rather than filesystem locations. */
@@ -79,15 +82,17 @@ export class SkillScriptRunner {
       if (from === '' || (!isAbsolute(from) && from !== '..' && !from.startsWith(`..${sep}`)))
         throw new Error('Skill execution staging must be outside every workspace root.');
     }
-    const executable = trustedHostExecutable(
-      interpreter,
-      this.roots.map(candidate => candidate.directory),
-    );
+    const authority = new HostExecutionAuthority(this.hostWorkspaceRoots, this.metadata);
+    authority.admit(stagingRoot);
+    const executable = authority.executable(interpreter);
+    await authority.validate();
     const cleanup = await this.openCleanup(stagingRoot);
     const allocation = await mkdtemp(join(stagingRoot, 'glyph-skill-run-'));
     const directory = join(allocation, skillExecutionDirectory);
     const unreadableDirectories: FileHandle[] = [];
     try {
+      authority.admit(allocation);
+      await authority.validate();
       await inspectPrivateDirectory(this.metadata, allocation);
       await mkdir(directory, { mode: 0o700 });
       await inspectPrivateDirectory(this.metadata, directory);
@@ -134,7 +139,7 @@ export class SkillScriptRunner {
         .map(line => `# ${line}`)
         .join('\n')}`;
       const result = await this.shells.executeProgram(
-        new ShellProgram(executable, [join(directory, path), ...args], description),
+        new ShellProgram(executable, [join(directory, path), ...args], description, () => authority.validate()),
         {
           ownerChatId,
           signal,

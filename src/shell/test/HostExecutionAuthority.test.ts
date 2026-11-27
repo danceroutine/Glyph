@@ -2,10 +2,10 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
-import { SkillRepositoryAuthority } from '#src/skills/SkillRepositoryAuthority.js';
+import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 
-describe(SkillRepositoryAuthority, () => {
+describe(HostExecutionAuthority, () => {
   it('rechecks admitted configuration and helpers when another window attaches their directory', async () => {
     const base = await mkdtemp(join(tmpdir(), 'glyph-repository-authority-'));
     onTestFinished(() => rm(base, { recursive: true, force: true }));
@@ -16,13 +16,13 @@ describe(SkillRepositoryAuthority, () => {
     const path = join(config, 'git.config');
     await writeFile(path, '');
     let roots = [project];
-    const authority = new SkillRepositoryAuthority(() => roots, testFilesystemMetadata);
+    const authority = new HostExecutionAuthority(() => roots, testFilesystemMetadata);
     authority.admit(path);
     expect(authority.executable('git')).toContain('git');
     await expect(authority.validate()).resolves.toBeUndefined();
     roots = [project, config];
     await expect(authority.validate()).rejects.toThrow('outside writable workspaces');
-    expect(() => new SkillRepositoryAuthority([config], testFilesystemMetadata).admit(path)).toThrow(
+    expect(() => new HostExecutionAuthority([config], testFilesystemMetadata).admit(path)).toThrow(
       'outside writable workspaces',
     );
   });
@@ -38,7 +38,7 @@ describe(SkillRepositoryAuthority, () => {
     await writeFile(controlled, '');
     const alias = join(base, 'helper');
     await symlink(trusted, alias);
-    const authority = new SkillRepositoryAuthority([project], testFilesystemMetadata);
+    const authority = new HostExecutionAuthority([project], testFilesystemMetadata);
     authority.admit(alias);
     await rm(alias);
     await symlink(controlled, alias);
@@ -47,14 +47,14 @@ describe(SkillRepositoryAuthority, () => {
 
   it('rejects root changes during native validation and propagates a physical alias rejection', async () => {
     let roots: string[] = [];
-    const authority = new SkillRepositoryAuthority(() => roots, {
+    const authority = new HostExecutionAuthority(() => roots, {
       assertHostPaths: async () => {
         roots = ['new-workspace'];
       },
     });
     await expect(authority.validate()).rejects.toThrow('workspace authority changed');
     await expect(
-      new SkillRepositoryAuthority([], {
+      new HostExecutionAuthority([], {
         assertHostPaths: async () => {
           throw new Error('Bound configuration alias');
         },

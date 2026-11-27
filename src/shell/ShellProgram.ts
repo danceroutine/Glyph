@@ -8,11 +8,17 @@ export class ShellProgram {
     readonly executable: string,
     arguments_: readonly string[],
     readonly description: string,
+    private readonly validateAuthority?: () => Promise<void>,
   ) {
     if (!isAbsolute(executable) || executable.includes('\0') || arguments_.some(argument => argument.includes('\0')))
       throw new Error('A program requires an absolute executable and arguments without NUL characters.');
     this.arguments = Object.freeze([...arguments_]);
     Object.freeze(this);
+  }
+
+  /** Revalidate host authority before approval and again before process creation. */
+  async assertAuthority(): Promise<void> {
+    await this.validateAuthority?.();
   }
 
   /** Approval text describes the exact argument boundaries; it is never parsed as a shell command. */

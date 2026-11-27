@@ -1,8 +1,10 @@
 import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
-import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
+import { inspectOwnerControlledDirectory, inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
+import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
+import { constants } from 'node:fs';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { link, open, rm } from 'node:fs/promises';
+import { link, open, rm, type FileHandle } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { syncDirectory, withSkillLock } from './SkillPackageStorage.ts';
@@ -40,8 +42,10 @@ export class SkillStateStore {
     };
   }
   async initialize(): Promise<void> {
+    await inspectOwnerControlledDirectory(this.metadata, this.userDirectory);
     await withSkillLock(this.metadata, this.userDirectory, 'preferences', async () => {
-      this.publish(parsePreferences((await this.workspace.readOptional('skill-state.json'))?.text));
+      await inspectOwnerControlledDirectory(this.metadata, this.userDirectory);
+      this.publish(parsePreferences((await this.readPreferences())?.text));
     });
   }
   async migratePackageIds(aliases: ReadonlyMap<string, readonly string[]>): Promise<void> {
@@ -78,8 +82,10 @@ export class SkillStateStore {
     });
   }
   private async update(change: (data: Preferences) => void, verifySource?: () => Promise<void>): Promise<void> {
+    await inspectOwnerControlledDirectory(this.metadata, this.userDirectory);
     await withSkillLock(this.metadata, this.userDirectory, 'preferences', async () => {
-      const previous = await this.workspace.readOptional('skill-state.json');
+      await inspectOwnerControlledDirectory(this.metadata, this.userDirectory);
+      const previous = await this.readPreferences();
       await verifySource?.();
       const next = parsePreferences(previous?.text);
       change(next);
@@ -88,18 +94,18 @@ export class SkillStateStore {
       const parent = dirname(destination);
       const stage = join(parent, '.skill-staging');
       const checkDirectories = async () => {
-        await inspectFileMetadata(this.metadata, parent, 'access');
+        await inspectOwnerControlledDirectory(this.metadata, parent);
         await inspectPrivateDirectory(this.metadata, stage);
       };
       await checkDirectories();
-      if (previous) await inspectFileMetadata(this.metadata, destination, 'replaceable');
+      if (previous) await this.inspectPreferencePath(destination);
       try {
         if (previous)
           await this.workspace.replace('skill-state.json', previous.revision, text, false, {
             temporaryDirectory: stage,
             beforeReplace: async stagedPath => {
               await checkDirectories();
-              await inspectFileMetadata(this.metadata, destination, 'replaceable');
+              await this.inspectPreferencePath(destination);
               await inspectFileMetadata(this.metadata, stagedPath, 'replaceable');
             },
           });
@@ -126,15 +132,17 @@ export class SkillStateStore {
         // A filesystem acknowledgement can fail after publication. Reconcile before returning a failed commit.
         let observed: string | undefined;
         try {
-          observed = (await this.workspace.readOptional('skill-state.json'))?.text;
+          observed = (await this.readPreferences())?.text;
         } catch (cause) {
           throw new SkillPreferenceCommitUncertain(cause);
         }
         if (observed !== text) throw error;
       }
       try {
+        await inspectOwnerControlledDirectory(this.metadata, parent);
         const handle = await open(destination, 'r');
         try {
+          await this.inspectPreference(handle);
           await handle.sync();
         } finally {
           await handle.close();
@@ -146,6 +154,35 @@ export class SkillStateStore {
       this.publish(next);
     });
   }
+  private async inspectPreference(handle: FileHandle): Promise<void> {
+    const stat = await handle.stat();
+    if (
+      !stat.isFile() ||
+      stat.nlink !== 1 ||
+      (process.platform !== 'win32' && (stat.uid !== process.getuid!() || (stat.mode & 0o022) !== 0))
+    )
+      throw new Error('Skill preferences must belong to the current user and must not be writable by other users.');
+    await this.metadata.inspect(handle, 'replaceable');
+  }
+
+  private async inspectPreferencePath(path: string): Promise<void> {
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      await this.inspectPreference(handle);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private async readPreferences() {
+    await inspectOwnerControlledDirectory(this.metadata, this.userDirectory);
+    const options = {
+      maxBytes: 1024 * 1024,
+      metadata: { inspect: (handle: FileHandle) => this.inspectPreference(handle) },
+    };
+    return this.workspace.readOptional('skill-state.json', options);
+  }
+
   private publish(data: Preferences): void {
     const serialized = JSON.stringify(data);
     if (this.serialized === serialized) return;

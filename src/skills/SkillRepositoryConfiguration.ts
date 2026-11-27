@@ -4,7 +4,7 @@ import { open } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { access, constants, stat } from 'node:fs/promises';
 import { repositoryEnvironment } from '#src/shell/TrustedHostExecutable.js';
-import { SkillRepositoryAuthority } from './SkillRepositoryAuthority.ts';
+import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
@@ -33,7 +33,7 @@ function quote(text: string): string {
 async function pinCredentialHelper(
   value: string,
   directory: string,
-  authority: SkillRepositoryAuthority,
+  authority: HostExecutionAuthority,
 ): Promise<string> {
   if (value.startsWith('!') || (!isAbsolute(value) && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(value)))
     throw new Error(
@@ -64,7 +64,7 @@ export async function captureRepositoryEnvironment(
   signal: AbortSignal,
   metadata: FilesystemMetadata & HostFilesystemAuthority,
   gitDirectory?: string,
-  authority = new SkillRepositoryAuthority(roots, metadata),
+  authority = new HostExecutionAuthority(roots, metadata),
 ): Promise<NodeJS.ProcessEnv> {
   const environment = repositoryEnvironment(authority.workspaceRoots);
   const executable = authority.executable('git');

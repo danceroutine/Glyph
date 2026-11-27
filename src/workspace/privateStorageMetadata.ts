@@ -44,3 +44,16 @@ export async function inspectPrivateDatabase(
     await handle.close();
   }
 }
+
+/** Admit a traversable profile without granting other local principals authority to replace its contents. */
+export async function inspectOwnerControlledDirectory(metadata: FilesystemMetadata, path: string): Promise<void> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat();
+    if (process.platform !== 'win32' && (stat.uid !== process.getuid!() || (stat.mode & 0o022) !== 0))
+      throw new Error('The skill profile must belong to the current user and must not be writable by other users.');
+    await metadata.inspect(handle, 'access');
+  } finally {
+    await handle.close();
+  }
+}

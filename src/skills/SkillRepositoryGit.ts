@@ -1,6 +1,6 @@
 import { repositoryEnvironment } from '#src/shell/TrustedHostExecutable.js';
 import { captureRepositoryEnvironment } from './SkillRepositoryConfiguration.ts';
-import { SkillRepositoryAuthority, type RepositoryWorkspaceRoots } from './SkillRepositoryAuthority.ts';
+import { HostExecutionAuthority, type HostWorkspaceRoots } from '#src/shell/HostExecutionAuthority.js';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 import { spawn } from 'node:child_process';
@@ -37,14 +37,14 @@ async function storageBytes(root: string): Promise<number> {
 /** Git transport, lazy object reads, and their helper processes share one deadline and storage budget. */
 export class SkillRepositoryGit {
   private environment?: Promise<NodeJS.ProcessEnv>;
-  private readonly authority: SkillRepositoryAuthority;
+  private readonly authority: HostExecutionAuthority;
   constructor(
     private readonly cwd: string,
     private readonly signal: AbortSignal,
-    workspaceRoots: RepositoryWorkspaceRoots,
+    workspaceRoots: HostWorkspaceRoots,
     private readonly metadata: FilesystemMetadata & HostFilesystemAuthority,
   ) {
-    this.authority = new SkillRepositoryAuthority(workspaceRoots, metadata);
+    this.authority = new HostExecutionAuthority(workspaceRoots, metadata);
     this.authority.admit(cwd);
   }
   async initialize(url: string): Promise<void> {

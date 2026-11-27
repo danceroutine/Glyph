@@ -183,11 +183,13 @@ export class ShellSessionManager implements ShellSessionRegistry {
     const workingDirectory = existing
       ? existing.snapshot.workingDirectory
       : await this.workingDirectories.resolve(options.workingDirectory);
+    await program?.assertAuthority();
     const authorization = await this.authorizer.authorize(command, workingDirectory, options.signal, {
       background: options.background === true,
       existingTerminal: existing !== undefined,
       ...(options.transient ? { transient: true } : {}),
     });
+    await program?.assertAuthority();
     options.signal.throwIfAborted();
     this.assertAvailable();
     if (existing && (this.terminals.get(existing.snapshot.id) !== existing || this.closing.has(existing.snapshot.id))) {

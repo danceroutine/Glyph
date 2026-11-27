@@ -144,6 +144,7 @@ it('rejects inherited access controls before exposing a pinned file or requestin
   const f = await fixture();
   const execute = vi.fn();
   const metadata = {
+    ...testFilesystemMetadata,
     inspect: vi.fn<FilesystemMetadata['inspect']>(async () => {
       throw new Error('Inherited ACL');
     }),
@@ -193,11 +194,44 @@ it('closes a rejected script inode and cleans a scaffold whose reviewed director
   const rejected = new SkillScriptRunner(
     { executeProgram: execute },
     f.roots,
-    { inspect },
+    { ...testFilesystemMetadata, inspect },
     async root => testPackageMutations(root),
     join(f.directory, 'private'),
   );
   await expect(rejected.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('File ACL');
   expect(execute).toHaveBeenCalledOnce();
   expect(inspect.mock.calls.at(-1)![0].fd).toBe(-1);
+});
+
+it('rechecks peer-window roots and native physical aliases before approval and after authority changes', async () => {
+  const f = await fixture();
+  let peers = f.roots.map(root => root.directory);
+  const validate = vi.fn(testFilesystemMetadata.assertHostPaths);
+  const execute = vi.fn<ShellSessionManager['executeProgram']>(async program => {
+    await program.assertAuthority();
+    peers = [...peers, (await import('node:path')).dirname(program.executable)];
+    await program.assertAuthority();
+    throw new Error('Process must not launch');
+  });
+  const runner = new SkillScriptRunner(
+    { executeProgram: execute },
+    f.roots,
+    { ...testFilesystemMetadata, assertHostPaths: validate },
+    async root => testPackageMutations(root),
+    join(f.directory, 'private'),
+    () => peers,
+  );
+  await expect(runner.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow(
+    'outside writable workspaces',
+  );
+  expect(execute).toHaveBeenCalledOnce();
+  expect(validate).toHaveBeenCalledTimes(3);
+  peers = f.roots.map(root => root.directory);
+  validate.mockRejectedValueOnce(new Error('Bound interpreter alias'));
+  await expect(runner.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('Bound interpreter alias');
+  expect(execute).toHaveBeenCalledOnce();
+  peers.push(join(f.directory, 'private'));
+  await expect(runner.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow(
+    'outside writable workspaces',
+  );
 });
