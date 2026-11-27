@@ -1,8 +1,6 @@
 //! Project host exclusions through Linux bind mounts before constructing the sandbox.
 //! Mountinfo is captured after the helper makes its mount namespace private.
-use super::{
-    home_sensitive_paths, managed_directory, private_component, SandboxError, SandboxRequest,
-};
+use super::{home_sensitive_paths, private_component, SandboxError, SandboxRequest};
 use glyph_filesystem_metadata::mount_table::MountTable;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -37,6 +35,7 @@ pub(super) fn protect(
     {
         mounts.aliases(path, true, &mut protected);
     }
+    glyph_filesystem_metadata::workspace_paths::project_managed_mounts(&mounts, &mut protected);
     // A bind may expose only a managed descendant, with no visible marker in its new name.
     for (root, point) in mounts.locations() {
         if private_component(root) || private_component(point) {
@@ -45,7 +44,7 @@ pub(super) fn protect(
         if root
             .ancestors()
             .chain(point.ancestors())
-            .any(|path| managed_directory(path) || super::named(path, ".git"))
+            .any(|path| super::named(path, ".git"))
         {
             mounts.aliases(point, true, &mut protected);
         }
@@ -111,7 +110,8 @@ mod tests {
 7 1 0:1 /repo/.glyph/skills/sample /project/managed
 8 1 0:1 /repo/.skill-staging/entry /project/transaction
 9 1 0:3 / /state/nested-volume
-10 1 0:3 /sub /project/volume-alias";
+10 1 0:3 /sub /project/volume-alias
+11 1 0:1 /another/.cursor /project/marker";
         for name in ["/host", "/ordinary/store"] {
             request.content_stores.push(crate::ContentStore {
                 root: name.into(),
@@ -131,7 +131,11 @@ mod tests {
         ] {
             assert!(request.private_paths.contains(&PathBuf::from(hidden)));
         }
-        for protected in ["/project/library", "/project/managed"] {
+        for protected in [
+            "/project/library",
+            "/project/managed",
+            "/project/marker/skills",
+        ] {
             assert!(request.protected_paths.contains(&PathBuf::from(protected)));
         }
         assert!(!request
@@ -209,6 +213,25 @@ mod tests {
         for path in [&named_staging, &library, &ordinary] {
             fs::create_dir_all(path).unwrap();
         }
+        let marker_only = project.join("parent-only");
+        fs::create_dir(&marker_only).unwrap();
+        mount_bind(&marker, &marker_only).unwrap();
+        let mut marker_view =
+            crate::tests::request(SandboxProfile::WorkspaceWrite, &project, &hidden);
+        protect(
+            &mut marker_view,
+            None,
+            &fs::read("/proc/self/mountinfo").unwrap(),
+        )
+        .unwrap();
+        assert!(marker_view
+            .protected_paths
+            .contains(&marker_only.join("skills")));
+        assert!(!marker_view
+            .protected_paths
+            .iter()
+            .any(|p| marker_only.join("notes").starts_with(p)));
+        unmount(&marker_only, UnmountFlags::empty()).unwrap();
         for (src, dst) in [&named_staging, &library, &marker, &ordinary]
             .into_iter()
             .zip(&links)

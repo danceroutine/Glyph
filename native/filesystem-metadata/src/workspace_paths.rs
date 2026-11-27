@@ -117,6 +117,21 @@ fn managed_name(path: &Path) -> bool {
     name_matches(path, "skills") && path.parent().is_some_and(package_marker)
 }
 
+/// Project both whole managed packages and a marker's managed child across Linux bind mounts.
+#[cfg(target_os = "linux")]
+pub fn project_managed_mounts(
+    table: &crate::mount_table::MountTable<'_>,
+    paths: &mut BTreeSet<PathBuf>,
+) {
+    for (root, point) in table.locations() {
+        if root.ancestors().chain(point.ancestors()).any(managed_name) {
+            table.aliases(point, true, paths);
+        } else if package_marker(root) || package_marker(point) {
+            table.aliases(&point.join("skills"), true, paths);
+        }
+    }
+}
+
 /// Check physical spelling only when unequal components could be filesystem aliases.
 /// This keeps ordinary unrelated ASCII paths in large native indexes free of stat calls.
 fn contains(root: &Path, candidate: &Path) -> bool {
@@ -196,13 +211,7 @@ impl WorkspacePaths {
                 for path in paths.clone() {
                     table.aliases(&path, true, paths);
                 }
-                for (root, point) in table.locations() {
-                    if root.ancestors().chain(point.ancestors()).any(managed_name) {
-                        table.aliases(point, true, paths);
-                    } else if package_marker(root) || package_marker(point) {
-                        table.aliases(&point.join("skills"), true, paths);
-                    }
-                }
+                project_managed_mounts(&table, paths);
             }
             for (root, point) in table.locations() {
                 if root.ancestors().chain(point.ancestors()).any(private_name) {
