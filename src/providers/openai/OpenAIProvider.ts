@@ -137,8 +137,17 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     };
   }
 
-  async streamStep(turn: OpenAITurn, context: AgentTurnContext): Promise<AgentTurnStep<OpenAITurn>> {
+  async prepareStep(turn: OpenAITurn, context: AgentTurnContext) {
     const client = await this.requestClient(context);
+    return (assertCurrent?: () => void) => this.streamStep(turn, context, client, assertCurrent);
+  }
+
+  private async streamStep(
+    turn: OpenAITurn,
+    context: AgentTurnContext,
+    client: OpenAI,
+    check?: () => void,
+  ): Promise<AgentTurnStep<OpenAITurn>> {
     const request = {
       model: this.model,
       instructions: [this.configuration.instructions, context.mode.instructions].filter(Boolean).join('\n\n'),
@@ -153,9 +162,7 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
       // Preserve opaque reasoning state for stateless multi-turn reasoning models.
       include: ['reasoning.encrypted_content'],
     } satisfies ResponseCreateParamsStreaming;
-    const check = await context.authorizeDisclosure?.();
     if (check) {
-      check();
       // Credential resolution and SDK retries are asynchronous. The request-local client verifies
       // trust and policy again when the SDK is about to invoke its configured HTTP transport.
       const send = client.fetchWithTimeout.bind(client);
