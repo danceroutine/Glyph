@@ -25,7 +25,9 @@ describe('glyph command line', () => {
     const [launcher] = cli.instances('NativeShellSandboxLauncher');
     const options = launcher!.args[0] as { privatePaths: () => readonly string[] };
     expect(options.privatePaths()).toEqual([directory]);
-    expect((launcher!.args[0] as {accessPolicy: {privatePaths: string[]}}).accessPolicy.privatePaths).toContain('/state/glyph/trace.log');
+    expect((launcher!.args[0] as { accessPolicy: { privatePaths: string[] } }).accessPolicy.privatePaths).toContain(
+      '/state/glyph/trace.log',
+    );
   });
   it('prints usage help without starting a terminal session', async () => {
     const cli = prepareCli({ argv: ['--help'] });
@@ -77,7 +79,11 @@ describe('glyph command line', () => {
     expect(selected.policy.privatePaths).not.toContain(join(process.env.GLYPH_USER_DIRECTORY!, 'rules'));
     expect(workspace?.args).toEqual([
       root,
-      { access: bound, managedDirectories: ['/profiles/current/skills'], physicalAccess: cli.instances('NativeFilesystemMetadata')[0] },
+      {
+        access: bound,
+        managedDirectories: ['/profiles/current/skills'],
+        physicalAccess: cli.instances('NativeFilesystemMetadata')[0],
+      },
     ]);
     const mutationPolicy = cli.instances('ProjectToolRuntime')[0]?.args[5] as {
       getDenial(path: string): string | undefined;

@@ -32,7 +32,10 @@ export function testSkillSource(
     root => {
       const access = new WorkspaceRootAccess(policy, root, workspaceCaseSensitivity(root));
       const store = new FileSystemWorkspaceTextStore(root, { access, physicalAccess: metadata });
-      return { store, index: new RustWorkspacePathIndex({binaryPath, access, maxFiles: 257, respectGitIgnore: false}) };
+      return {
+        store,
+        index: new RustWorkspacePathIndex({ binaryPath, access, maxFiles: 257, respectGitIgnore: false }),
+      };
     },
     metadata,
     policy,

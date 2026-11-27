@@ -11,6 +11,29 @@ import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
 import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 
 describe(SkillPackageManager, () => {
+  it('releases each selected source when a preview is discarded, cancelled or its runtime stops', async () => {
+    const { manager, location } = await aSkillLifecycle();
+    const release = vi.fn();
+    const draft = new SkillPackageDraft(
+      {
+        name: 'example',
+        source: 'selected directory',
+        files: [
+          { path: 'SKILL.md', content: '---\nname: example\ndescription: Example\n---\nReviewed', encoding: 'utf8' },
+        ],
+      },
+      { retain: async () => ({ assertCurrent: async () => {}, release }) },
+    );
+    const discarded = await manager.prepare(location.id, draft);
+    const cancelled = await manager.prepare(location.id, draft);
+    const pending = await manager.prepare(location.id, draft);
+    manager.discard(discarded.id);
+    await expect(manager.apply(cancelled.id, AbortSignal.abort(new Error('cancelled')))).rejects.toThrow('cancelled');
+    expect(release).toHaveBeenCalledTimes(2);
+    manager.dispose();
+    expect(manager.hasPreview(pending.id)).toBe(false);
+    expect(release).toHaveBeenCalledTimes(3);
+  });
   it('changes profile enablement without writing into a read-only project and rejects a removed source', async () => {
     const { root, location, provider, install } = await aSkillLifecycle();
     await install();

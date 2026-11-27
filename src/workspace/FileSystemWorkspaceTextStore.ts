@@ -484,11 +484,10 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const access = this.options.access.beginOperation();
     const managed = mutation ? this.options.managedDirectories : undefined;
     const managedDirectories = typeof managed === 'function' ? managed() : managed;
-    await this.options.physicalAccess.assertWorkspacePath(
-      absolute,
-      access.privatePaths,
-      { ...(handle ? { handle } : {}), ...(managedDirectories ? { managedDirectories } : {}) },
-    );
+    await this.options.physicalAccess.assertWorkspacePath(absolute, access.privatePaths, {
+      ...(handle ? { handle } : {}),
+      ...(managedDirectories ? { managedDirectories } : {}),
+    });
     access.assertCurrent();
   }
 

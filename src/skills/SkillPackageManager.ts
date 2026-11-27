@@ -177,7 +177,9 @@ export class SkillPackageManager {
   /** Journal keys identify the installation location. A project that contains the personal store can still
    * own packages below other nested collection directories. Every recovered target passes through target(). */
   private async journalRoot(location: SkillPackageLocation): Promise<string> {
-    return location.updateOnly ? join(location.store.root, location.directory) : location.store.resolvePath(location.directory);
+    return location.updateOnly
+      ? join(location.store.root, location.directory)
+      : location.store.resolvePath(location.directory);
   }
   async recover(originId?: string, directory?: string): Promise<void> {
     for (const location of this.locations) {
@@ -250,10 +252,7 @@ export class SkillPackageManager {
         change.location.store.root,
         'destination',
         async () => {
-          await this.recoverLocation(
-            change.location,
-            await this.journalRoot(change.location),
-          );
+          await this.recoverLocation(change.location, await this.journalRoot(change.location));
           return this.withPackageScope(change.location, change.directory, () => this.commit(change, signal), signal);
         },
         signal,
