@@ -85,7 +85,10 @@ export class WorkspaceAccessPolicy {
       const pathKey = key(path);
       const relative = posix.relative(rootKey, pathKey);
       if (relative === '' || rootKey.startsWith(pathKey.endsWith('/') ? pathKey : pathKey + '/')) privateRoot = true;
-      else if (relative !== '..' && !relative.startsWith('../')) excludedPaths.push(relative);
+      else if (relative !== '..' && !relative.startsWith('../')) {
+        // The suffix can cross a mount whose casing differs from the attached root.
+        excludedPaths.push(resolve(path).split(sep).slice(-relative.split('/').length).join('/'));
+      }
     }
     return { privateRoot, excludedPaths };
   }

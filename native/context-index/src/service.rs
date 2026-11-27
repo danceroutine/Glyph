@@ -105,7 +105,7 @@ impl IndexPolicy {
             sensitive_file_prefixes: normalize(&params.sensitive_file_prefixes),
             sensitive_file_extensions: normalize(&params.sensitive_file_extensions),
             allowed_file_names: normalize(&params.allowed_file_names),
-            excluded_paths: normalize(&params.excluded_paths),
+            excluded_paths: params.excluded_paths.clone(),
             private_paths: params
                 .private_paths
                 .iter()
@@ -166,13 +166,6 @@ impl IndexPolicy {
         {
             return true;
         }
-        let folded;
-        let relative_path = if self.case_sensitive {
-            relative_path
-        } else {
-            folded = relative_path.to_lowercase();
-            &folded
-        };
         if self
             .excluded_paths
             .iter()
@@ -180,6 +173,13 @@ impl IndexPolicy {
         {
             return true;
         }
+        let folded;
+        let relative_path = if self.case_sensitive {
+            relative_path
+        } else {
+            folded = relative_path.to_lowercase();
+            &folded
+        };
         let name = relative_path
             .rsplit_once('/')
             .map_or(relative_path, |(_, name)| name);
@@ -1099,8 +1099,6 @@ fn workspace_walk(
     let physical = policy.physical()?;
     let walk_policy = physical.clone();
     let ignored: HashSet<_> = policy.ignored_directories.iter().cloned().collect();
-    let excluded_paths = policy.excluded_paths.clone();
-    let filter_root = root.to_path_buf();
     let case_sensitive = policy.case_sensitive;
     let mut builder = WalkBuilder::new(root);
     builder
@@ -1130,16 +1128,7 @@ fn workspace_walk(
             {
                 return false;
             }
-            normalize_relative_path(&filter_root, entry.path()).is_none_or(|relative| {
-                let normalized = if case_sensitive {
-                    relative
-                } else {
-                    relative.to_lowercase()
-                };
-                !excluded_paths
-                    .iter()
-                    .any(|excluded| path_is_excluded(&normalized, excluded))
-            })
+            true
         });
 
     Ok((builder, physical))
