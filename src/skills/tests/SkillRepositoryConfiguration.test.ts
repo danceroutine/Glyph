@@ -155,7 +155,7 @@ it('refuses workspace-controlled helpers and shell fragments before transport ca
 
 it('retains credential reset entries and blocks command-valued transport overrides', async () => {
   const f = await fixture();
-  await writeFile(f.global, '[credential]\nhelper =\n');
+  await writeFile(f.global, '[credential]\nhelper =\n[remote "origin"]\nproxy = http://fixture.invalid:8080\n');
   const env = await f.capture();
   expect(
     execFileSync(trustedHostExecutable('git', []), ['config', '--get-all', 'credential.helper'], {
@@ -164,12 +164,21 @@ it('retains credential reset entries and blocks command-valued transport overrid
       encoding: 'utf8',
     }),
   ).toBe('\n');
+  expect(
+    execFileSync(trustedHostExecutable('git', []), ['config', '--get', 'remote.origin.proxy'], {
+      cwd: f.preview,
+      env,
+      encoding: 'utf8',
+    }),
+  ).toBe('http://fixture.invalid:8080\n');
   for (const [section, key] of [
     ['core', 'sshCommand'],
     ['core', 'gitProxy'],
     ['core', 'askPass'],
+    ['core', 'alternateRefsCommand'],
+    ['uploadpack', 'packObjectsHook'],
     ['remote "origin"', 'uploadpack'],
-    ['remote "origin"', 'proxy'],
+    ['remote "origin"', 'vcs'],
   ]) {
     await writeFile(f.global, `[${section}]\n${key} = arbitrary-command\n`);
     await expect(f.capture()).rejects.toThrow('command-valued Git transport');

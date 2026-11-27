@@ -11,7 +11,9 @@ const foldedPrivateDirectory = new RegExp(
 );
 
 function isPrivateDirectory(name: string, caseSensitive: boolean): boolean {
-  return caseSensitive ? privateDirectories.includes(name) : foldedPrivateDirectory.test(name.replace(/[ﬅﬆ]/gu, 'st'));
+  return caseSensitive
+    ? privateDirectories.includes(name)
+    : foldedPrivateDirectory.test(name.replaceAll(/[ﬅﬆ]/gu, 'st'));
 }
 
 const defaults = {

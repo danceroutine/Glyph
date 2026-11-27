@@ -137,7 +137,11 @@ export async function captureRepositoryEnvironment(
     if (scope === 'local') continue;
     const parsed = entry(value);
     const key = parsed.key.toLowerCase();
-    if (/(?:^core\.(?:sshcommand|gitproxy|askpass)$|^remote\..*\.(?:uploadpack|receivepack|proxy)$)/u.test(key))
+    if (
+      /(?:^core\.(?:sshcommand|gitproxy|askpass|alternaterefscommand)$|^uploadpack\.packobjectshook$|^remote\..*\.(?:uploadpack|receivepack|vcs)$)/u.test(
+        key,
+      )
+    )
       throw new Error(
         'Repository preview cannot run command-valued Git transport settings. Use a named credential helper or import a local package.',
       );
