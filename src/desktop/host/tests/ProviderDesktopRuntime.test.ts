@@ -259,6 +259,7 @@ it('projects instruction catalog snapshots and live changes without exposing fil
   const sources: readonly AgentInstructionSource[] = [
     {
       id: 'agents_md:AGENTS.md',
+      references: ['a.md'],
       kind: AgentInstructionSourceKind.AGENTS_MD,
       label: 'AGENTS.md',
       path: 'AGENTS.md',
@@ -310,7 +311,6 @@ it('projects instruction catalog snapshots and live changes without exposing fil
       return unsubscribe;
     }),
   };
-  sources[0] = { ...sources[0]!, references: ['a.md'] };
   const historical = chatRecord({
     transcript: [
       {
