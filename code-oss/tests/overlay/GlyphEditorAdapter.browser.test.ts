@@ -1662,6 +1662,18 @@ it('checks exact rules and complete skill packages across configured, physical, 
     expect((await check('rule', 'ONE.MDC')).workingCopiesClean).toBe(true);
     expect((await check('rule', 'ONE.MDC', false)).workingCopiesClean).toBe(false);
   }
+  const mounted = {
+    operationId: 'mounted',
+    type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES as const,
+    kind: 'skill' as const,
+    name: 'pkg',
+    caseSensitive: true,
+    sourceUris: ['file:///volume/mounted/package'],
+  };
+  for (const path of ['/volume/mounted/package/notes', '/workspace/mounted/package/notes']) {
+    copies.splice(0, copies.length, { resource: URI.file(path) });
+    expect((await adapter.handle(mounted)).workingCopiesClean).toBe(false);
+  }
   copies.splice(0, copies.length, { resource: URI.file('/workspace/profile/skills/pkg/a/b') });
   expect((await check('skill', 'pkg')).workingCopiesClean).toBe(false);
   expect((await check('skill', 'other')).workingCopiesClean).toBe(true);

@@ -58,3 +58,14 @@ it('checks repeated catalog directory spellings once per synchronous batch', asy
     lstat.mockRestore();
   }
 });
+
+it('compares the actual directory even when its mounted names have unrelated spellings', () => {
+  const stat = vi.spyOn(fs, 'lstatSync').mockReturnValue({ dev: 22n, ino: 8n } as never);
+  try {
+    expect(sameWorkspaceDirectory('/profile/rules', '/other/rules', true)).toBe(true);
+    stat.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined);
+    expect(sameWorkspaceDirectory('/private-A/x', '/private-B/x', false)).toBe(true);
+  } finally {
+    stat.mockRestore();
+  }
+});

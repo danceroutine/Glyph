@@ -24,7 +24,12 @@ describe(AgentInstructionSet, () => {
       id: 'user',
       name: 'One',
       kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
-      projectAlias: { id: 'old-native', kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, scope: 'packages' },
+      projectAlias: {
+        id: 'old-native',
+        kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
+        scope: 'elsewhere',
+        additionalScopes: [{ kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, scope: 'packages' }],
+      },
     });
     const compatibility = anInstructionSource({
       id: 'cursor',

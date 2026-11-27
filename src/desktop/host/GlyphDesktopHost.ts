@@ -563,7 +563,7 @@ export class GlyphDesktopHost {
 
 function physicalRoot(root: GlyphWorkspaceRoot): string | undefined {
   try {
-    return realpathSync(root.canonicalPath);
+    return realpathSync.native(root.canonicalPath);
   } catch {
     return undefined;
   }
