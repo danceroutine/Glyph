@@ -6,7 +6,7 @@ export type HostWorkspaceRoots = readonly string[] | (() => readonly string[]);
 type CheckWorkspaceRoots = (roots: readonly string[]) => Promise<void>;
 
 /**
- * Coordinates repository processes and their private storage with workspace admission in one desktop host.
+ * Coordinates host processes and their private storage with workspace admission in one desktop host.
  * Each process holds its executable and input paths through child close. A proposed
  * workspace is visible to new launches immediately. The host interrupts conflicting
  * operations and waits for their cleanup before publishing the new workspace roots.
@@ -35,7 +35,7 @@ export class HostProcessLeases {
         closed.promise,
         check(roots).catch(() => {
           if (this.active.has(drainConflict))
-            revoked.abort(new Error('A workspace is attaching a repository process input. Retry the preview.'));
+            revoked.abort(new Error('A workspace is attaching a host process input. Retry the operation.'));
           return closed.promise;
         }),
       ]);

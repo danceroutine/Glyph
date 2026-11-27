@@ -139,15 +139,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
 
   async close(terminalId: string, ownerChatId = this.ownerChatId): Promise<void> {
     const terminal = this.requireTerminal(terminalId, ownerChatId);
-    this.closing.add(terminalId);
-    // Closing revokes pending matches before terminating the process.
-    for (let index = this.pendingWakes.length - 1; index >= 0; index--) {
-      if (this.pendingWakes[index]?.terminalId === terminalId) this.pendingWakes.splice(index, 1);
-    }
-    await terminal.terminate();
-    this.terminals.delete(terminalId);
-    this.closing.delete(terminalId);
-    this.changed();
+    await this.closeTerminal(terminal);
   }
 
   shutdown(): void {
@@ -163,6 +155,24 @@ export class ShellSessionManager implements ShellSessionRegistry {
     await Promise.all(terminals.map(terminal => terminal.terminate()));
     this.changeListeners.clear();
     this.wakeListeners.clear();
+  }
+
+  private async closeTerminal(terminal: ManagedShellSession): Promise<void> {
+    const terminalId = terminal.snapshot.id;
+    if (this.terminals.get(terminalId) !== terminal || this.closing.has(terminalId)) {
+      // A concurrent close or dispose still owns this process group until termination completes.
+      await terminal.terminate();
+      return;
+    }
+    this.closing.add(terminalId);
+    // Closing revokes pending matches before terminating the process.
+    for (let index = this.pendingWakes.length - 1; index >= 0; index--) {
+      if (this.pendingWakes[index]?.terminalId === terminalId) this.pendingWakes.splice(index, 1);
+    }
+    await terminal.terminate();
+    this.terminals.delete(terminalId);
+    this.closing.delete(terminalId);
+    this.changed();
   }
 
   private async executeCommand(
@@ -241,7 +251,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
       if (existing) await terminal.terminate();
       throw error;
     } finally {
-      if (!existing) await this.close(terminal.snapshot.id, ownerChatId);
+      if (!existing) await this.closeTerminal(terminal);
     }
   }
 

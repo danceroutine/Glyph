@@ -14,7 +14,7 @@ export interface GlyphDesktopWorkspaceRuntimeFactory {
     readonly trusted: boolean;
     /** Fresh host-wide workspace authority, including peers retained during reconnection. */
     readonly hostWorkspaceRoots?: () => readonly string[];
-    /** Shared with the host that admits workspace roots while Git and its helpers run. */
+    /** Host-wide lease coordinator for repository transports and staged skill execution. */
     readonly repositoryProcesses?: HostProcessLeases;
     /** Recheck the owning connection, attached roots and live trust before releasing model context. */
     readonly assertTrusted: () => void;
