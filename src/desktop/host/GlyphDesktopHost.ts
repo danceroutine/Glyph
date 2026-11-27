@@ -350,6 +350,7 @@ export class GlyphDesktopHost {
         return [root, new Set(physical === undefined ? [] : [physical])];
       }),
     );
+    connection.authorityKnown = true;
     const ownership = this.ownership.acquire(connection.identity, command.roots);
     let record = this.runtimes.get(key);
     if (!record) {

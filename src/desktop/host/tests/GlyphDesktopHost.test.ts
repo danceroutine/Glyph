@@ -3,7 +3,6 @@ import { mkdtemp, mkdir, symlink, rm, realpath, rename } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { realpath } from 'node:fs/promises';
 vi.mock('#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.ts', () => ({
   isGlyphRequestEnvelope: vi.fn(),
 }));
