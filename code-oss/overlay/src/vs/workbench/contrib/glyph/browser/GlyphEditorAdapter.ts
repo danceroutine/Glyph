@@ -758,7 +758,7 @@ export class GlyphEditorAdapter extends Disposable {
     )
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
     const parent = dirname(directory);
-    const identity = this.uriIdentityService.extUri;
+    const identity = filesystemUriIdentity(request, this.uriIdentityService.extUri);
     if (request.scope === 'user') {
       const registered = targets.find(target => target.scope === 'user')?.uri;
       // At first attach crash recovery can precede the host snapshot. Use the same local user setting as the utility process.
@@ -801,14 +801,13 @@ export class GlyphEditorAdapter extends Disposable {
         ))
           throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
         this.verifiedSkillRoots.set(owner.uri.toString(), root);
-        if (!this.packageWorkingCopiesClean(physical)) return false;
+        if (!this.packageWorkingCopiesClean(physical, identity)) return false;
       }
     }
-    return this.packageWorkingCopiesClean(directory);
+    return this.packageWorkingCopiesClean(directory, identity);
   }
 
-  private packageWorkingCopiesClean(directory: URI): boolean {
-    const identity = this.uriIdentityService.extUri;
+  private packageWorkingCopiesClean(directory: URI, identity: Pick<IExtUri, 'isEqualOrParent'>): boolean {
     return !this.workingCopyService.dirtyWorkingCopies.some(copy => {
       const resource = copy.resource;
       if (resource.scheme === 'untitled' && this.textFileService.untitled.isUntitledWithAssociatedResource(resource))
