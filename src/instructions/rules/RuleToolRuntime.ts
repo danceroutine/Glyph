@@ -22,11 +22,11 @@ export class RuleToolRuntime implements ToolSource {
       validateInput: input => {
         activateRuleSchema.parse(JSON.parse(input));
       },
-      execute: (input, _signal, context) => {
+      execute: async (input, signal, context) => {
         if (!context.turnId)
           return Promise.resolve(JSON.stringify({ error: 'Rule activation requires an active turn.' }));
         const { id } = activateRuleSchema.parse(JSON.parse(input));
-        const instructionContext = this.turns.activateRule(context.turnId, id);
+        const instructionContext = await this.turns.activateRule(context.turnId, id, signal);
         return Promise.resolve(
           JSON.stringify(
             instructionContext

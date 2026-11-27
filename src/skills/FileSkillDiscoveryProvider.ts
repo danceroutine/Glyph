@@ -1,3 +1,6 @@
+import { fileURLToPath } from 'node:url';
+import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { sourceReads } from '#src/workspace/SourceDisclosure.js';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { workspaceReadFailureBytes } from '#src/workspace/WorkspaceReadFailure.js';
 import { posix } from 'node:path';
@@ -13,6 +16,7 @@ import { parseSkillManifest } from './SkillManifest.ts';
 /** Native and compatibility directories share a format but keep distinct location identities. */
 interface FileSkillLocation {
   readonly origin: SkillOrigin;
+  readonly authority?: PinnedSourceAuthority;
   readonly scopePrefix?: string;
   readonly scopePathKey?: (path: string) => string;
   /** Store-relative directory. Nested occurrences are allowed for project locations. */
@@ -139,6 +143,9 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
         const manifest = parseSkillManifest(snapshot.text, name);
         return {
           ...source,
+          ...(this.location.authority
+            ? { [sourceReads]: { authority: this.location.authority, files: [{ uri, identity: snapshot.identity }] } }
+            : {}),
           uri,
           name: manifest.name,
           description: manifest.description,
@@ -190,12 +197,23 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
     };
     const initialGeneration = await generation();
     const paths = await inventory();
+    const authority = this.location.authority;
+    const enrolled = authority
+      ? await authority.capture(
+          paths.map(path => fileURLToPath(this.location.uriForPath(path))),
+          signal,
+        )
+      : [];
+    const origins = new Map(
+      enrolled.map((file, i) => [posix.relative(descriptor.directory, paths[i]!), { authority: authority!, file }]),
+    );
     const snapshot = await captureSkillPackage(
       descriptor,
       this.location.workspace,
       paths,
       signal,
       this.location.binaryStore,
+      origins,
     );
     if (reconcile) await reconcile();
     // Re-read every authorized file and both inventory boundaries before admitting this revision.

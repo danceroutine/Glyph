@@ -1,3 +1,4 @@
+import { sourceReads, type SourcePin } from '#src/workspace/SourceDisclosure.js';
 import type { TurnContextEnvelope, TurnContextSnapshot } from './TurnContextEnvelope.ts';
 import {
   AgentInstructionActivationMode,
@@ -16,6 +17,7 @@ import { RulePathBatch } from '#src/instructions/rules/matchesAgentRulePath.js';
 /** Immutable inputs used to create one frozen logical-turn context. */
 export interface TurnContextSessionInput {
   readonly turnId: string;
+  readonly origins?: ReadonlyMap<string, readonly SourcePin[]>;
   readonly paths?: InstructionPaths;
   readonly scopeIndex?: AgentInstructionSet;
   readonly sources: readonly AgentInstructionSource[];
@@ -72,7 +74,17 @@ export class TurnContextSession {
     this.initial = this.undisclosedContext(candidates) ?? emptyContext();
   }
 
-  /** Initial instructions and bounded model-selectable metadata for provider turn creation. */
+  /** Current origins for the bodies and candidate metadata included in this provider request. */
+  disclosurePins(context?: TurnContextEnvelope): SourcePin[] {
+    if (!this.input.origins) return [];
+    const ids = context ? context.sources.map(source => source.id) : [...this.activated.keys()];
+    const candidates = context ? (context.candidates ?? []) : this.advertisedCandidates.values();
+    const pins = ids.flatMap(id => this.input.origins!.get(id) ?? []);
+    for (const candidate of candidates) pins.push(...(this.input.origins.get(candidate.id)?.slice(0, 1) ?? []));
+    return pins;
+  }
+
+  /** Hold a planned disclosure outside published provenance until its live access check completes. */
   checkpointSteering(): () => void {
     const activated = new Map(this.activated);
     const pending = new Map(this.pending);
@@ -87,6 +99,7 @@ export class TurnContextSession {
       this.remainingCandidateBytes = remainingCandidateBytes;
     };
   }
+
   initialEnvelope(): TurnContextEnvelope {
     return structuredClone(this.initial);
   }
@@ -133,7 +146,7 @@ export class TurnContextSession {
       turnId: this.input.turnId,
       sources: this.input.sources
         .filter(source => ids.has(source.id))
-        .map(({ legacyIds: _legacyIds, ...source }) => source),
+        .map(({ legacyIds: _legacyIds, [sourceReads]: _origin, ...source }) => source),
       activations,
       candidates: [...this.advertisedCandidates.values()],
     };
@@ -229,7 +242,7 @@ export class TurnContextSession {
     const envelope: TurnContextEnvelope = {
       schema: 'glyph.agent-instructions.v1',
       sources: pending.map(([source]) => {
-        const { uri: _editorUri, legacyIds: _legacyIds, ...instruction } = source;
+        const { uri: _editorUri, legacyIds: _legacyIds, [sourceReads]: _origin, ...instruction } = source;
         return instruction;
       }),
       activations: pending.map(([, activation]) => activation),

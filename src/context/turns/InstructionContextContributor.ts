@@ -1,3 +1,5 @@
+import { enrollSources } from '#src/workspace/SourceDisclosure.js';
+import { AgentInstructionSourceStatus } from '#src/instructions/AgentInstructionSource.js';
 import type { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { TurnContextSession } from './TurnContextSession.ts';
 import type { TurnContextContributor, TurnContextInput } from './TurnContextContributor.ts';
@@ -11,6 +13,10 @@ export class InstructionContextContributor implements TurnContextContributor {
     return new TurnContextSession({
       turnId: input.turnId,
       sources,
+      origins: await enrollSources(
+        sources.filter(source => source.status === AgentInstructionSourceStatus.ACTIVE && source.enabled !== false),
+        signal,
+      ),
       paths: this.catalog.paths,
       scopeIndex: this.catalog.scopeIndex?.(sources),
       attachmentPaths: input.attachmentPaths,

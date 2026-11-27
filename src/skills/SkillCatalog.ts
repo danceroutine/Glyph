@@ -70,8 +70,9 @@ export class SkillCatalog {
     }
     this.published = generation;
     const projected = [...unique.values()];
-    if (JSON.stringify(projected) !== JSON.stringify(this.current)) {
-      this.current = projected;
+    const changed = JSON.stringify(projected) !== JSON.stringify(this.current);
+    this.current = projected;
+    if (changed) {
       for (const listener of this.listeners) listener();
     }
     return this.current;

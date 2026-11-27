@@ -1065,9 +1065,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(skill).toMatchObject({ name: 'workflow', status: 'active' });
       const active = await (catalog.mock.contexts[0] as SkillCatalog).capture(skill!);
       expect(active.body).toContain('Public instructions');
-      expect(active.readResource('reference.txt').content).toBe('Public reference');
-      expect(() => active.readResource('host-state/secret.txt')).toThrow('missing or unavailable');
-      expect(() => active.readResource('trace.log')).toThrow('missing or unavailable');
+      expect((await active.readResource('reference.txt')).content).toBe('Public reference');
+      await expect(active.readResource('host-state/secret.txt')).rejects.toThrow('missing or unavailable');
+      await expect(active.readResource('trace.log')).rejects.toThrow('missing or unavailable');
     });
 
     it('keeps an unavailable user rule location separate and retries after repair', async () => {

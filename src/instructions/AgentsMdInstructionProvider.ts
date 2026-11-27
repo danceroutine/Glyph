@@ -1,3 +1,5 @@
+import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { sourceReads } from '#src/workspace/SourceDisclosure.js';
 import { workspaceReadFailureBytes } from '#src/workspace/WorkspaceReadFailure.js';
 import type { InstructionFileListing } from './listInstructionFilesAcrossRoots.ts';
 import { defaultInstructionPaths, type InstructionPaths } from './InstructionPaths.ts';
@@ -18,6 +20,7 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
   constructor(
     private readonly workspace: WorkspaceTextStore,
     private readonly options: {
+      readonly authority?: PinnedSourceAuthority;
       readonly maxFiles?: number;
       readonly uriForPath?: (path: string) => string;
       readonly paths?: InstructionPaths;
@@ -88,6 +91,14 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
           ...base(),
           status: AgentInstructionSourceStatus.ACTIVE,
           ...(this.options.uriForPath ? { uri: this.options.uriForPath(normalized) } : {}),
+          ...(this.options.authority
+            ? {
+                [sourceReads]: {
+                  authority: this.options.authority,
+                  files: [{ uri: this.options.uriForPath!(normalized), identity: snapshot.identity }],
+                },
+              }
+            : {}),
           content: snapshot.text,
           revision: snapshot.revision,
         });

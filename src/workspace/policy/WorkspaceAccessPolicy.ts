@@ -89,6 +89,17 @@ export class WorkspaceAccessPolicy {
     return this.privatePathRevision;
   }
 
+  /** Capture the host's private paths for one operation. Check again before publishing or returning its result. */
+  beginOperation() {
+    const privatePaths = this.privatePaths;
+    return {
+      privatePaths,
+      assertCurrent: () => {
+        if (this.privatePaths !== privatePaths) throw new Error('Workspace access changed during the operation.');
+      },
+    };
+  }
+
   /** Project absolute host exclusions into the namespace of a single attached filesystem root. */
   exclusionsFor(
     root: string,

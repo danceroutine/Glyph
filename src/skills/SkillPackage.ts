@@ -1,3 +1,4 @@
+import { authorizeSources, type SourcePin } from '#src/workspace/SourceDisclosure.js';
 import { packageRevision } from './skillPackageRevision.ts';
 import { posix } from 'node:path';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
@@ -8,6 +9,7 @@ import { parseSkillManifest } from './SkillManifest.ts';
 /** Immutable package revision pinned when a skill first activates. Resources are disclosed individually. */
 export interface SkillPackageFile {
   readonly bytes: Uint8Array;
+  readonly identity?: string;
   readonly revision: string;
   readonly mode: number;
 }
@@ -19,14 +21,32 @@ export class SkillPackage {
     readonly descriptor: SkillDescriptor,
     readonly body: string,
     private readonly files: ReadonlyMap<string, SkillPackageFile>,
+    private readonly origins: ReadonlyMap<string, SourcePin> = new Map(),
   ) {
     this.descriptor = structuredClone(descriptor);
     this.files = new Map([...files].map(([path, file]) => [path, { ...file, bytes: Uint8Array.from(file.bytes) }]));
+    for (const [path, pin] of origins) {
+      if (pin.file.identity !== this.files.get(path)?.identity)
+        throw new Error('A skill resource changed during capture. Retry activation.');
+    }
     this.revision = packageRevision(this.files);
   }
 
-  readResource(path: string): SkillResourceUse {
+  /** Return the manifest origin and the origins of only those resources included in a request.
+   * A resource read checks its own route before its pinned bytes can enter a tool result or provenance. */
+  disclosurePins(paths: readonly string[] = []): SourcePin[] {
+    const manifest = posix.relative(this.descriptor.directory, this.descriptor.path);
+    return [manifest, ...paths].flatMap(path => {
+      const pin = this.origins.get(path);
+      return pin ? [pin] : [];
+    });
+  }
+
+  async readResource(path: string, signal?: AbortSignal, assertActive?: () => void): Promise<SkillResourceUse> {
     const resource = this.inspectResource(path);
+    const check = await authorizeSources(this.disclosurePins([resource.path]), signal);
+    check();
+    assertActive?.();
     this.used.set(resource.path, resource);
     return resource;
   }
@@ -62,13 +82,14 @@ export async function captureSkillPackage(
   paths: readonly string[],
   signal?: AbortSignal,
   binaryStore?: Pick<FileSystemWorkspaceTextStore, 'readBytes'>,
+  origins?: ReadonlyMap<string, SourcePin>,
 ): Promise<SkillPackage> {
   const files = await readSkillPackageFiles(descriptor, workspace, paths, signal, binaryStore);
   const entry = files.get(posix.relative(descriptor.directory, descriptor.path));
   if (!entry) throw new Error('Skill package is missing SKILL.md.');
   if (descriptor.revision !== entry.revision) throw new Error('The skill changed. Refresh and activate it again.');
   const manifest = parseSkillManifest(new TextDecoder('utf8', { fatal: true }).decode(entry.bytes), descriptor.name);
-  return new SkillPackage(descriptor, manifest.body, files);
+  return new SkillPackage(descriptor, manifest.body, files, origins);
 }
 
 export async function readSkillPackageFiles(
@@ -99,6 +120,7 @@ export async function readSkillPackageFiles(
     const captured = snapshot
       ? {
           bytes: Buffer.from(`${snapshot.byteOrderMark ? '\uFEFF' : ''}${snapshot.text}`, 'utf8'),
+          identity: snapshot.identity,
           revision: snapshot.revision,
           mode: raw?.mode ?? snapshot.mode,
         }

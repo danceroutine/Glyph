@@ -53,7 +53,7 @@ describe('Turn context contributor lifetime', () => {
     coordinator.discardTurn('same');
     await coordinator.beginTurn({ turnId: 'replacement', attachmentPaths: [] });
     expect(release).toHaveBeenCalledOnce();
-    expect(coordinator.activateRule('replacement', 'missing')).toBeUndefined();
+    expect(await coordinator.activateRule('replacement', 'missing')).toBeUndefined();
     expect(await coordinator.activateSource('replacement', 'empty', 'missing', 'manual', 'Selected')).toBeUndefined();
   });
 });
