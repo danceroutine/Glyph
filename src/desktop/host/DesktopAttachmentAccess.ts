@@ -60,7 +60,8 @@ export class DesktopAttachmentAccess {
           !scheme && attachment.uri === attachment.path
             ? this.routes.referenceResources(attachment.path)[0]?.uri
             : attachment.uri;
-        if (!uri || !/^file:/iu.test(uri) || kind === Kind.RULE) throw new Error('Unsupported attachment source.');
+        if (!uri || !/^file:/iu.test(uri) || kind === Kind.RULE || kind === Kind.SKILL)
+          throw new Error('Unsupported attachment source.');
         const listing = await this.resolveResource(
           { uri, path: attachment.path, folder, projectFile: kind === Kind.SYMBOL || attachment.projectFile === true },
           signal,

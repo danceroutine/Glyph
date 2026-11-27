@@ -985,7 +985,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     });
 
     it('uses selected-file authority for an explicit capture and project authority for automatic expansions', async () => {
-      const fixture = await factoryFixture();
+      const fixture = await factoryFixture({ userDirectory: isolatedUserDirectory });
       const project = await fixture.folder('project', { 'notes.md': 'original' });
       const personal = join(isolatedUserDirectory, 'rules/personal.md');
       await mkdir(dirname(personal), { recursive: true });
