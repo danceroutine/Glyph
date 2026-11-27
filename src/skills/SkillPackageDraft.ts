@@ -139,7 +139,7 @@ export class SkillPackageDraft {
     return {
       name: this.name,
       source: this.source,
-      ...(this.declaredDirectories.length
+      ...(this.declaredDirectories.length > 0
         ? { directories: this.declaredDirectories.map(directory => ({ ...directory })) }
         : {}),
       files: [...this.contents].map(([path, bytes]) => ({

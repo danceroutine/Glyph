@@ -1,7 +1,8 @@
 import { SkillProjectMutationPolicy } from './SkillProjectMutationPolicy.ts';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { lstat } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
@@ -115,6 +116,18 @@ async function diskRevision(directory: string, treeVersion?: 2): Promise<string 
   const modes = treeVersion && (await readDirectoryModes(directories, async path => join(directory, path)));
   return packageRevision(await readPackageFiles(directory, files), modes);
 }
+/** Observe ordinary directory permissions without touching the checkout or changing the process-wide umask. */
+async function newDirectoryMode(): Promise<number> {
+  const privateRoot = await mkdtemp(join(tmpdir(), 'glyph-skill-mode-'));
+  try {
+    const path = join(privateRoot, 'directory');
+    await mkdir(path, { mode: 0o777 });
+    return (await lstat(path)).mode & 0o777;
+  } finally {
+    await rm(privateRoot, { recursive: true, force: true });
+  }
+}
+
 /** Stages immutable packages, serializes each destination and recovers interrupted publication before discovery. */
 export class SkillPackageManager {
   readonly projectMutationPolicy: SkillProjectMutationPolicy;
@@ -187,7 +200,7 @@ export class SkillPackageManager {
     if (location.scope === 'user') return [];
     const parent = location.scopePrefix ? location.scopePrefix + '/' + directory : directory;
     const implicit = fileDirectories(preview.files.map(file => file.path));
-    return [...preview.files, ...preview.directories.filter(directory => !implicit.has(directory.path))].map(
+    return [...preview.files, ...preview.directories.filter(entry => !implicit.has(entry.path))].map(
       entry => parent + '/' + entry.path,
     );
   }
@@ -262,7 +275,7 @@ export class SkillPackageManager {
     await location.assertClean?.(path);
     const after = draft?.packageFiles(before.files);
     const parentMode = location.scope === 'project' ? (await optionalStat(dirname(path)))?.mode : 0o700;
-    const rootMode = before.rootMode ?? (parentMode ?? 0o777 & ~process.umask()) & 0o777;
+    const rootMode = before.rootMode ?? (parentMode ?? (await newDirectoryMode())) & 0o777;
     const directories = draft?.packageDirectories(before.directories, rootMode) ?? new Map<string, number>();
     const expected = before.files.size > 0 ? packageRevision(before.files, before.directories) : null;
     const expectedMetadata = expected ? await location.mutations.assertReplaceableMetadata(directory, true) : undefined;
@@ -316,7 +329,7 @@ export class SkillPackageManager {
     return { files, directories, rootMode: stat.mode & 0o777 };
   }
   private async assertDirectories(location: SkillPackageLocation, directory: string, extra: readonly string[]) {
-    if (!extra.length) return;
+    if (extra.length === 0) return;
     const indexed = await location.listPackageDirectories?.(directory);
     if (!indexed || extra.some(path => !indexed.has(path)))
       throw new Error('Package contains unindexed or unauthorized directories. Refresh before managing it.');
@@ -485,8 +498,10 @@ export class SkillPackageManager {
       if (files) {
         signal?.throwIfAborted();
         const installed = await optionalStat(target);
-        const modes = new Map(change.directories);
-        modes.set('', installed?.isDirectory() ? installed.mode & 0o777 : directoryMode);
+        const modes = new Map<string, number>([
+          ['', installed?.isDirectory() ? installed.mode & 0o777 : directoryMode],
+          ...change.directories,
+        ]);
         await location.mutations.stagePackage(relativeStage + '/package', files, modes);
         entry.replacementMetadata = await location.mutations.assertReplaceableMetadata(
           relativeStage + '/package',

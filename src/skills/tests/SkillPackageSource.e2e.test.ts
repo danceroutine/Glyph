@@ -95,7 +95,6 @@ describe(SkillPackageSourceReader, () => {
 it('reconciles a selected package after resources change and bounds discovery to 257 files', async () => {
   const { root, directory, reader } = await fixture();
   const { FileSystemWorkspaceTextStore } = await import('#src/workspace/FileSystemWorkspaceTextStore.js');
-  const { listSkillPackageFiles } = await import('#src/skills/listSkillPackageFiles.js');
   const store = new FileSystemWorkspaceTextStore(root);
   const binary = resolve('target/release/glyph-context-index');
   const signal = new AbortController().signal;
@@ -179,7 +178,7 @@ it('retains empty template branches through local import, exact native publicati
   const installed = await store.resolvePath(skill.directory);
   const reimport = await reader.read({ kind: 'local', path: installed });
   const update = await manager.prepare(location.id, reimport, skill.id);
-  expect(update.directories?.every(directory => directory.status === 'unchanged')).toBe(true);
+  expect(update.directories?.every(entry => entry.status === 'unchanged')).toBe(true);
   expect(update.revision).toBe(preview.revision);
   await manager.apply(update.id);
   expect((await lstat(join(installed, 'templates/skeleton/empty'))).mode & 0o777).toBe(0o750);
@@ -192,8 +191,8 @@ it('retains empty template branches through local import, exact native publicati
     listFiles: location.listFiles,
     uriForPath: path => path,
     refreshIndex: location.refreshIndex,
-    captureFiles: (directory, signal) =>
-      listSkillPackageFiles(store, directory, resolve('target/release/glyph-context-index'), false, signal),
+    captureFiles: (packagePath, signal) =>
+      listSkillPackageFiles(store, packagePath, resolve('target/release/glyph-context-index'), false, signal),
   });
   const pinned = await scoped.capture(skill);
   expect(pinned.revision).toBe(update.revision);

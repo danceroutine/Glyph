@@ -124,8 +124,8 @@ export class SkillPackageSourceReader {
       const directories = [];
       const blobs = [];
       for (const entry of entries) {
-        const tree = /^040000 tree [a-f0-9]+\t(.+)$/su.exec(entry);
-        if (tree) directories.push({ path: tree[1]!, mode: 0o755 });
+        const subtree = /^040000 tree [a-f0-9]+\t(.+)$/su.exec(entry);
+        if (subtree) directories.push({ path: subtree[1]!, mode: 0o755 });
         else blobs.push(entry);
       }
       if (blobs.length > 256) throw new Error('Skill source exceeds 256 files.');

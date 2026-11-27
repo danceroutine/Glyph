@@ -262,13 +262,7 @@ it('reviews directory modes and file-to-directory transitions, and rejects unaut
 it('validates bounded directory paths, collision aliases and defensive draft roundtrips', () => {
   const input = aSkillDraft().toJSON();
   const draft = (paths: string[]) => new SkillPackageDraft({ ...input, directories: paths.map(path => ({ path })) });
-  for (const paths of [
-    ['../outside'],
-    ['x', 'X'],
-    ['nested', 'nested'],
-    ['SKILL.md/sub'],
-    [Array(33).fill('a').join('/')],
-  ])
+  for (const paths of [['../outside'], ['x', 'X'], ['nested', 'nested'], ['SKILL.md/sub'], ['a/'.repeat(32) + 'a']])
     expect(() => draft(paths)).toThrow();
   expect(() => draft(Array.from({ length: 4200 }, (_, i) => i + '/nested/empty'))).toThrow('directory budget');
   const branch = draft(['new/nested']);
