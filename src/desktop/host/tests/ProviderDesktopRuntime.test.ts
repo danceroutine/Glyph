@@ -2185,144 +2185,147 @@ describe(ProviderDesktopRuntime, () => {
       }
     });
 
-    it('restores the draft of a checkpointed turn together with its captured attachments', async () => {
-      const checkpoint = {
-        providerState: { provider: 'fixture', version: 1, data: [] },
-        plans: [],
-        todos: [],
-        mode: AgentModeID.AGENT,
-      };
-      const range = { start: { line: 1, column: 1 }, end: { line: 2, column: 1 } };
-      const descriptor = aSkillDescriptor();
-      const skills = new SkillCatalog([
-        {
-          id: descriptor.origin.id,
-          origin: descriptor.origin,
-          discover: async () => [descriptor],
-          capture: async () => aSkillPackage(),
-          refreshIndex: async () => {},
-          matchesLegacyId: (_, id) => id === 'old',
-        },
-      ]);
-      const spans = [
-        { kind: 'skill' as const, sourceId: 'old', label: 'first', revision: 'captured', from: 0, to: 1 },
-        { kind: 'rule' as const, sourceId: 'rule', label: 'second', revision: 'r', from: 1, to: 2 },
-        { kind: 'skill' as const, sourceId: 'unselected', label: 'third', revision: 'u', from: 2, to: 3 },
-      ];
-      const record = chatRecord({
-        transcript: [
+    it.each([undefined, { skillIds: ['old'] }])(
+      'restores a checkpointed draft and earlier options %j',
+      async firstOptions => {
+        const checkpoint = {
+          providerState: { provider: 'fixture', version: 1, data: [] },
+          plans: [],
+          todos: [],
+          mode: AgentModeID.AGENT,
+        };
+        const range = { start: { line: 1, column: 1 }, end: { line: 2, column: 1 } };
+        const descriptor = aSkillDescriptor();
+        const skills = new SkillCatalog([
           {
-            userText: 'First',
-            options: { skillIds: ['old'] },
-            attachmentPaths: [],
-            assistantText: 'One',
-            reasoningSummary: '',
-            createdAt: '2026-10-01T00:00:00.000Z',
-            checkpoints: { before: checkpoint, after: checkpoint },
+            id: descriptor.origin.id,
+            origin: descriptor.origin,
+            discover: async () => [descriptor],
+            capture: async () => aSkillPackage(),
+            refreshIndex: async () => {},
+            matchesLegacyId: (_, id) => id === 'old',
           },
-          {
-            userText: 'Second',
-            attachmentPaths: ['plain.ts', 'legacy.ts', 'diagnostic.ts'],
-            assistantText: 'Two',
-            reasoningSummary: '',
-            createdAt: '2026-10-02T00:00:00.000Z',
-            options: {
-              turnId: 'second',
-              mode: AgentModeID.PLAN,
-              skillIds: ['old', descriptor.id, 'absent'],
-              referenceSpans: spans,
+        ]);
+        const spans = [
+          { kind: 'skill' as const, sourceId: 'old', label: 'first', revision: 'captured', from: 0, to: 1 },
+          { kind: 'rule' as const, sourceId: 'rule', label: 'second', revision: 'r', from: 1, to: 2 },
+          { kind: 'skill' as const, sourceId: 'unselected', label: 'third', revision: 'u', from: 2, to: 3 },
+        ];
+        const record = chatRecord({
+          transcript: [
+            {
+              userText: 'First',
+              ...(firstOptions ? { options: firstOptions } : {}),
+              attachmentPaths: [],
+              assistantText: 'One',
+              reasoningSummary: '',
+              createdAt: '2026-10-01T00:00:00.000Z',
+              checkpoints: { before: checkpoint, after: checkpoint },
             },
-            checkpoints: { before: checkpoint, after: checkpoint },
-            attachments: [
-              { path: 'plain.ts', text: 'plain', revision: 'r1', byteOrderMark: false, byteLength: 5 },
-              {
-                path: 'legacy.ts',
-                text: 'legacy',
-                revision: 'r2',
-                byteOrderMark: false,
-                byteLength: 6,
-                source: {
-                  kind: 'legacy-range' as ContextAttachmentSource['kind'],
+            {
+              userText: 'Second',
+              attachmentPaths: ['plain.ts', 'legacy.ts', 'diagnostic.ts'],
+              assistantText: 'Two',
+              reasoningSummary: '',
+              createdAt: '2026-10-02T00:00:00.000Z',
+              options: {
+                turnId: 'second',
+                mode: AgentModeID.PLAN,
+                skillIds: ['old', descriptor.id, 'absent'],
+                referenceSpans: spans,
+              },
+              checkpoints: { before: checkpoint, after: checkpoint },
+              attachments: [
+                { path: 'plain.ts', text: 'plain', revision: 'r1', byteOrderMark: false, byteLength: 5 },
+                {
+                  path: 'legacy.ts',
+                  text: 'legacy',
+                  revision: 'r2',
+                  byteOrderMark: false,
+                  byteLength: 6,
+                  source: {
+                    kind: 'legacy-range' as ContextAttachmentSource['kind'],
+                    uri: 'file:///project/legacy.ts',
+                    version: 3,
+                    revision: 's2',
+                    range,
+                    side: 'modified',
+                  },
+                },
+                {
+                  path: 'diagnostic.ts',
+                  text: 'diagnostic',
+                  revision: 'r3',
+                  byteOrderMark: false,
+                  byteLength: 10,
+                  source: { kind: 'diagnostic', uri: 'file:///project/diagnostic.ts', version: 1, revision: 's3' },
+                },
+              ],
+            },
+          ],
+        });
+        const harness = await fixture(async () => {}, 'owner', undefined, { records: [record], skills });
+        try {
+          await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'second' });
+          expect(harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)).toEqual({
+            type: GlyphHostEventType.CHAT_RESTORED,
+            chatId: record.id,
+            runs: [expect.objectContaining({ runId: `${record.id}:history:0`, userText: 'First' })],
+            draft: {
+              text: 'Second',
+              options: {
+                turnId: 'second',
+                mode: AgentModeID.PLAN,
+                skillIds: [descriptor.id, 'absent'],
+                referenceSpans: [{ ...spans[0], sourceId: descriptor.id }, ...spans.slice(1)],
+              },
+              attachments: [
+                {
+                  kind: GlyphContextAttachmentKind.FILE,
+                  uri: 'plain.ts',
+                  path: 'plain.ts',
+                  text: 'plain',
+                  contentRevision: 'r1',
+                  sourceRevision: 'r1',
+                  sourceVersion: 0,
+                },
+                {
+                  kind: GlyphContextAttachmentKind.SELECTION,
                   uri: 'file:///project/legacy.ts',
-                  version: 3,
-                  revision: 's2',
+                  path: 'legacy.ts',
+                  text: 'legacy',
+                  contentRevision: 'r2',
+                  sourceRevision: 's2',
+                  sourceVersion: 3,
                   range,
                   side: 'modified',
                 },
-              },
-              {
-                path: 'diagnostic.ts',
-                text: 'diagnostic',
-                revision: 'r3',
-                byteOrderMark: false,
-                byteLength: 10,
-                source: { kind: 'diagnostic', uri: 'file:///project/diagnostic.ts', version: 1, revision: 's3' },
-              },
-            ],
-          },
-        ],
-      });
-      const harness = await fixture(async () => {}, 'owner', undefined, { records: [record], skills });
-      try {
-        await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'second' });
-        expect(harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)).toEqual({
-          type: GlyphHostEventType.CHAT_RESTORED,
-          chatId: record.id,
-          runs: [expect.objectContaining({ runId: `${record.id}:history:0`, userText: 'First' })],
-          draft: {
-            text: 'Second',
-            options: {
-              turnId: 'second',
-              mode: AgentModeID.PLAN,
-              skillIds: [descriptor.id, 'absent'],
-              referenceSpans: [{ ...spans[0], sourceId: descriptor.id }, ...spans.slice(1)],
+                {
+                  kind: GlyphContextAttachmentKind.DIAGNOSTIC,
+                  uri: 'file:///project/diagnostic.ts',
+                  path: 'diagnostic.ts',
+                  text: 'diagnostic',
+                  contentRevision: 'r3',
+                  sourceRevision: 's3',
+                  sourceVersion: 1,
+                },
+              ],
             },
-            attachments: [
-              {
-                kind: GlyphContextAttachmentKind.FILE,
-                uri: 'plain.ts',
-                path: 'plain.ts',
-                text: 'plain',
-                contentRevision: 'r1',
-                sourceRevision: 'r1',
-                sourceVersion: 0,
-              },
-              {
-                kind: GlyphContextAttachmentKind.SELECTION,
-                uri: 'file:///project/legacy.ts',
-                path: 'legacy.ts',
-                text: 'legacy',
-                contentRevision: 'r2',
-                sourceRevision: 's2',
-                sourceVersion: 3,
-                range,
-                side: 'modified',
-              },
-              {
-                kind: GlyphContextAttachmentKind.DIAGNOSTIC,
-                uri: 'file:///project/diagnostic.ts',
-                path: 'diagnostic.ts',
-                text: 'diagnostic',
-                contentRevision: 'r3',
-                sourceRevision: 's3',
-                sourceVersion: 1,
-              },
-            ],
-          },
-        });
-        await harness.runtime.handle({
-          type: Command.RESTORE_CHECKPOINT,
-          chatId: record.id,
-          turnId: `${record.id}:history:0`,
-        });
-        expect(harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)).toMatchObject({
-          runs: [],
-          draft: { text: 'First', attachments: [] },
-        });
-      } finally {
-        await harness.runtime.dispose();
-      }
-    });
+          });
+          await harness.runtime.handle({
+            type: Command.RESTORE_CHECKPOINT,
+            chatId: record.id,
+            turnId: `${record.id}:history:0`,
+          });
+          expect(harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)).toMatchObject({
+            runs: [],
+            draft: { text: 'First', attachments: [] },
+          });
+        } finally {
+          await harness.runtime.dispose();
+        }
+      },
+    );
 
     it('projects every saved detail of a reopened chat history', async () => {
       const checkpoint = {

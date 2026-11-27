@@ -13,6 +13,11 @@ import { packageRevision, fileRevision } from '#src/skills/skillPackageRevision.
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 
 describe(FileSkillDiscoveryProvider, () => {
+  it('leaves historical IDs unresolved when a location provides no legacy identity scheme', async () => {
+    const fixture = await skillFixture();
+    const provider = fixture.provider([]);
+    expect(provider.matchesLegacyId('.glyph/skills/example', 'previous', { remaining: 1 })).toBe(false);
+  });
   it('charges actual bytes for rejected reads and retains later valid manifests', async () => {
     const fixture = await skillFixture();
     const names = Array.from({ length: 32 }, (_, i) => 'bad-' + String(i).padStart(2, '0'));
