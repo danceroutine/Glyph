@@ -1,3 +1,4 @@
+import { WorkspaceReadFailure } from '#src/workspace/WorkspaceReadFailure.js';
 import { randomUUID } from 'node:crypto';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
@@ -20,28 +21,35 @@ export function createCatalogWorkspace(
     const path = disk.normalizePath(input);
     const before = await disk.readOptional(path, options);
     if (!before) return undefined;
-    const response = await request({
-      type: GlyphEditorRequestType.READ_OPEN_SNAPSHOT,
-      operationId: randomUUID(),
-      path,
-      ...options,
-    });
-    if (!response.ok) throw new Error(response.error?.message ?? 'The editor catalog snapshot is unavailable.');
-    // Recheck the descriptor-backed identity and bytes after crossing processes.
-    // A rebind or concurrent disk edit cannot authorize a different model read.
-    const after = await disk.read(path, options);
-    if (before.identity !== after.identity || before.revision !== after.revision)
-      throw new Error('Instruction file changed during the editor read. Retry discovery.');
-    const snapshot = response.snapshot;
-    if (!snapshot) return after;
-    if (snapshot.path !== path || !snapshot.dirty) throw new Error('The editor returned an invalid catalog snapshot.');
-    return {
-      ...after,
-      text: snapshot.text,
-      byteOrderMark: snapshot.byteOrderMark,
-      byteLength: snapshot.byteLength,
-      revision: snapshot.contentRevision,
-    };
+    let completedBytes = before.byteLength;
+    try {
+      const response = await request({
+        type: GlyphEditorRequestType.READ_OPEN_SNAPSHOT,
+        operationId: randomUUID(),
+        path,
+        ...options,
+      });
+      if (!response.ok) throw new Error(response.error?.message ?? 'The editor catalog snapshot is unavailable.');
+      // Recheck the descriptor-backed identity and bytes after crossing processes.
+      // A rebind or concurrent disk edit cannot authorize a different model read.
+      const after = await disk.read(path, options);
+      completedBytes += after.byteLength;
+      if (before.identity !== after.identity || before.revision !== after.revision)
+        throw new Error('Instruction file changed during the editor read. Retry discovery.');
+      const snapshot = response.snapshot;
+      if (!snapshot) return after;
+      if (snapshot.path !== path || !snapshot.dirty)
+        throw new Error('The editor returned an invalid catalog snapshot.');
+      return {
+        ...after,
+        text: snapshot.text,
+        byteOrderMark: snapshot.byteOrderMark,
+        byteLength: snapshot.byteLength,
+        revision: snapshot.contentRevision,
+      };
+    } catch (cause) {
+      throw new WorkspaceReadFailure(cause, completedBytes);
+    }
   };
   return {
     root: workspace.root,
