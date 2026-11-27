@@ -1,3 +1,6 @@
+#[cfg(unix)]
+mod source_origins;
+
 #[cfg(target_os = "linux")]
 fn source_path_aliases() -> std::io::Result<()> {
     use std::path::PathBuf;
@@ -58,6 +61,8 @@ fn main() {
     {
         #[cfg(target_os = "linux")]
         Some("--source-path-aliases") => source_path_aliases(),
+        #[cfg(unix)]
+        Some("--source-origins") => source_origins::inspect(),
         Some("--assert-workspace-path") => inspect_workspace_path(),
         Some("--assert-access-metadata") => inspect(false),
         Some("--assert-replaceable-metadata") => inspect(true),

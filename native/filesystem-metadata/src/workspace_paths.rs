@@ -212,6 +212,12 @@ impl WorkspacePaths {
     }
 
     pub fn assert_path(&self, path: &Path, identity: Option<(&str, &str)>) -> io::Result<()> {
+        self.assert_batch_path(path, identity)?;
+        self.finish_batch()
+    }
+
+    /// Validate one path against this batch's mount and reservation snapshot. Call finish_batch before delivery.
+    pub fn assert_batch_path(&self, path: &Path, identity: Option<(&str, &str)>) -> io::Result<()> {
         let denied = || {
             io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -233,10 +239,15 @@ impl WorkspacePaths {
                 return Err(denied());
             }
         }
+        Ok(())
+    }
+
+    /// Recheck all live authority inputs once after examining the complete batch.
+    pub fn finish_batch(&self) -> io::Result<()> {
         if self.current_at_completion() {
             Ok(())
         } else {
-            Err(denied())
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "Workspace access changed."))
         }
     }
 }

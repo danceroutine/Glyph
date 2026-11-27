@@ -111,7 +111,7 @@ describe(ProjectAccess, () => {
     expect(
       JSON.parse(await access.execute('read_project_file', input, undefined, { turnId: 'turn' })),
     ).not.toHaveProperty('instructionContext');
-    expect(disclosePaths).toHaveBeenNthCalledWith(1, 'turn', ['src/app.ts']);
+    expect(disclosePaths).toHaveBeenNthCalledWith(1, 'turn', ['src/app.ts'], undefined);
   });
 
   it.each([
@@ -412,7 +412,7 @@ describe(ProjectAccess, () => {
       ) as { instructionContext: { sources: { path: string }[] } };
 
       expect(result.instructionContext.sources).toEqual([{ path: 'src/AGENTS.md' }]);
-      expect(disclosePaths).toHaveBeenCalledWith('turn', ['src/app.ts']);
+      expect(disclosePaths).toHaveBeenCalledWith('turn', ['src/app.ts'], undefined);
     });
 
     it('returns malformed tool output when the native index rejects a glob pattern', async () => {

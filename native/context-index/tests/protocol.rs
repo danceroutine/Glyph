@@ -65,10 +65,8 @@ fn fails_when_standard_input_cannot_be_read() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .starts_with("glyph-context-index: could not read a protocol request:")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .starts_with("glyph-context-index: could not read a protocol request:"));
 }
 
 #[test]
@@ -114,10 +112,8 @@ fn fails_to_start_when_the_response_writer_thread_cannot_be_created() {
     });
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .starts_with("glyph-context-index: could not start the protocol writer:")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .starts_with("glyph-context-index: could not start the protocol writer:"));
 }
 
 #[cfg(target_os = "macos")]
@@ -251,4 +247,52 @@ fn checks_bound_private_and_ordinary_trees_through_the_cli() {
             .unwrap()
             .success());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn pins_source_locations_across_regular_saves_and_checks_current_reservations() {
+    use std::os::unix::fs::symlink;
+    let project = tempfile::tempdir().unwrap();
+    let rules = project.path().join("rules");
+    fs::create_dir(&rules).unwrap();
+    let file = rules.join("one.md");
+    let other = rules.join("two.md");
+    fs::write(&file, "one").unwrap();
+    fs::write(&other, "two").unwrap();
+    let inspect = |paths: &[&std::path::Path], private: &[&std::path::Path]| {
+        run_with_input(
+            &serde_json::json!({"paths":paths,"privatePaths":private}).to_string(),
+            |cmd| {
+                cmd.arg("--source-origins");
+            },
+        )
+    };
+    let pins = |paths: &[&std::path::Path]| {
+        let output = inspect(paths, &[]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let original = pins(&[&file, &other]);
+    assert_ne!(original[0]["origin"], original[1]["origin"]);
+    fs::rename(&other, &file).unwrap();
+    let saved = pins(&[&file]);
+    assert_eq!(original[0]["origin"], saved[0]["origin"]);
+    assert_ne!(original[0]["identity"], saved[0]["identity"]);
+    assert!(!inspect(&[&file], &[&rules]).status.success());
+    fs::rename(&rules, project.path().join("old")).unwrap();
+    fs::create_dir(&rules).unwrap();
+    fs::write(&file, "new").unwrap();
+    assert_ne!(original[0]["origin"], pins(&[&file])[0]["origin"]);
+    assert!(!inspect(&[&rules], &[]).status.success());
+    assert!(!inspect(&[&other], &[]).status.success());
+    symlink(&file, &other).unwrap();
+    assert!(!inspect(&[&other], &[]).status.success());
+    fs::remove_file(&other).unwrap();
+    fs::hard_link(&file, &other).unwrap();
+    assert!(!inspect(&[&file], &[]).status.success());
 }
