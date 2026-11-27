@@ -665,13 +665,16 @@ describe(RustWorkspacePathIndex, () => {
       const worker = new FakeWorker(request => {
         if (request.method === 'initialize') return indexState(1);
         if (request.method === 'listSkillPackages')
-          return { files: ['.cursor/skills/example/SKILL.md'], truncated: false };
+          return {
+            packages: [{ directory: '.cursor/skills/example', manifest: '.cursor/skills/example/SKILL.md' }],
+            truncated: false,
+          };
         return { shutdown: true };
       });
       const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
       await expect(index.listSkillPackages('.cursor')).resolves.toEqual({
-        files: ['.cursor/skills/example/SKILL.md'],
+        packages: [{ directory: '.cursor/skills/example', manifest: '.cursor/skills/example/SKILL.md' }],
         truncated: false,
       });
       expect(worker.requests[1]).toMatchObject({ method: 'listSkillPackages', params: '.cursor' });

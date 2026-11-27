@@ -74,6 +74,13 @@ const globResultSchema = z
   })
   .strict();
 
+const skillPackageListingSchema = z
+  .object({
+    packages: z.array(z.object({ directory: z.string().min(1), manifest: z.string().min(1).nullable() }).strict()),
+    truncated: z.boolean(),
+  })
+  .strict();
+
 const contentSearchMetadataSchema = {
   searchedFiles: z.number().int().nonnegative(),
   skippedFiles: z.number().int().nonnegative(),
@@ -265,9 +272,9 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   }
 
   /** One indexed representative per package, preferring the manifest over an ordinary resource. */
-  async listSkillPackages(marker: string | null, signal?: AbortSignal): Promise<WorkspacePathGlobResult> {
+  async listSkillPackages(marker: string | null, signal?: AbortSignal) {
     await this.initialize(signal);
-    return globResultSchema.parse(await this.request(PathIndexMethod.LIST_SKILL_PACKAGES, marker, signal));
+    return skillPackageListingSchema.parse(await this.request(PathIndexMethod.LIST_SKILL_PACKAGES, marker, signal));
   }
 
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {

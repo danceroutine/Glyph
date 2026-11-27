@@ -695,7 +695,7 @@ impl ContextIndexService {
     pub(crate) fn list_skill_packages(
         &self,
         marker: Option<&str>,
-    ) -> Result<GlobResult, ServiceError> {
+    ) -> Result<crate::skill_packages::PackageListing, ServiceError> {
         let initialized = self
             .initialized
             .as_ref()
@@ -708,7 +708,7 @@ impl ContextIndexService {
         let mut result = crate::skill_packages::list(
             &paths,
             marker,
-            initialized.policy.case_sensitive,
+            &initialized.root,
             MAX_GLOB_LIMIT as usize,
             initialized.truncated.load(Ordering::Acquire),
         );
