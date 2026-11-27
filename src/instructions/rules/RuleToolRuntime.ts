@@ -23,16 +23,13 @@ export class RuleToolRuntime implements ToolSource {
         activateRuleSchema.parse(JSON.parse(input));
       },
       execute: async (input, signal, context) => {
-        if (!context.turnId)
-          return Promise.resolve(JSON.stringify({ error: 'Rule activation requires an active turn.' }));
+        if (!context.turnId) return JSON.stringify({ error: 'Rule activation requires an active turn.' });
         const { id } = activateRuleSchema.parse(JSON.parse(input));
         const instructionContext = await this.turns.activateRule(context.turnId, id, signal);
-        return Promise.resolve(
-          JSON.stringify(
-            instructionContext
-              ? { activated: true, instructionContext }
-              : { activated: false, message: 'The rule is unavailable, ineligible, or already active.' },
-          ),
+        return JSON.stringify(
+          instructionContext
+            ? { activated: true, instructionContext }
+            : { activated: false, message: 'The rule is unavailable, ineligible, or already active.' },
         );
       },
     },
