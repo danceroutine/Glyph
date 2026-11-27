@@ -1978,17 +1978,21 @@ fn package_listing_rechecks_the_current_private_authority_of_resident_paths() {
     cfg.private_paths = vec![permissions.clone()];
     let mut service = ContextIndexService::new();
     service.initialize(cfg).unwrap();
+    let listing =
+        || serde_json::to_value(service.list_skill_packages(Some(".glyph")).unwrap()).unwrap();
     assert_eq!(
-        service.list_skill_packages(Some(".glyph")).unwrap().files,
-        vec![".glyph/skills/documentation/SKILL.md"]
+        listing(),
+        serde_json::json!({
+            "packages":[{"directory":".glyph/skills/documentation","manifest":".glyph/skills/documentation/SKILL.md"}],
+            "truncated":false,
+        })
     );
     fs::remove_file(&permissions).unwrap();
     std::os::unix::fs::symlink(&catalog, &permissions).unwrap();
-    assert!(service
-        .list_skill_packages(Some(".glyph"))
-        .unwrap()
-        .files
-        .is_empty());
+    assert_eq!(
+        listing(),
+        serde_json::json!({"packages":[],"truncated":false})
+    );
 }
 
 #[test]
