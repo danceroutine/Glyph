@@ -21,10 +21,12 @@ export class WindowCommandAuthority {
     departed.abort(new Error('The workspace connection has ended. Reconnect before attaching.'));
   }
 
+  /** Capture this signal when dispatching a command. Carry that same signal through any queues or approval prompts. */
   get signal(): AbortSignal {
     return this.lifetime.signal;
   }
 
+  /** End the current workspace grant while keeping the port available for the next attachment handshake. */
   revoke(): void {
     const previous = this.lifetime;
     this.lifetime = new AbortController();
