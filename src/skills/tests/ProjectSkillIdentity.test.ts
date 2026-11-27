@@ -36,3 +36,21 @@ it('keeps the ID and profile provenance of the same package when a different anc
   expect(state.installations.get(current)?.source).toBe('Provenance only');
   expect(state.enabled.has(current)).toBe(false);
 });
+
+it('verifies exactly one stored plain or hashed ID within a shared ancestor budget', () => {
+  const outer = new ProjectSkillIdentity('/root', '.glyph');
+  const nested = new ProjectSkillIdentity('/root/sub', '.glyph');
+  const directory = '.glyph/skills/example';
+  const budget = { remaining: 100 };
+  const old = skillPackageId(outer.originId, 'sub/' + directory);
+  expect(nested.matchesLegacyId(directory, old, budget)).toBe(true);
+  expect(nested.matchesLegacyId(directory, old.replace('sub/', 'other/'), budget)).toBe(false);
+  expect(nested.matchesLegacyId(directory, old.replace('.glyph:', '.cursor:'), budget)).toBe(false);
+  expect(nested.matchesLegacyId(directory, 'unknown', budget)).toBe(false);
+  const deep = 'long/'.repeat(110) + directory;
+  const hashed = skillPackageId(outer.originId, 'sub/' + deep);
+  expect(nested.matchesLegacyId(deep, hashed, { remaining: 0 })).toBe(false);
+  expect(nested.matchesLegacyId(deep, hashed, { remaining: 200 })).toBe(true);
+  expect(nested.matchesLegacyId(deep, 'skill-sha256:' + '0'.repeat(64), { remaining: 200 })).toBe(false);
+  expect(nested.matchesLegacyId(directory, hashed, budget)).toBe(false);
+});

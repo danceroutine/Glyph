@@ -20,7 +20,7 @@ import { HostEventJournal } from './HostEventJournal.ts';
 import { RequestDeduplicator } from './RequestDeduplicator.ts';
 import { getWorkspaceKey, WorkspaceOwnershipRegistry } from './WorkspaceOwnershipRegistry.ts';
 
-import type { GlyphDesktopWorkspaceRuntime, GlyphRuntimeCommand } from './GlyphDesktopWorkspaceRuntime.ts';
+import type { GlyphDesktopWorkspaceRuntime, GlyphAttachedCommand } from './GlyphDesktopWorkspaceRuntime.ts';
 import type { GlyphDesktopWorkspaceRuntimeFactory } from './GlyphDesktopWorkspaceRuntimeFactory.ts';
 import { isGlyphRequestEnvelope } from '#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.js';
 import { isMutationCommand } from '#src/desktop/host/typeguards/isMutationCommand.js';
@@ -376,7 +376,7 @@ export class GlyphDesktopHost {
   private async dispatch(
     connection: Connection,
     requestId: string,
-    command: GlyphRuntimeCommand,
+    command: GlyphAttachedCommand,
   ): Promise<readonly GlyphHostEvent[]> {
     if (!connection.attached || !connection.ready || connection.pendingAttachments > 0) {
       return [
@@ -387,7 +387,10 @@ export class GlyphDesktopHost {
         }),
       ];
     }
-    if (!connection.trusted && isMutationCommand(command)) {
+    if (
+      !connection.trusted &&
+      (isMutationCommand(command) || command.type === GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE)
+    ) {
       return [
         toErrorGlyphHostEvent({
           requestId: requestId,
@@ -417,6 +420,24 @@ export class GlyphDesktopHost {
           code: GlyphDesktopErrorCode.HOST_UNAVAILABLE,
         }),
       ];
+    if (command.type === GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE) {
+      if (
+        typeof command.lookupId !== 'string' ||
+        !command.lookupId ||
+        command.lookupId.length > 64 ||
+        typeof command.skillId !== 'string' ||
+        !command.skillId ||
+        command.skillId.length > 500
+      )
+        throw new Error('Invalid skill reference lookup.');
+      const skillId = record.runtime.resolveSkillReference?.(command.skillId);
+      this.send(connection, {
+        type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED,
+        lookupId: command.lookupId,
+        ...(skillId ? { skillId } : {}),
+      });
+      return [toCommandResultGlyphHostEvent(requestId)];
+    }
     const controller = new AbortController();
     await record.runtime.handle(command, {
       windowId: connection.identity.windowId,

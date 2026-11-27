@@ -18,6 +18,7 @@ import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.j
 import { toToolActivityPreview } from '#src/chat/toToolActivityPreview.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
 import { GlyphContextAttachmentKind } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import type { ChatTurnOptions } from '#src/chat/ChatTurnOptions.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
 import type { ShellCommandSummary } from '#src/shell/ShellCommandSummary.js';
 import { toShellCommandSummary } from '#src/shell/toShellCommandSummary.js';
@@ -174,6 +175,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     });
   }
 
+  resolveSkillReference(id: string): string | undefined {
+    return this.options.skills?.resolveReference(id)?.id;
+  }
+
   /** Rebuild reconnect state from live reviews so missed notifications cannot leave stale decisions. */
   async snapshot(): Promise<GlyphRuntimeSnapshot> {
     const instructionSources = this.options.instructionCatalog
@@ -306,6 +311,22 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     );
     this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
     return summary.goal!;
+  }
+
+  private restoredOptions(options: ChatTurnOptions): ChatTurnOptions {
+    if (!options.skillIds?.length) return options;
+    const ids = new Map(options.skillIds.map(id => [id, this.resolveSkillReference(id) ?? id]));
+    return {
+      ...options,
+      skillIds: [...new Set(ids.values())],
+      ...(options.referenceSpans
+        ? {
+            referenceSpans: options.referenceSpans.map(span =>
+              span.kind === 'skill' && ids.has(span.sourceId) ? { ...span, sourceId: ids.get(span.sourceId)! } : span,
+            ),
+          }
+        : {}),
+    };
   }
 
   private async dispatch(command: GlyphRuntimeCommand): Promise<void> {
@@ -487,7 +508,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
               runs: [...this.runs.values()].filter(run => run.chatId === source.id),
               draft: {
                 text: turn.userText,
-                ...(turn.options ? { options: turn.options } : {}),
+                ...(turn.options ? { options: this.restoredOptions(turn.options) } : {}),
                 attachments: (turn.attachments ?? []).map(attachment => ({
                   kind:
                     Object.values(GlyphContextAttachmentKind).find(kind => kind === attachment.source?.kind) ??

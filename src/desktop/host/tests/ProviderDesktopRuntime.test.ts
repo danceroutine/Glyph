@@ -1,5 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import { aSkillDraft, aSkillLifecycle } from '#src/skills/tests/fixtures/aSkillLifecycle.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
@@ -81,6 +83,7 @@ async function fixture(
   ownerWindowId = 'owner',
   reviews?: ProposalReviewManager,
   extras: {
+    readonly skills?: SkillCatalog;
     readonly agentReviews?: AgentReviewService;
     readonly trusted?: boolean;
     readonly skillManager?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skillManager'];
@@ -215,6 +218,7 @@ async function fixture(
       events.push(event);
     },
     ownerWindowId,
+    ...(extras.skills ? { skills: extras.skills } : {}),
     ...(extras.trusted === undefined ? {} : { trusted: extras.trusted }),
     ...(extras.agentReviews ? { agentReviews: extras.agentReviews } : {}),
     ...(extras.refreshCatalogs ? { refreshCatalogs: extras.refreshCatalogs } : {}),
@@ -2189,10 +2193,27 @@ describe(ProviderDesktopRuntime, () => {
         mode: AgentModeID.AGENT,
       };
       const range = { start: { line: 1, column: 1 }, end: { line: 2, column: 1 } };
+      const descriptor = aSkillDescriptor();
+      const skills = new SkillCatalog([
+        {
+          id: descriptor.origin.id,
+          origin: descriptor.origin,
+          discover: async () => [descriptor],
+          capture: async () => aSkillPackage(),
+          refreshIndex: async () => {},
+          matchesLegacyId: (_, id) => id === 'old',
+        },
+      ]);
+      const spans = [
+        { kind: 'skill' as const, sourceId: 'old', label: 'first', revision: 'captured', from: 0, to: 1 },
+        { kind: 'rule' as const, sourceId: 'rule', label: 'second', revision: 'r', from: 1, to: 2 },
+        { kind: 'skill' as const, sourceId: 'unselected', label: 'third', revision: 'u', from: 2, to: 3 },
+      ];
       const record = chatRecord({
         transcript: [
           {
             userText: 'First',
+            options: { skillIds: ['old'] },
             attachmentPaths: [],
             assistantText: 'One',
             reasoningSummary: '',
@@ -2205,7 +2226,12 @@ describe(ProviderDesktopRuntime, () => {
             assistantText: 'Two',
             reasoningSummary: '',
             createdAt: '2026-10-02T00:00:00.000Z',
-            options: { turnId: 'second', mode: AgentModeID.PLAN },
+            options: {
+              turnId: 'second',
+              mode: AgentModeID.PLAN,
+              skillIds: ['old', descriptor.id, 'absent'],
+              referenceSpans: spans,
+            },
             checkpoints: { before: checkpoint, after: checkpoint },
             attachments: [
               { path: 'plain.ts', text: 'plain', revision: 'r1', byteOrderMark: false, byteLength: 5 },
@@ -2236,7 +2262,7 @@ describe(ProviderDesktopRuntime, () => {
           },
         ],
       });
-      const harness = await fixture(async () => {}, 'owner', undefined, { records: [record] });
+      const harness = await fixture(async () => {}, 'owner', undefined, { records: [record], skills });
       try {
         await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'second' });
         expect(harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)).toEqual({
@@ -2245,7 +2271,12 @@ describe(ProviderDesktopRuntime, () => {
           runs: [expect.objectContaining({ runId: `${record.id}:history:0`, userText: 'First' })],
           draft: {
             text: 'Second',
-            options: { turnId: 'second', mode: AgentModeID.PLAN },
+            options: {
+              turnId: 'second',
+              mode: AgentModeID.PLAN,
+              skillIds: [descriptor.id, 'absent'],
+              referenceSpans: [{ ...spans[0], sourceId: descriptor.id }, ...spans.slice(1)],
+            },
             attachments: [
               {
                 kind: GlyphContextAttachmentKind.FILE,

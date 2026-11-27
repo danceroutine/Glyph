@@ -24,6 +24,7 @@ export interface SkillDiscoveryLocation {
     signal?: AbortSignal,
   ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
   readonly packageId?: (directory: string) => string;
+  readonly matchesLegacyId?: (directory: string, id: string, budget: { remaining: number }) => boolean;
   readonly uriForPath: (path: string) => string;
   /** Optional package-scoped inventory for native indexes. */
   readonly captureFiles?: (
@@ -46,6 +47,10 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
   constructor(private readonly location: SkillDiscoveryLocation) {
     this.origin = location.origin;
     this.id = this.origin.id;
+  }
+
+  matchesLegacyId(directory: string, id: string, budget: { remaining: number }): boolean {
+    return this.location.matchesLegacyId?.(directory, id, budget) ?? false;
   }
 
   scopePathKey(path: string): string {

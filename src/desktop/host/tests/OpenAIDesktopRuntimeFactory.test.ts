@@ -1,6 +1,8 @@
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { testPackageMutations } from '#src/skills/tests/fixtures/testPackageMutations.js';
 import type { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
+import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
+import { skillPackageId } from '#src/skills/skillPackageId.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile, realpath } from 'node:fs/promises';
@@ -1347,19 +1349,25 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const alias = join(dirname(outer), 'alias');
       await symlink(outer, alias);
 
+      const old = skillPackageId(new ProjectSkillIdentity(outer, '.glyph').originId, 'inner/.glyph/skills/workflow');
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({ truncated: false } as never);
       const original = (await (await fixture.create([outer])).snapshot()).skills!;
       expect(original).toMatchObject([{ name: 'workflow', scope: 'inner' }]);
       for (const folders of [
         [outer, inner, alias],
         [inner, alias, outer],
       ]) {
-        const skills = (await (await fixture.create(folders)).snapshot()).skills!;
+        const runtime = await fixture.create(folders);
+        const skills = (await runtime.snapshot()).skills!;
+        expect(runtime.resolveSkillReference(old)).toBe(original[0]!.id);
         expect(skills).toMatchObject([{ id: original[0]!.id, name: 'workflow', scope: 'inner' }]);
         const turn = await captured.providerFactories.at(-1)![4]!.beginTurn({
           turnId: 'skill-scope',
+          skillIds: [old, original[0]!.id],
           attachmentPaths: ['alias/inner/src/file.ts'],
         });
         expect(turn.initialEnvelope().skillCandidates?.map(skill => skill.id)).toEqual([original[0]!.id]);
+        expect(turn.initialEnvelope().skills?.map(skill => skill.descriptor.id)).toEqual([original[0]!.id]);
       }
     });
     it('refreshes and captures user and project skills through their owning indexes', async () => {

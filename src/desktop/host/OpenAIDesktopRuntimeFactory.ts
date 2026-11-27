@@ -390,6 +390,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               skillIdentities.set(identity.originId, identity);
               return new FileSkillDiscoveryProvider({
                 packageId: directory => identity.forDirectory(directory),
+                matchesLegacyId: (directory, previousId, budget) =>
+                  identity.matchesLegacyId(directory, previousId, budget),
                 origin: {
                   id: identity.originId,
                   label: `${part.name} ${location} skill`,

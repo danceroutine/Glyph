@@ -2,7 +2,7 @@ import type { GlyphDesktopSnapshot } from '#src/desktop/protocol/events/GlyphDes
 import type { GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import type { GlyphWorkbenchCommand, GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
 
-export type GlyphRuntimeCommand = Exclude<
+export type GlyphAttachedCommand = Exclude<
   GlyphWorkbenchCommand,
   {
     readonly type:
@@ -10,6 +10,11 @@ export type GlyphRuntimeCommand = Exclude<
       | GlyphWorkbenchCommandType.REQUEST_SNAPSHOT
       | GlyphWorkbenchCommandType.DETACH;
   }
+>;
+
+export type GlyphRuntimeCommand = Exclude<
+  GlyphAttachedCommand,
+  { readonly type: GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE }
 >;
 
 export type GlyphRuntimeSnapshot = Omit<GlyphDesktopSnapshot, 'ownerWindowId' | 'readOnly' | 'sequence'>;
@@ -20,6 +25,7 @@ export type GlyphRuntimeSnapshot = Omit<GlyphDesktopSnapshot, 'ownerWindowId' | 
  */
 export interface GlyphDesktopWorkspaceRuntime {
   snapshot(): Promise<GlyphRuntimeSnapshot>;
+  resolveSkillReference?(id: string): string | undefined;
   handle(
     command: GlyphRuntimeCommand,
     context: {
