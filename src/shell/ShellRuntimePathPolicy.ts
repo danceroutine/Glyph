@@ -35,7 +35,7 @@ export function pathsOverlap(left: string, right: string): boolean {
   );
 }
 
-function resolveAvailableIdentity(path: string): string {
+export function resolveAvailableIdentity(path: string): string {
   let existing = resolve(path);
   const missing: string[] = [];
   while (!existsSync(existing)) {
