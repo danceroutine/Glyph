@@ -43,6 +43,8 @@ impl<M: Mounts> WorkspaceView<M> {
         protected: &[PathBuf],
         private: &[PathBuf],
     ) -> Result<Vec<OsString>, SandboxError> {
+        // Enter the projection namespace before opening directory or file descriptors for bind mounts.
+        self.mounts.start(root)?;
         let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         let mut directory = open("/", flags, Mode::empty()).map_err(io::Error::from)?;
         for component in root.components().filter_map(|p| {
@@ -55,7 +57,6 @@ impl<M: Mounts> WorkspaceView<M> {
             directory =
                 openat(&directory, component, flags, Mode::empty()).map_err(io::Error::from)?;
         }
-        self.mounts.start(root)?;
         let writable = request.profile == SandboxProfile::WorkspaceWrite;
         self.directory(
             root,
