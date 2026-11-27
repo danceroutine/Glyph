@@ -1,6 +1,5 @@
 import { describe, expect, beforeEach, it, onTestFinished, vi, type Mock } from 'vitest';
 import { mkdtemp, mkdir, symlink, rm, realpath, rename } from 'node:fs/promises';
-import { Deferred } from '#src/shared/Deferred.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';

@@ -19,7 +19,11 @@ export class PreparedTurnContext {
     return [...this.contributions.values()].flatMap(part => part.disclosurePins?.(context) ?? []);
   }
   /** Bind the replay policy applied to this request to its final transport handoff, including SDK retries. */
-  prepareReplay() {
+  prepareReplay(): {
+    readonly session: PreparedTurnContext;
+    readonly filter: TurnContextContribution['replayFilter'];
+    readonly assertCurrent: () => void;
+  } {
     const policies = [...this.contributions.values()].map(part => ({ part, filter: part.replayFilter }));
     const filters = policies.flatMap(({ filter }) => filter ?? []);
     return {
