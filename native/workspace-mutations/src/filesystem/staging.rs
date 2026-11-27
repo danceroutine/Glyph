@@ -1,9 +1,10 @@
 use super::{
-    open_directories, open_parent, relative_components, Failure, Mode, OwnedFd, DIRECTORY,
+    open_child, open_directories, open_parent, relative_components, Failure, Mode, OwnedFd,
+    DIRECTORY,
 };
 use crate::{StagedDirectory, StagedFile};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use rustix::fs::{fchmod, fstat, fsync, mkdirat, openat, OFlags};
+use rustix::fs::{fchmod, fstat, fsync, mkdirat, OFlags};
 use rustix::io::dup;
 use std::collections::HashSet;
 use std::io::Write;
@@ -40,7 +41,7 @@ pub(super) fn create_stage(root: &OwnedFd, relative: &str) -> Result<(), Failure
     };
     let staging = staging_root(root)?;
     mkdirat(&staging, *id, Mode::RWXU)?;
-    check_private(&openat(&staging, *id, DIRECTORY, Mode::empty())?)?;
+    check_private(&open_child(&staging, *id, DIRECTORY, Mode::empty())?)?;
     fsync(staging)?;
     Ok(())
 }
@@ -74,10 +75,10 @@ pub(super) fn materialize(
         }
     }
     let staging = staging_root(root)?;
-    let transaction = openat(staging, *id, DIRECTORY, Mode::empty())?;
+    let transaction = open_child(&staging, *id, DIRECTORY, Mode::empty())?;
     check_private(&transaction)?;
     mkdirat(&transaction, "package", Mode::RWXU)?;
-    let package = openat(&transaction, "package", DIRECTORY, Mode::empty())?;
+    let package = open_child(&transaction, "package", DIRECTORY, Mode::empty())?;
     let mut sorted = directories.iter().collect::<Vec<_>>();
     sorted.sort_unstable_by_key(|directory| directory.path.len());
     for directory in sorted.iter().filter(|directory| !directory.path.is_empty()) {
@@ -108,7 +109,8 @@ pub(super) fn materialize(
         let (parent, name) = open_parent(&package, &path)?;
         let flags =
             OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::WRONLY | OFlags::CLOEXEC;
-        let mut handle = std::fs::File::from(openat(parent, name, flags, Mode::RUSR | Mode::WUSR)?);
+        let mut handle =
+            std::fs::File::from(open_child(&parent, name, flags, Mode::RUSR | Mode::WUSR)?);
         handle.write_all(&bytes)?;
         fchmod(&handle, permissions)?;
         fsync(handle)?;

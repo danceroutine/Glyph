@@ -74,6 +74,14 @@ it('rejects prefix collisions, deep resources and non-activatable manifests befo
     expect(() => aSkillDraft(body)).toThrow();
   }
 });
+it('requires a mount-confined metadata inventory before reading package contents for review', async () => {
+  const { location, store, manager, install } = await aSkillLifecycle();
+  const skill = await install();
+  const bytes = vi.spyOn(store, 'readBytes');
+  vi.spyOn(location.mutations, 'assertReplaceableMetadata').mockRejectedValue(new Error('EXDEV'));
+  await expect(manager.prepareRemoval(skill.id)).rejects.toThrow('EXDEV');
+  expect(bytes).not.toHaveBeenCalled();
+});
 it('rejects a metadata-only change between preview and replacement without retiring the original tree', async () => {
   const { root, location, manager, install } = await aSkillLifecycle();
   const skill = await install();

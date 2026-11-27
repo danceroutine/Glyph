@@ -81,10 +81,8 @@ fn rejects_changed_cleanup_identity_and_device() {
     let meta = fstat(open(dir.path(), DIRECTORY, Mode::empty()).unwrap()).unwrap();
     let mut changed = meta;
     changed.st_dev = changed.st_dev.wrapping_add(1);
-    assert_eq!(
-        check_cleanup_device(&meta, &changed).unwrap_err().code,
-        "EXDEV"
-    );
+    #[cfg(target_os = "macos")]
+    assert_eq!(check_device(&meta, &changed).unwrap_err(), Errno::XDEV);
     assert_eq!(
         check_cleanup_identity(&meta, &changed).unwrap_err().code,
         "ESTALE"

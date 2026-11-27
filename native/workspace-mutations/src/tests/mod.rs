@@ -55,6 +55,68 @@ mod supported {
         json!({"operation":"rename_exclusive","sourceRelative":source,"targetRelative":target})
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an unprivileged Linux user and mount namespace"]
+    fn preserves_the_contents_and_mode_of_nested_bind_mounts() {
+        use std::process::Command;
+        const CHILD: &str = "GLYPH_TEST_NESTED_PACKAGE_MOUNT";
+        if std::env::var_os(CHILD).is_none() {
+            let result = Command::new("unshare")
+                .arg("-Urm")
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::supported::preserves_the_contents_and_mode_of_nested_bind_mounts",
+                    "--ignored",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success()
+                    && String::from_utf8_lossy(&result.stdout).contains("1 passed"),
+                "{result:?}"
+            );
+            return;
+        }
+        let fixture = tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let source = root.join("external");
+        let package = root.join("package");
+        let nested = package.join("asset");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(source.join("marker"), b"preserved").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o500)).unwrap();
+        assert!(Command::new("mount")
+            .arg("--bind")
+            .arg(&source)
+            .arg(&nested)
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(
+            fs::metadata(&source).unwrap().dev(),
+            fs::metadata(&package).unwrap().dev()
+        );
+        for op in [
+            json!({"operation":"assert_replaceable_metadata","relative":"package","recursive":true}),
+            json!({"operation":"assert_replaceable_metadata","relative":"package/asset/marker","recursive":false}),
+            remove("package"),
+        ] {
+            assert_eq!(run(&request(&root, op))["code"], "EXDEV");
+        }
+        assert_eq!(fs::metadata(&source).unwrap().mode() & 0o777, 0o500);
+        assert_eq!(fs::read(source.join("marker")).unwrap(), b"preserved");
+        assert!(Command::new("umount")
+            .arg(nested)
+            .status()
+            .unwrap()
+            .success());
+        fs::set_permissions(source, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
     #[test]
     fn checks_file_and_directory_metadata_before_publication() {
         let fixture = tempdir().unwrap();

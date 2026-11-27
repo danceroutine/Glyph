@@ -39,6 +39,7 @@ export interface SkillPackageLocation {
 type PackageFiles = ReadonlyMap<string, SkillPackageFile>;
 interface PackageTree {
   rootMode?: number;
+  metadata?: string;
   files: PackageFiles;
   directories: ReadonlyMap<string, number>;
 }
@@ -282,7 +283,7 @@ export class SkillPackageManager {
     const rootMode = before.rootMode ?? (parentMode ?? (await newDirectoryMode())) & 0o777;
     const directories = draft?.packageDirectories(before.directories, rootMode) ?? new Map<string, number>();
     const expected = before.files.size > 0 ? packageRevision(before.files, before.directories) : null;
-    const expectedMetadata = expected ? await location.mutations.assertReplaceableMetadata(directory, true) : undefined;
+    const expectedMetadata = before.metadata;
     const preview: Pending['preview'] = {
       id: randomUUID(),
       action: draft ? (before.files.size > 0 ? 'update' : 'install') : 'remove',
@@ -310,6 +311,7 @@ export class SkillPackageManager {
     const root = await this.target(location, directory);
     const stat = await optionalStat(root);
     if (!stat) return { files: new Map(), directories: new Map() };
+    const metadata = await location.mutations.assertReplaceableMetadata(directory, true);
     const prefix = directory + '/';
     const inventory = await inventoryPackage(root);
     await this.assertIndexed(location, directory, inventory.files);
@@ -330,7 +332,7 @@ export class SkillPackageManager {
       }
       files.set(path, raw);
     }
-    return { files, directories, rootMode: stat.mode & 0o777 };
+    return { files, directories, rootMode: stat.mode & 0o777, metadata };
   }
   private async assertDirectories(location: SkillPackageLocation, directory: string, extra: readonly string[]) {
     if (extra.length === 0) return;

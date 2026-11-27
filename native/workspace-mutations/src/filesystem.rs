@@ -112,7 +112,7 @@ pub(super) fn execute(request: &Request) -> Result<Option<String>, Failure> {
                     let mut remaining = MAX_REMOVE_ENTRIES;
                     let leaf = CString::new(name).expect("validated path component");
                     if let [".skill-staging", _] = components.as_slice() {
-                        match openat(&parent, &leaf, DIRECTORY, Mode::empty()) {
+                        match open_child(&parent, &leaf, DIRECTORY, Mode::empty()) {
                             Ok(stage) => staging::check_private(&stage)?,
                             Err(Errno::NOENT) => return Ok(None),
                             Err(error) => return Err(error.into()),
@@ -132,7 +132,9 @@ fn open_root(root: &str, expected: &Identity) -> Result<OwnedFd, Failure> {
     let mut fd = open("/", DIRECTORY, Mode::empty())?;
     if !relative.is_empty() {
         let components = components(relative)?;
-        fd = open_directories(fd, &components, None)?;
+        for name in components {
+            fd = openat(&fd, name, DIRECTORY, Mode::empty())?;
+        }
     }
     let stat = fstat(&fd)?;
     if stat.st_dev.to_string() != expected.device || stat.st_ino.to_string() != expected.inode {
@@ -165,13 +167,32 @@ fn relative_components(path: &str) -> Result<Vec<&str>, Failure> {
     components(path)
 }
 
+/// Each component below the authorized workspace must stay on its parent's mount.
+fn open_child(
+    parent: &OwnedFd,
+    name: impl rustix::path::Arg,
+    flags: OFlags,
+    mode: Mode,
+) -> rustix::io::Result<OwnedFd> {
+    #[cfg(target_os = "linux")]
+    {
+        rustix::fs::openat2(parent, name, flags, mode, rustix::fs::ResolveFlags::NO_XDEV)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let child = openat(parent, name, flags, mode)?;
+        check_device(&fstat(&child)?, &fstat(parent)?)?;
+        Ok(child)
+    }
+}
+
 fn open_directories(
     mut parent: OwnedFd,
     path: &[&str],
     create: Option<Mode>,
 ) -> Result<OwnedFd, Failure> {
     for name in path {
-        parent = match openat(&parent, *name, DIRECTORY, Mode::empty()) {
+        parent = match open_child(&parent, *name, DIRECTORY, Mode::empty()) {
             Err(Errno::NOENT) if create.is_some() => {
                 // Another initializer can publish the same directory. Re-open and verify its actual type in both cases.
                 match mkdirat(&parent, *name, create.expect("requested creation")) {
@@ -179,7 +200,7 @@ fn open_directories(
                     Err(error) => return Err(error.into()),
                 }
                 fsync(&parent)?;
-                openat(&parent, *name, DIRECTORY, Mode::empty())?
+                open_child(&parent, *name, DIRECTORY, Mode::empty())?
             }
             other => other?,
         };
@@ -234,9 +255,10 @@ fn rename_pinned(
     Ok(())
 }
 
-fn check_cleanup_device(opened: &Stat, parent: &Stat) -> Result<(), Failure> {
+#[cfg(target_os = "macos")]
+fn check_device(opened: &Stat, parent: &Stat) -> rustix::io::Result<()> {
     if opened.st_dev != parent.st_dev {
-        return Err(Errno::XDEV.into());
+        return Err(Errno::XDEV);
     }
     Ok(())
 }
@@ -265,7 +287,7 @@ fn inspect_metadata(
         return Err(Failure::invalid());
     }
     *remaining -= 1;
-    let fd = openat(
+    let fd = open_child(
         parent,
         name,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
@@ -323,13 +345,12 @@ fn remove_entry(
         ));
     }
     *remaining -= 1;
-    let flags = match openat(parent, name, DIRECTORY, Mode::empty()) {
+    let flags = match open_child(parent, name, DIRECTORY, Mode::empty()) {
         Err(Errno::NOENT) => return Ok(()),
         Err(Errno::NOTDIR | Errno::LOOP) => AtFlags::empty(),
         Err(error) => return Err(error.into()),
         Ok(directory) => {
             let opened = fstat(&directory)?;
-            check_cleanup_device(&opened, &fstat(parent)?)?;
             if opened.st_uid == rustix::process::geteuid().as_raw()
                 && opened.st_mode & 0o700 != 0o700
             {
