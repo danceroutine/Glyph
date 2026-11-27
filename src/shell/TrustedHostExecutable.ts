@@ -19,7 +19,7 @@ export function outsideWorkspace(path: string, roots: readonly string[]): string
 
 /** Resolves the selected installation before it is displayed or passed to a child process. */
 export function trustedHostExecutable(name: HostExecutable, workspaceRoots: readonly string[]): string {
-  const roots = workspaceRoots.map(resolveAvailableIdentity);
+  const roots = workspaceRoots.map(root => resolveAvailableIdentity(root));
   const candidates =
     process.platform === 'win32'
       ? name === 'git'
