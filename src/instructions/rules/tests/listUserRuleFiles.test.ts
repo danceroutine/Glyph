@@ -5,7 +5,7 @@ describe(listUserRuleFiles, () => {
   it('qualifies rules-directory index results for the user store and preserves truncation', async () => {
     const index = { glob: vi.fn(async () => ({ files: ['style.mdc', 'nested/other.mdc'], truncated: true })) };
     await expect(listUserRuleFiles(index, 10)).resolves.toEqual({ files: ['rules/style.mdc'], truncated: true });
-    expect(index.glob).toHaveBeenCalledExactlyOnceWith('*.mdc', { limit: 10 });
+    expect(index.glob).toHaveBeenCalledExactlyOnceWith('*.mdc', { limit: 10, rootFilesOnly: true });
   });
 
   it('preserves empty results and propagates index failures without a disk fallback', async () => {

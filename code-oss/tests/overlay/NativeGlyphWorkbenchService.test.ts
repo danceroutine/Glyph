@@ -1,6 +1,9 @@
 import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { AgentModeID } from '#glyph/protocol/index.js';
-import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
+import {
+  GlyphContextAttachmentKind,
+  type GlyphContextAttachment,
+} from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import { GlyphDesktopErrorCode } from '#glyph/protocol/GlyphDesktopError.js';
 import type { GlyphAnnotation } from '#glyph/protocol/events/GlyphAnnotation.js';
 import type { GlyphChatSummary } from '#glyph/protocol/events/GlyphChatSummary.js';
@@ -1451,6 +1454,60 @@ describe(NativeGlyphWorkbenchService, () => {
       });
       await test.service.buildPlan('alpha', approved);
       expect(test.service.state.buildingPlanIds).toBeUndefined();
+    });
+
+    it('round-trips exact slash badges when a new-chat draft is restored from workspace storage', async () => {
+      const first = await workbench({ saved: { 'glyph.selectedChat': '' } });
+      const composer = first.service.composer;
+      composer.setDraft('/Same and /Same');
+      const rule = attachment({
+        kind: GlyphContextAttachmentKind.RULE,
+        ruleId: 'manual',
+        path: 'Same',
+        uri: 'glyph-rule:manual',
+        contentRevision: 'r1',
+        text: '',
+      });
+      const skill = attachment({
+        kind: GlyphContextAttachmentKind.RULE,
+        ruleId: 'selected',
+        path: 'Same',
+        uri: 'glyph-rule:selected',
+        contentRevision: 's1',
+        text: '',
+      });
+      composer.setDocument({
+        parts: [
+          { type: 'attachment', attachment: rule },
+          { type: 'text', text: ' and ' },
+          { type: 'attachment', attachment: skill },
+        ],
+        from: 0,
+        to: 0,
+      });
+      const saved = first.storage.get('glyph.newChatDraft');
+      expect(saved).toMatchObject({
+        text: '/Same and /Same',
+        references: [
+          { kind: 'rule', from: 0, to: 5 },
+          { kind: 'rule', from: 10, to: 15 },
+        ],
+      });
+      const second = await workbench({ saved: { 'glyph.selectedChat': '', 'glyph.newChatDraft': saved } });
+      const send = vi.fn(async () => {});
+      await second.service.composer.submit(send);
+      expect(send).toHaveBeenCalledWith(
+        '/Same and /Same',
+        [],
+        expect.objectContaining({
+          manualRuleIds: ['manual', 'selected'],
+
+          referenceSpans: [
+            { kind: 'rule', sourceId: 'manual', label: 'Same', revision: 'r1', from: 0, to: 5 },
+            { kind: 'rule', sourceId: 'selected', label: 'Same', revision: 's1', from: 10, to: 15 },
+          ],
+        }),
+      );
     });
 
     it.each([

@@ -62,6 +62,25 @@ describe(AgentRuleInstructionProvider, () => {
       });
   });
 
+  it('watches an authorized reference even when its content read exceeds the limit', async () => {
+    const workspace = {
+      normalizePath: (path: string) => path,
+      read: async () => ({ text: '---\nreferences: [guide.md]\n---\nMain', revision: '1' }),
+      readOptional: async () => {
+        throw new Error('Too large');
+      },
+    };
+    const rules = new AgentRuleInstructionProvider(
+      workspace as never,
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+      async () => ({ files: ['.glyph/rules/base.mdc'], truncated: false }),
+    );
+    expect((await rules.discover())[0]).toMatchObject({
+      status: 'error',
+      references: ['guide.md'],
+      message: 'Too large',
+    });
+  });
   it('retains parsed identity and prevents another root from supplying a referenced file', async () => {
     const readOptional = vi.fn();
     const provider = new AgentRuleInstructionProvider(

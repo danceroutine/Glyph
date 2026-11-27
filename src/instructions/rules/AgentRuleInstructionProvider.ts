@@ -213,10 +213,10 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     // Source reads consume the file allowance and referenced reads consume the separate edge allowance.
     if (maxBytes <= 0 || (!dependencies && --budget.reads < 0))
       throw new Error('Instruction discovery read budget exhausted.');
+    dependencies?.add(path);
     const snapshot = dependencies
       ? await this.workspace.readOptional(path, { maxBytes })
       : await this.workspace.read(path, { maxBytes });
-    dependencies?.add(path);
     if (!snapshot) throw new Error(`Missing rule reference: ${path}`);
     budget.readBytes -= snapshot.byteLength ?? Buffer.byteLength(snapshot.text);
     return snapshot;
