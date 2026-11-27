@@ -75,7 +75,12 @@ it.describe('Aliased and overlapping project skill roots', () => {
     expect(await readFile(join(glyph.workspace, '.glyph/skills/example/SKILL.md'), 'utf8')).toBe(saved);
     if (await close.isVisible()) await close.click();
     await glyph.page.locator('.tab.dirty').first().click();
-    await glyph.command('View: Revert and Close Editor');
+    await editor.click();
+    await glyph.page.keyboard.press('ControlOrMeta+a');
+    await glyph.page.keyboard.insertText(saved);
+    await glyph.page.keyboard.press('ControlOrMeta+s');
+    await expect(glyph.page.locator('.tab.dirty')).toHaveCount(0);
+    expect(await readFile(join(glyph.workspace, '.glyph/skills/example/SKILL.md'), 'utf8')).toBe(saved);
     await glyph.command('Focus Glyph');
     await openSkills(glyph);
     await row.getByRole('button', { name: 'Uninstall', exact: true }).click();
@@ -437,6 +442,12 @@ it.describe('Human and agent skill management', () => {
     await settings.getByRole('button', { name: 'Preview package', exact: true }).click();
     await expect(settings.getByRole('alert')).toBeVisible();
     await expect(settings.getByRole('region', { name: 'Skill change preview' })).toHaveCount(0);
+    await settings.getByLabel('Name', { exact: true }).fill('2026');
+    await settings.getByRole('button', { name: 'Preview package', exact: true }).click();
+    const numeric = settings.getByRole('region', { name: 'Skill change preview' });
+    await expect(numeric).toBeVisible();
+    await expect(numeric).toContainText('2026');
+    await numeric.getByRole('button', { name: 'Discard preview', exact: true }).click();
     const row = settings.getByRole('listitem').filter({ hasText: 'Use for UI fixture examples' });
     await row.getByRole('button', { name: /Edit example/u }).click();
     await expect(glyph.page.getByRole('tab', { name: /SKILL.md/u }).first()).toBeVisible();
