@@ -182,15 +182,13 @@ mod tests {
         assert!(linux_replacement_flags(Ok(IFlags::NODUMP)).unwrap());
         assert!(linux_replacement_flags(Ok(IFlags::from_bits_retain(0x4000_0000))).unwrap());
         let file = tempfile::NamedTempFile::new().unwrap();
-        if let Ok(original) = ioctl_getflags(&file) {
-            if ioctl_setflags(&file, original | IFlags::NODUMP).is_ok() {
-                assert_access_metadata(&file).unwrap();
-                assert_eq!(
-                    assert_replaceable(&file).unwrap_err().kind(),
-                    io::ErrorKind::Unsupported
-                );
-            }
-        }
+        let original = ioctl_getflags(&file).unwrap();
+        ioctl_setflags(&file, original | IFlags::NODUMP).unwrap();
+        assert_access_metadata(&file).unwrap();
+        assert_eq!(
+            assert_replaceable(&file).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
     }
 
     #[cfg(target_os = "macos")]

@@ -14,6 +14,13 @@ describe(WorkspaceAccessPolicy, () => {
     expect(policy.exclusionsFor('/Project/private-other', true).privateRoot).toBe(false);
     expect(policy.exclusionsFor('/Project/.SKILL-STAGING', false).privateRoot).toBe(true);
     expect(policy.exclusionsFor('/Project/.SKILL-STAGING', true).privateRoot).toBe(false);
+    for (const spelling of ['.ſkill-ﬅaging', '.sKill-ﬆaging']) {
+      expect(policy.exclusionsFor('/Project/' + spelling, false).privateRoot).toBe(true);
+      expect(policy.isIgnoredDirectory(spelling, false)).toBe(true);
+      expect(policy.isIgnoredDirectory(spelling, true)).toBe(false);
+    }
+    expect(policy.isIgnoredDirectory('DIST', false)).toBe(true);
+    expect(policy.isIgnoredDirectory('.skill-staging', true)).toBe(true);
     expect(new WorkspaceAccessPolicy({}, ['/']).exclusionsFor('/nested', true).privateRoot).toBe(true);
   });
 

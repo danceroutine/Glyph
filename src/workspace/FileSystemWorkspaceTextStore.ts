@@ -509,9 +509,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   private isIgnoredDirectory(name: string): boolean {
-    return this.options.accessPolicy.ignoredDirectories.some(value =>
-      this.caseSensitive ? value === name : value.toLowerCase() === name.toLowerCase(),
-    );
+    return this.options.accessPolicy.isIgnoredDirectory(name, this.caseSensitive);
   }
 
   private isExcludedPath(path: string): boolean {
