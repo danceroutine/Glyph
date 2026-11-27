@@ -111,6 +111,7 @@ async function main(): Promise<void> {
     indexExecutable,
     shellSandboxExecutable,
     accessPolicy,
+    join(userDirectory, 'skills'),
   );
   const ui = new TerminalUI(process.stdin, process.stdout, process.stderr, pathIndex);
   const shellAuthorizer = new ShellCommandAuthorizer(
@@ -252,6 +253,7 @@ async function createProjectRuntime(
   indexExecutable: string,
   shellSandboxExecutable: string,
   accessPolicy: WorkspaceAccessPolicy,
+  managedDirectory: string,
 ): Promise<{ workspace: WorkspaceTextStore; pathIndex: WorkspacePathIndex }> {
   const casing = await Promise.all(
     context.roots.map(root => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, root.path)),
@@ -269,6 +271,7 @@ async function createProjectRuntime(
     ];
     const workspace = new FileSystemWorkspaceTextStore(root.path, {
       physicalAccess: new NativeFilesystemMetadata(indexExecutable),
+      managedDirectories: [managedDirectory],
       caseSensitive: casing[i]!,
       excludedPaths,
       accessPolicy,

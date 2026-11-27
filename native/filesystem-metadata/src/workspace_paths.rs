@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Default)]
 pub struct WorkspacePaths {
     private: BTreeSet<PathBuf>,
+    managed: Option<BTreeSet<PathBuf>>,
     #[cfg(target_os = "linux")]
     mounts: Option<std::sync::Arc<fs::File>>,
 }
@@ -103,7 +104,15 @@ fn name_matches(path: &Path, expected: &str) -> bool {
 }
 
 fn private_name(path: &Path) -> bool {
-    name_matches(path, ".skill-staging")
+    name_matches(path, ".skill-staging") || name_matches(path, ".glyph-skill-run")
+}
+
+fn package_marker(path: &Path) -> bool {
+    name_matches(path, ".glyph") || name_matches(path, ".cursor")
+}
+
+fn managed_name(path: &Path) -> bool {
+    name_matches(path, "skills") && path.parent().is_some_and(package_marker)
 }
 
 /// Check physical spelling only when unequal components could be filesystem aliases.
@@ -134,7 +143,16 @@ fn contains(root: &Path, candidate: &Path) -> bool {
 
 impl WorkspacePaths {
     pub fn current(private: &[PathBuf]) -> io::Result<Self> {
-        if private.iter().any(|p| !p.is_absolute()) {
+        Self::for_operation(private, None)
+    }
+
+    /// Managed package directories remain readable during ordinary project operations.
+    pub fn for_operation(private: &[PathBuf], managed: Option<&[PathBuf]>) -> io::Result<Self> {
+        if private
+            .iter()
+            .chain(managed.unwrap_or_default())
+            .any(|p| !p.is_absolute())
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Workspace access boundaries must be absolute.",
@@ -146,6 +164,14 @@ impl WorkspacePaths {
                 .iter()
                 .map(|path| canonical_location(path))
                 .collect::<io::Result<_>>()?,
+            managed: managed
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .map(|path| canonical_location(path))
+                        .collect::<io::Result<_>>()
+                })
+                .transpose()?,
             #[cfg(target_os = "linux")]
             mounts: None,
         };
@@ -158,6 +184,18 @@ impl WorkspacePaths {
             let table = crate::mount_table::MountTable::parse(&data)?;
             for path in policy.private.clone() {
                 table.aliases(&path, true, &mut policy.private);
+            }
+            if let Some(paths) = &mut policy.managed {
+                for path in paths.clone() {
+                    table.aliases(&path, true, paths);
+                }
+                for (root, point) in table.locations() {
+                    if root.ancestors().chain(point.ancestors()).any(managed_name) {
+                        table.aliases(point, true, paths);
+                    } else if package_marker(root) || package_marker(point) {
+                        table.aliases(&point.join("skills"), true, paths);
+                    }
+                }
             }
             for (root, point) in table.locations() {
                 if root.ancestors().chain(point.ancestors()).any(private_name) {
@@ -186,7 +224,13 @@ impl WorkspacePaths {
     }
 
     pub fn excludes(&self, path: &Path) -> bool {
-        path.ancestors().any(private_name) || self.private.iter().any(|p| contains(p, path))
+        path.ancestors().any(private_name)
+            || self.private.iter().any(|p| contains(p, path))
+            || self.managed.as_ref().is_some_and(|paths| {
+                path.ancestors().any(managed_name)
+                    || package_marker(path)
+                    || paths.iter().any(|p| contains(p, path) || contains(path, p))
+            })
     }
 
     pub fn assert_path(&self, path: &Path, identity: Option<(&str, &str)>) -> io::Result<()> {

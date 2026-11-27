@@ -75,6 +75,7 @@ describe('glyph command line', () => {
         excludedPaths,
         accessPolicy,
         physicalAccess: cli.instances('NativeFilesystemMetadata')[0],
+        managedDirectories: ['/profiles/current/skills'],
       },
     ]);
     const mutationPolicy = cli.instances('ProjectToolRuntime')[0]?.args[5] as {

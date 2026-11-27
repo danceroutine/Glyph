@@ -661,7 +661,7 @@ impl ContextIndexService {
             .ok_or_else(ServiceError::not_initialized)?;
         let mut directories = Vec::new();
         if !index.policy.exclude_root {
-            let mut walk = workspace_walk(&index.root, &index.policy);
+            let mut walk = workspace_walk(&index.root, &index.policy)?;
             for (offset, entry) in walk.max_depth(Some(33)).build().enumerate() {
                 let entry = entry.map_err(|error| ServiceError::internal(error.to_string()))?;
                 if let Some(error) = entry.error() {
@@ -703,13 +703,18 @@ impl ContextIndexService {
             .known_paths
             .read()
             .map_err(|_| ServiceError::internal("The known-path set lock is poisoned."))?;
-        Ok(crate::skill_packages::list(
+        let physical = initialized.policy.physical()?;
+        let mut result = crate::skill_packages::list(
             &paths,
             marker,
             initialized.policy.case_sensitive,
             MAX_GLOB_LIMIT as usize,
             initialized.truncated.load(Ordering::Acquire),
-        ))
+        );
+        result
+            .files
+            .retain(|name| !physical.excludes(&initialized.root.join(name)));
+        stable_result(&physical, result)
     }
 
     pub(crate) fn glob(&self, params: GlobParams) -> Result<GlobResult, ServiceError> {

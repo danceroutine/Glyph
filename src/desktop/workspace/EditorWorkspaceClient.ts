@@ -7,7 +7,7 @@ import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEdit
  */
 export interface EditorWorkspaceClient {
   /** Resolves physical path aliases through the host's metadata-only workspace policy. */
-  canonicalPath(path: string): Promise<string>;
+  canonicalPath(path: string, mutation?: boolean): Promise<string>;
   request(request: GlyphEditorRequest, signal?: AbortSignal): Promise<GlyphEditorResponse>;
   listPaths(
     maxFiles: number,

@@ -13,7 +13,7 @@ export class NativeFilesystemMetadata implements FilesystemMetadata, HostFilesys
   async assertWorkspacePath(
     path: string,
     privatePaths: readonly string[],
-    options?: { readonly handle?: FileHandle },
+    options?: { readonly handle?: FileHandle; readonly managedDirectories?: readonly string[] },
   ): Promise<void> {
     const inode = await options?.handle?.stat({ bigint: true });
     const child = spawn(this.executable, ['--assert-workspace-path'], {
@@ -27,6 +27,7 @@ export class NativeFilesystemMetadata implements FilesystemMetadata, HostFilesys
         JSON.stringify({
           path,
           privatePaths,
+          managedDirectories: options?.managedDirectories,
           identity: inode && [String(inode.dev), String(inode.ino)],
         }),
         resolve,

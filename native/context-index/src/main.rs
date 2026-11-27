@@ -5,11 +5,14 @@ fn inspect_workspace_path() -> std::io::Result<()> {
     struct Request {
         path: PathBuf,
         private_paths: Vec<PathBuf>,
+        managed_directories: Option<Vec<PathBuf>>,
         identity: Option<[String; 2]>,
     }
     let req: Request = serde_json::from_reader(std::io::stdin().lock())?;
-    let access =
-        glyph_filesystem_metadata::workspace_paths::WorkspacePaths::current(&req.private_paths)?;
+    let access = glyph_filesystem_metadata::workspace_paths::WorkspacePaths::for_operation(
+        &req.private_paths,
+        req.managed_directories.as_deref(),
+    )?;
     access.assert_path(
         &req.path,
         req.identity

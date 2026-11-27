@@ -5,6 +5,6 @@ export interface WorkspacePathAccess {
   assertWorkspacePath(
     absolutePath: string,
     privatePaths: readonly string[],
-    options?: { readonly handle?: FileHandle },
+    options?: { readonly handle?: FileHandle; readonly managedDirectories?: readonly string[] },
   ): Promise<void>;
 }

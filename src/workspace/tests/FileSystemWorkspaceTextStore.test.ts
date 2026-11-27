@@ -55,7 +55,7 @@ describe(FileSystemWorkspaceTextStore, () => {
   it('admits each listed path and pins reads to the opened file before and after loading', async () => {
     const root = await workspaceRoot('glyph-physical-workspace-');
     const outside = join(root, 'excluded');
-    const checked: { path: string; handle?: FileHandle }[] = [];
+    const checked: { path: string; handle: FileHandle | undefined }[] = [];
     const disk = new FileSystemWorkspaceTextStore(root, {
       caseSensitive: true,
       excludedPaths: ['excluded'],
