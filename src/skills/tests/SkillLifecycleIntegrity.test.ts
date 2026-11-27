@@ -381,8 +381,13 @@ it('retains a candidate changed while rollback was moving it and checks that cop
 it('manages nested project markers with their physical spelling and keeps user installations direct children', async () => {
   const { root, state, location, provider, catalog, install } = await aSkillLifecycle();
   const skill = await install();
-  const directory = 'Work/.GLYPH/Skills/example';
-  await mkdir(join(root, 'Work/.GLYPH/Skills'), { recursive: true });
+  await mkdir(join(root, 'Work/.GLYPH/ſkills'), { recursive: true });
+  const folded = await stat(join(root, 'Work/.glyph/skills')).then(
+    () => true,
+    () => false,
+  );
+  const directory = (folded ? 'Work/.GLYPH/ſkills' : 'Work/.glyph/skills') + '/example';
+  await mkdir(join(root, directory, '..'), { recursive: true });
   await rename(join(root, skill.directory), join(root, directory));
   const paths = ['SKILL.md', 'assets/image.bin', 'references/notes.md'].map(path => directory + '/' + path);
   const project = {
@@ -404,7 +409,7 @@ it('manages nested project markers with their physical spelling and keeps user i
     catalog,
     state,
   );
-  await expect(sensitive.prepareRemoval(skill.id)).rejects.toThrow('outside its managed location');
+  expect((await sensitive.prepareRemoval(skill.id)).destination.path).toBe(join(root, directory));
   await projectManager.apply(review.id);
   await expect(stat(join(root, directory))).rejects.toMatchObject({ code: 'ENOENT' });
 });
