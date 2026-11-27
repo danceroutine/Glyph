@@ -42,6 +42,7 @@ enum Request {
     Search(SearchParams),
     Glob(GlobParams),
     FilterPaths(Vec<String>),
+    AssertReplaceableMetadata(String),
     ContentSearch(ContentSearchParams),
     Cancel(CancelParams),
     Refresh,
@@ -284,6 +285,10 @@ fn service_loop(
                         result_response(id, service.search(params, latest_generation)),
                         false,
                     ),
+                    Request::AssertReplaceableMetadata(name) => (
+                        result_response(id, service.assert_replaceable_metadata(name)),
+                        false,
+                    ),
                     Request::FilterPaths(paths) => {
                         (result_response(id, service.filter_paths(paths)), false)
                     }
@@ -400,6 +405,11 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
         )?),
         "search" => Request::Search(decode_params(
             "search",
+            envelope.params,
+            Some(envelope.id.clone()),
+        )?),
+        "assertReplaceableMetadata" => Request::AssertReplaceableMetadata(decode_params(
+            "assertReplaceableMetadata",
             envelope.params,
             Some(envelope.id.clone()),
         )?),

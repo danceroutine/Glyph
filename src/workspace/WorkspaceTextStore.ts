@@ -66,8 +66,7 @@ export interface WorkspaceTextStore {
    * protecting `docs/` would wave through `DOCS/plan.md` on macOS if only the agent's spelling were checked.
    *
    * Canonical paths are absolute, so policies must accept both forms. Symlinks never reach this point
-   * because the filesystem store rejects them. Hard links are not resolved here, so no policy can see
-   * through a pre-existing hard link to the file it shares content with.
+   * because the filesystem store rejects them. The filesystem read boundary rejects unverified hard links.
    */
   canonicalPath(path: string): Promise<string>;
   /**

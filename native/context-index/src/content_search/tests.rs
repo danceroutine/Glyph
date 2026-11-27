@@ -1029,3 +1029,18 @@ fn searching_a_content_source_reports_admission_and_in_flight_cancellation_or_re
             if files == ["a.txt"] && metadata.searched_files == 1
     ));
 }
+
+#[cfg(unix)]
+#[test]
+fn excludes_unverified_hardlink_content_from_disk_searches() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    std::fs::write(root.join("secret"), "fixture").unwrap();
+    std::fs::hard_link(root.join("secret"), root.join("ordinary")).unwrap();
+    assert!(read_searchable_file(&root, "ordinary", 32).is_err());
+    std::fs::remove_file(root.join("secret")).unwrap();
+    assert_eq!(
+        read_searchable_file(&root, "ordinary", 32).unwrap(),
+        "fixture"
+    );
+}

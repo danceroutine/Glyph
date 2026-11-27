@@ -701,7 +701,8 @@ fn read_opened_searchable_file(
         use std::os::unix::fs::MetadataExt;
         // The path may have been replaced after inspection. Never read bytes
         // from a different file merely because it occupies the same pathname.
-        if opened.dev() != _expected.dev() || opened.ino() != _expected.ino() {
+        if opened.nlink() != 1 || opened.dev() != _expected.dev() || opened.ino() != _expected.ino()
+        {
             return Err(());
         }
     }

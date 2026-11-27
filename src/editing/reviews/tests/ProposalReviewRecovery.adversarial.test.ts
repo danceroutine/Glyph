@@ -177,8 +177,20 @@ describe(ProposalReviewManager, () => {
       );
 
       await expect(recovered.initialize()).resolves.toBeUndefined();
-      expect(reads).toHaveBeenCalledWith('file.txt', { maxBytes: 64 });
-      expect(reads).toHaveBeenCalledWith('renamed.txt', { maxBytes: 64 });
+      expect(reads).toHaveBeenCalledWith('file.txt', {
+        maxBytes: 64,
+        interruptedRename: {
+          identity: proposal.files[0]!.current!.identity,
+          revision: proposal.files[0]!.currentRevision,
+        },
+      });
+      expect(reads).toHaveBeenCalledWith('renamed.txt', {
+        maxBytes: 64,
+        interruptedRename: {
+          identity: proposal.files[0]!.current!.identity,
+          revision: proposal.files[0]!.currentRevision,
+        },
+      });
       expect(recovered.active?.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
       expect(recovered.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
       expect(fixture.workspace.mutationCalls).toBe(0);

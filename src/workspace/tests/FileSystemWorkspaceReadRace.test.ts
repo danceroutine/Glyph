@@ -118,6 +118,7 @@ describe('workspace reads bind inspected paths to opened descriptors', () => {
 function readFixture(bytes = Buffer.from('body')) {
   const info = {
     dev: 7,
+    nlink: 1,
     ino: 11,
     mode: 0o100644,
     size: bytes.length,

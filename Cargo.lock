@@ -167,6 +167,7 @@ name = "glyph-context-index"
 version = "0.1.0"
 dependencies = [
  "globset",
+ "glyph-filesystem-metadata",
  "grep-matcher",
  "grep-regex",
  "ignore",
@@ -176,6 +177,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "glyph-filesystem-metadata"
+version = "0.1.0"
+dependencies = [
+ "rustix",
  "tempfile",
 ]
 
