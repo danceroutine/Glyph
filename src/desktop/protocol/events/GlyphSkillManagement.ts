@@ -7,6 +7,7 @@ export interface GlyphSkillPreview {
   readonly name: string;
   readonly source: string;
   readonly revision: string;
+  readonly createdParentDirectories?: readonly string[];
   readonly directories?: readonly {
     readonly path: string;
     readonly status: 'added' | 'modified' | 'removed' | 'unchanged';

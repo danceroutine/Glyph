@@ -538,8 +538,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             store: userRuleStore,
             workspace: userRuleStore,
             directory: 'skills',
-            listFiles: async () => {
-              const result = await userSkillIndex.glob('**/*', { limit: 10000 });
+            listFiles: async directory => {
+              const result = await userSkillIndex.glob('**/*', {
+                targetDirectory: directory.slice('skills/'.length),
+                limit: 257,
+              });
               return { ...result, files: result.files.map(path => `skills/${path}`) };
             },
             listPackageDirectories: async directory =>
@@ -582,7 +585,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               store: part.disk,
               workspace: part.workspace,
               directory: '.glyph/skills',
-              listFiles: () => part.index.glob('**/.glyph/skills/**/*', { limit: 10000 }),
+              listFiles: (directory: string) => part.index.glob('**/*', { targetDirectory: directory, limit: 257 }),
               listPackageDirectories: async (directory: string) =>
                 (await listSkillPackageFiles(part.disk, directory, indexExecutable, true)).directories,
               refreshIndex: async () => {
@@ -594,6 +597,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         skills,
         skillState,
         ensureSkillsReady,
+        routes,
       );
       turnContexts = new TurnContextCoordinator([
         new InstructionContextContributor(instructionCatalog),

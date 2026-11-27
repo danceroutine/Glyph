@@ -30,6 +30,7 @@ describe(WiredGlyphApprovalCard, () => {
             name: 'example',
             source: 'Agent proposal',
             revision: 'revision',
+            createdParentDirectories: ['/project/.glyph'],
             directories: [
               { path: 'empty', status: 'added', afterMode: 0o750 },
               { path: 'old', status: 'removed', beforeMode: 0o700 },
@@ -56,6 +57,7 @@ describe(WiredGlyphApprovalCard, () => {
       'Reviewed instructions',
     );
     expect(screen.getByText('/project/.glyph/skills/review')).toBeDefined();
+    expect(screen.getByText('Create installation directory /project/.glyph/')).toBeDefined();
     expect(screen.getByText('After · directory · mode 0750')).toBeDefined();
     expect(screen.getByText('Before · directory · mode 0700')).toBeDefined();
     expect(screen.getByText('reviewed-binary-sha')).toBeDefined();

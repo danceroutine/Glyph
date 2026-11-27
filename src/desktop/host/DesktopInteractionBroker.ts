@@ -158,6 +158,9 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
       'Destination (' + preview.destination.scope + '): ' + escapeDisplayControls(preview.destination.label, true),
       escapeDisplayControls(preview.destination.path, true),
       `${preview.files.length} files. Review the complete file comparisons below.`,
+      ...(preview.createdParentDirectories ?? []).map(
+        path => 'Create installation directory ' + escapeDisplayControls(path, true) + '/',
+      ),
       ...(preview.directories ?? []).map(directory =>
         [
           escapeDisplayControls(directory.path, true) + '/ (' + directory.status + ')',

@@ -81,6 +81,11 @@ export class WorkspaceSourceRoutes {
   equivalents(route: string): string[] {
     const target = this.physicalPath(route);
     if (target === undefined || this.roots.length === 1) return [route];
+    return this.routesForPhysicalPath(target);
+  }
+
+  /** Project an absolute destination into every attached root that contains it. */
+  routesForPhysicalPath(target: string): string[] {
     return this.roots
       .flatMap(root => {
         const key = (value: string) => {
@@ -97,7 +102,9 @@ export class WorkspaceSourceRoutes {
         return [{ root, spelling: tail.join('/') }];
       })
       .toSorted((a, b) => b.root.path.length - a.root.path.length)
-      .map(({ root, spelling }) => (spelling ? root.name + '/' + spelling : root.name));
+      .map(({ root, spelling }) =>
+        this.roots.length === 1 ? spelling || '.' : spelling ? root.name + '/' + spelling : root.name,
+      );
   }
 
   /** Enumerate physical and attached editor URIs for a policy-authorized workspace reference. */

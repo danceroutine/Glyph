@@ -1,3 +1,4 @@
+import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
@@ -52,6 +53,46 @@ describe(SkillPackageManager, () => {
     });
     await expect(manager.apply(preview.id)).rejects.toThrow('expired');
   });
+  it('discloses user-owned package effects through every physically intersecting attached root', async () => {
+    const { location, state, catalog, root, install } = await aSkillLifecycle();
+    const skill = await install();
+    const routes = new WorkspaceSourceRoutes([
+      { name: 'Parent', path: root },
+      { name: 'Assets', path: join(root, 'skills/example/assets') },
+      { name: 'Alias', path: root },
+    ]);
+    const manager = new SkillPackageManager([location], catalog, state, undefined, routes);
+    const preview = await manager.prepareRemoval(skill.id);
+    expect(preview.destination.scope).toBe('user');
+    expect(preview.createdParentDirectories).toEqual([]);
+    expect(manager.workspacePaths(preview.id)).toEqual(
+      expect.arrayContaining(['Parent/skills/example', 'Alias/skills/example', 'Assets', 'Assets/image.bin']),
+    );
+  });
+  it('previews and discloses only missing installation parents before publication', async () => {
+    const { location, state, catalog, root } = await aSkillLifecycle();
+    const manager = new SkillPackageManager(
+      [{ ...location, scope: 'project', directory: '.glyph/skills' }],
+      catalog,
+      state,
+    );
+    const first = await manager.prepare(location.id, aSkillDraft());
+    expect(first.createdParentDirectories).toEqual([join(root, '.glyph'), join(root, '.glyph/skills')]);
+    expect(manager.workspacePaths(first.id).slice(0, 2)).toEqual(['.glyph', '.glyph/skills']);
+    await expect(readdir(join(root, '.glyph'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await mkdir(join(root, '.glyph'));
+    await expect(manager.apply(first.id)).rejects.toThrow('Installation directories changed');
+    const second = await manager.prepare(location.id, aSkillDraft());
+    expect(second.createdParentDirectories).toEqual([join(root, '.glyph/skills')]);
+    expect(manager.workspacePaths(second.id)).not.toContain('.glyph');
+    await mkdir(join(root, '.glyph/skills'));
+    const existing = await manager.prepare(location.id, aSkillDraft());
+    expect(existing.createdParentDirectories).toEqual([]);
+    expect(manager.workspacePaths(existing.id)).not.toContain('.glyph/skills');
+    await removeDirectory(join(root, '.glyph'), { recursive: true });
+    await expect(manager.apply(existing.id)).rejects.toThrow('Installation directories changed');
+    await expect(readdir(join(root, '.glyph'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
   it('derives instruction paths from the retained project inventory across installs, updates and removals', async () => {
     const { location, state, catalog, manager: user } = await aSkillLifecycle();
     const draft = aSkillDraft();
@@ -66,7 +107,7 @@ describe(SkillPackageManager, () => {
       'skills/example/assets',
       'skills/example/references',
     ];
-    expect(manager.workspacePaths(install.id)).toEqual(installedPaths);
+    expect(manager.workspacePaths(install.id)).toEqual(['skills', ...installedPaths]);
     await manager.apply(install.id);
     const skill = catalog.skills[0]!;
     const source = draft.toJSON();

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
+import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { SkillCatalog } from './SkillCatalog.ts';
 import { SkillPreferenceCommitUncertain, type SkillStateStore } from './SkillStateStore.ts';
@@ -29,7 +30,9 @@ export interface SkillPackageLocation {
   readonly workspace: WorkspaceTextStore;
   readonly mutations: WorkspaceDirectoryMutations;
   readonly directory: string;
-  readonly listFiles: () => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+  readonly listFiles: (
+    directory: string,
+  ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
   readonly listPackageDirectories?: (directory: string) => Promise<ReadonlyMap<string, number>>;
   readonly refreshIndex: () => Promise<void>;
   readonly packageId?: (directory: string) => string;
@@ -44,7 +47,10 @@ interface PackageTree {
   directories: ReadonlyMap<string, number>;
 }
 interface Pending {
-  readonly preview: SkillPreview & { directories: NonNullable<SkillPreview['directories']> };
+  readonly preview: SkillPreview & {
+    directories: NonNullable<SkillPreview['directories']>;
+    createdParentDirectories: readonly string[];
+  };
   readonly location: SkillPackageLocation;
   readonly directory: string;
   readonly files?: PackageFiles;
@@ -118,6 +124,12 @@ async function diskRevision(directory: string, treeVersion?: 2): Promise<string 
   const modes = treeVersion && (await readDirectoryModes(directories, async path => join(directory, path)));
   return packageRevision(await readPackageFiles(directory, files), modes);
 }
+/** Enumerate the parent directories that publishing the package would create. */
+async function missingParents(target: string): Promise<string[]> {
+  const parents = [];
+  for (let parent = dirname(target); !(await optionalStat(parent)); parent = dirname(parent)) parents.unshift(parent);
+  return parents;
+}
 /** Observe ordinary directory permissions without touching the checkout or changing the process-wide umask. */
 async function newDirectoryMode(): Promise<number> {
   const privateRoot = await mkdtemp(join(tmpdir(), 'glyph-skill-mode-'));
@@ -140,6 +152,15 @@ export class SkillPackageManager {
     private readonly catalog: SkillCatalog,
     private readonly state: SkillStateStore,
     private readonly ensureReady?: () => Promise<void>,
+    private readonly workspaceRoutes = new WorkspaceSourceRoutes(
+      locations
+        .filter(location => location.scope === 'project')
+        .map(location => ({
+          name: location.scopePrefix ?? location.id,
+          path: location.store.root,
+          caseSensitive: location.store.caseSensitive,
+        })),
+    ),
   ) {
     this.journal = new SkillTransactionJournal(state.userDirectory, state.metadata);
     this.projectMutationPolicy = new SkillProjectMutationPolicy(locations, catalog);
@@ -200,10 +221,13 @@ export class SkillPackageManager {
   }
   /** The complete destination inventory can disclose scoped instructions before package approval. */
   workspacePaths(id: string): readonly string[] {
-    const { location, directory, preview } = this.requirePreview(id);
-    if (location.scope === 'user') return [];
-    const parent = location.scopePrefix ? location.scopePrefix + '/' + directory : directory;
-    return [parent, ...new Set([...preview.files, ...preview.directories].map(entry => parent + '/' + entry.path))];
+    const { preview } = this.requirePreview(id);
+    const paths = [
+      ...preview.createdParentDirectories,
+      preview.destination.path,
+      ...[...preview.files, ...preview.directories].map(entry => join(preview.destination.path, entry.path)),
+    ];
+    return [...new Set(paths.flatMap(path => this.workspaceRoutes.routesForPhysicalPath(path)))];
   }
   async apply(id: string, signal?: AbortSignal): Promise<{ applied: true; refreshError?: string }> {
     const change = this.requirePreview(id);
@@ -289,6 +313,7 @@ export class SkillPackageManager {
       name: posix.basename(directory),
       source: draft?.source ?? 'Installed package',
       revision: after ? packageRevision(after, directories) : expected!,
+      createdParentDirectories: await missingParents(path),
       files: compareFiles(before.files, after ?? new Map()),
       directories: compareDirectories(before.directories, directories),
     };
@@ -338,7 +363,7 @@ export class SkillPackageManager {
       throw new Error('Package contains unindexed or unauthorized directories. Refresh before managing it.');
   }
   private async assertIndexed(location: SkillPackageLocation, directory: string, inventory: readonly string[]) {
-    const listed = await location.listFiles();
+    const listed = await location.listFiles(directory);
     if (listed.truncated) throw new Error('Skill catalog is incomplete.');
     const prefix = directory + '/';
     const paths = new Set(listed.files.filter(path => path.startsWith(prefix)));
@@ -474,6 +499,8 @@ export class SkillPackageManager {
     const target = await this.target(location, directory);
     await this.checkPendingOrigin(location, target);
     if (preview.destination.path !== target) throw new Error('The skill destination changed after preview.');
+    if (JSON.stringify(await missingParents(target)) !== JSON.stringify(preview.createdParentDirectories))
+      throw new Error('Installation directories changed after preview. Preview the change again.');
     // mkdir applies the process umask to newly created project parents. The published tree
     // then inherits the actual parent permissions, including a checkout's deliberate sharing settings.
     await location.mutations.ensureDirectory(posix.dirname(directory), location.scope === 'project' ? 0o777 : 0o700);

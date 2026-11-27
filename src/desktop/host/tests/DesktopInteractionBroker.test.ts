@@ -30,6 +30,7 @@ describe(DesktopInteractionBroker, () => {
       action: 'install' as const,
       source: 'Repository @ pinned',
       revision: 'revision',
+      createdParentDirectories: ['/user/skills'],
       directories: [{ path: 'templates/empty', status: 'added' as const, afterMode: 0o750 }],
       files: [
         {
@@ -54,6 +55,7 @@ describe(DesktopInteractionBroker, () => {
         if (event?.type !== GlyphHostEventType.APPROVAL) throw new Error('Expected skill approval');
         expect(event.approval.skillChange).toEqual(preview);
         expect(event.approval.detail).toContain('Revision: revision');
+        expect(event.approval.detail).toContain('Create installation directory /user/skills/');
         expect(event.approval.detail).toContain('/user/skills/example');
         expect(event.approval.detail).toContain('templates/empty/ (added)');
         expect(event.approval.detail).toContain('directory mode 750');
@@ -77,7 +79,7 @@ describe(DesktopInteractionBroker, () => {
     it('cancels an unanswered package proposal with its owning run', async () => {
       const broker = new DesktopInteractionBroker(() => {});
       const controller = new AbortController();
-      const { directories: _directories, ...fileOnlyPreview } = preview;
+      const { directories: _directories, createdParentDirectories: _parents, ...fileOnlyPreview } = preview;
       const pending = broker.run({ chatId: 'chat', runId: 'run' }, () =>
         broker.presentSkillChange(fileOnlyPreview, controller.signal),
       );

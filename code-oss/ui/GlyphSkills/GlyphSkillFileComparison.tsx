@@ -18,9 +18,18 @@ const styles = {
   after: css({ background: 'var(--vscode-diffEditor-insertedTextBackground)' }),
 };
 /** Shared file comparison for Settings previews and one-shot agent package approvals. */
-export function GlyphSkillFileComparison({ files, directories }: Pick<GlyphSkillPreview, 'files' | 'directories'>) {
+export function GlyphSkillFileComparison({
+  files,
+  directories,
+  createdParentDirectories,
+}: Pick<GlyphSkillPreview, 'files' | 'directories' | 'createdParentDirectories'>) {
   return (
     <div>
+      {createdParentDirectories?.map(path => (
+        <div class={styles.file} key={path}>
+          Create installation directory {escapeDisplayControls(path, true)}/
+        </div>
+      ))}
       {directories?.map(directory => (
         <div class={styles.file} key={directory.path}>
           {escapeDisplayControls(directory.path, true)}/ <small>({directory.status})</small>
