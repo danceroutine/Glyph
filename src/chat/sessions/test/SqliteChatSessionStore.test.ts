@@ -1,3 +1,4 @@
+import { aSkillDescriptor } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
@@ -27,6 +28,52 @@ afterEach(async () => {
 });
 
 describe(SqliteChatSessionStore, () => {
+  it('preserves selected skill IDs, exact activated bodies, and accessed resource revisions across reopening', async () => {
+    const directory = await fixture('glyph-skill-history-');
+    const project = await ProjectContextResolver.folder(await fixture('glyph-skill-project-'), 'local');
+    const original = record(project.id);
+    const descriptor = aSkillDescriptor();
+    const saved: ChatSessionRecord = {
+      ...original,
+      transcript: original.transcript.map(turn => ({
+        ...turn,
+        options: { ...turn.options, skillIds: [descriptor.id] },
+        context: {
+          schema: 'glyph.turn-context.v1',
+          turnId: 'skill-turn',
+          sources: [],
+          candidates: [],
+          activations: [],
+          skills: [
+            {
+              descriptor,
+              revision: 'pinned-package',
+              reason: 'manual',
+              explanation: 'Selected by the user',
+              body: 'Exact activated instructions',
+              resources: [
+                {
+                  path: 'references/notes.md',
+                  revision: 'pinned-resource',
+                  content: 'Exact reference content',
+                  encoding: 'utf8',
+                },
+              ],
+            },
+          ],
+        },
+      })),
+    };
+    const store = new SqliteChatSessionStore(directory);
+    await store.initialize(project);
+    await store.save(saved);
+    await store.dispose();
+    const reopened = new SqliteChatSessionStore(directory);
+    await reopened.initialize(project);
+    expect((await reopened.load(project.id))[0]).toEqual(saved);
+    await reopened.dispose();
+  });
+
   it('preserves all IDE capture kinds and exact provenance across database reopen', async () => {
     const directory = await fixture('glyph-ide-captures-');
     const context = await ProjectContextResolver.folder(await fixture('glyph-ide-project-'), 'local');
@@ -69,6 +116,7 @@ describe(SqliteChatSessionStore, () => {
         ...turn,
         steering: [
           {
+            rejection: 'The manual rule is no longer available',
             id: 'guidance',
             text: 'Keep working',
             createdAt: source.createdAt,
@@ -146,11 +194,15 @@ describe(SqliteChatSessionStore, () => {
       ...source,
       transcript: source.transcript.map(turn => ({
         ...turn,
-        userText: 'See /Rule',
+        userText: 'See /Rule and /Skill',
         options: {
           ...turn.options,
           manualRuleIds: ['rule'],
-          referenceSpans: [{ kind: 'rule' as const, sourceId: 'rule', label: 'Rule', revision: 'r1', from: 4, to: 9 }],
+          skillIds: ['skill'],
+          referenceSpans: [
+            { kind: 'rule' as const, sourceId: 'rule', label: 'Rule', revision: 'r1', from: 4, to: 9 },
+            { kind: 'skill' as const, sourceId: 'skill', label: 'Skill', revision: 's1', from: 14, to: 20 },
+          ],
         },
         checkpoints: {
           before: checkpoint,

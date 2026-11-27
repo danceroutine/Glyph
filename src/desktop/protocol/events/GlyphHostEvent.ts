@@ -1,3 +1,4 @@
+import type { GlyphSkill } from './GlyphSkill.ts';
 import type { AgentReview } from '#src/reviewing/AgentReview.js';
 import type { GlyphBackgroundShell } from './GlyphBackgroundShell.ts';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
@@ -34,12 +35,14 @@ export enum GlyphHostEventType {
   RUN_STATE = 'run_state',
   CHAT_RESTORED = 'chat_restored',
   HOST_STATUS = 'host_status',
+  SKILLS_CHANGED = 'skills_changed',
   INSTRUCTION_SOURCES_CHANGED = 'instruction_sources_changed',
   ERROR = 'error',
 }
 
 /** Closed event union used to keep every host-to-renderer transition exhaustively typed. */
 export type GlyphHostEvent =
+  | { readonly type: GlyphHostEventType.SKILLS_CHANGED; readonly skills: readonly GlyphSkill[] }
   | {
       readonly type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED;
       readonly sources: readonly GlyphInstructionSource[];

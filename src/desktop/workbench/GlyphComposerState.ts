@@ -336,23 +336,24 @@ export class GlyphComposerState {
 /** Both queued and direct sends preserve the same exact captures and UTF-16 spans. */
 async function sendDocument(document: GlyphPromptDocument, send: SendMessage): Promise<void> {
   const draft = toGlyphPromptText(document.parts);
-  const { attachments, attachmentSpans, referenceSpans } = captureGlyphPrompt(
+  const { attachments, attachmentSpans, referenceSpans, ruleIds, skillIds } = captureGlyphPrompt(
     document,
     draft.trimStart().length - draft.length,
   );
   // Both direct and queued submissions carry options from stamp().
   const {
     manualRuleIds: _ruleIds,
+    skillIds: _skillIds,
     referenceSpans: _references,
     attachmentSpans: _spans,
     ...options
   } = document.options!;
   await send(draft, attachments, {
     ...options,
+    ...(skillIds.size > 0 ? { skillIds: [...skillIds] } : {}),
+    ...(ruleIds.size > 0 ? { manualRuleIds: [...ruleIds] } : {}),
+    ...(referenceSpans.length > 0 ? { referenceSpans } : {}),
     ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}),
-    ...(referenceSpans.length > 0
-      ? { referenceSpans, manualRuleIds: [...new Set(referenceSpans.map(ref => ref.sourceId))] }
-      : {}),
   });
 }
 
@@ -361,25 +362,32 @@ export function captureGlyphPrompt(document: GlyphPromptDocument, offset = 0) {
   const attachments: GlyphContextAttachment[] = [];
   const attachmentSpans: { from: number; to: number }[] = [];
   const referenceSpans: ChatReferenceSpan[] = [];
+  const ruleIds = new Set<string>();
+  const skillIds = new Set<string>();
+
   for (const part of document.parts) {
     const from = offset;
     offset += toGlyphPromptText([part]).length;
     if (part.type === 'text') continue;
     const attachment = part.attachment;
-    if (attachment.kind === GlyphContextAttachmentKind.RULE) {
-      if (attachment.ruleId)
+    if (attachment.kind === GlyphContextAttachmentKind.RULE || attachment.kind === GlyphContextAttachmentKind.SKILL) {
+      const rule = attachment.kind === GlyphContextAttachmentKind.RULE;
+      const sourceId = rule ? attachment.ruleId : attachment.skillId;
+      if (sourceId) {
+        (rule ? ruleIds : skillIds).add(sourceId);
         referenceSpans.push({
-          kind: 'rule',
-          sourceId: attachment.ruleId,
+          kind: attachment.kind,
+          sourceId,
           label: attachment.path,
           revision: attachment.contentRevision,
           from,
           to: offset,
         });
+      }
     } else {
       attachments.push(attachment);
       attachmentSpans.push({ from, to: offset });
     }
   }
-  return { attachments, attachmentSpans, referenceSpans };
+  return { attachments, attachmentSpans, referenceSpans, ruleIds, skillIds };
 }

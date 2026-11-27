@@ -1,6 +1,8 @@
+import type { GlyphSkillActivation } from './GlyphSkill.ts';
 import type { GlyphInstructionSource } from './GlyphInstructionSource.ts';
 
 export interface GlyphTurnContext {
+  readonly skills?: readonly GlyphSkillActivation[];
   readonly sources: readonly GlyphInstructionSource[];
   readonly activations: readonly {
     readonly sourceId: string;

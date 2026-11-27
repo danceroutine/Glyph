@@ -14,6 +14,7 @@ import {
   mountGlyphPlan,
   mountGlyphReview,
   mountGlyphWorkbench,
+  mountGlyphSkills,
 } from '#code-oss/ui/mountGlyphWorkbench.tsx';
 
 afterEach(cleanup);
@@ -35,7 +36,7 @@ const workbenchActions = (overrides: Partial<GlyphWorkbenchViewActions> = {}): G
     context: {
       selectFiles: vi.fn(async () => []),
       searchFiles: vi.fn(async () => []),
-      searchRules: vi.fn(async () => []),
+      searchInstructions: vi.fn(async () => []),
       captureFile: vi.fn(),
       openAttachment: vi.fn(async () => {}),
       refreshAttachment: vi.fn(),
@@ -317,4 +318,12 @@ describe(mountGlyphAgentInstructions, () => {
     });
     expect(container.innerHTML).toBe('');
   });
+});
+
+it('ignores skill catalog updates after the view is disposed', () => {
+  const element = document.createElement('div');
+  const view = mountGlyphSkills(element, [], '', () => {});
+  view.dispose();
+  view.update([], 'again');
+  expect(element.childNodes.length).toBe(0);
 });

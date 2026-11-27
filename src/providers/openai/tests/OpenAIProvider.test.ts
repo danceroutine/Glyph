@@ -356,14 +356,14 @@ describe(OpenAIProvider, () => {
         },
       ],
     };
-    vi.mocked(instructionContext.discloseAttachments)
-      .mockReturnValueOnce(attachmentContext)
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce(attachmentContext);
-    vi.mocked(instructionContext.activateManualRules)
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce(manualContext)
-      .mockReturnValueOnce(manualContext);
+    instructionContext.steer = vi
+      .fn()
+      .mockResolvedValueOnce(attachmentContext)
+      .mockResolvedValueOnce(manualContext)
+      .mockResolvedValueOnce({
+        ...attachmentContext,
+        sources: [...attachmentContext.sources, ...manualContext.sources],
+      });
     vi.mocked(instructionContext.completeTurn).mockReturnValue({
       schema: 'glyph.turn-context.v1',
       turnId: 'turn',

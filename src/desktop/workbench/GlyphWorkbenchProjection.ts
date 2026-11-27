@@ -35,6 +35,9 @@ export class GlyphWorkbenchProjection {
   /** A snapshot replaces old collections so removed or completed work cannot linger. */
   accept(event: GlyphHostEvent): void {
     switch (event.type) {
+      case GlyphHostEventType.SKILLS_CHANGED:
+        this.snapshot = { ...this.snapshot, skills: event.skills };
+        return;
       case GlyphHostEventType.AGENT_REVIEW_CHANGED:
         this.snapshot = {
           ...this.snapshot,

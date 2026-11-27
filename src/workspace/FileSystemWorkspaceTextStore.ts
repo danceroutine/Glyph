@@ -83,6 +83,12 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   async canonicalPath(input: string): Promise<string> {
+    const key = (await this.resolvePath(input)).split(sep).join('/');
+    return this.caseSensitive ? key : key.toLocaleLowerCase('en-US');
+  }
+
+  /** Authorized physical path with the spelling required by filesystem operations. */
+  async resolvePath(input: string): Promise<string> {
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, true);
     const root = await realpath(this.root);
@@ -96,8 +102,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         const canonical = resolve(existing, ...missing);
         assertInsideRoot(root, canonical, path);
         this.normalizePath(relative(root, canonical));
-        const key = canonical.split(sep).join('/');
-        return this.caseSensitive ? key : key.toLocaleLowerCase('en-US');
+        return canonical;
       } catch (error) {
         if (errorCodeOf(error) !== 'ENOENT' || cursor === this.root) {
           throw classifyPathError(error, path);
@@ -162,6 +167,15 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
+    const snapshot = await this.readBytes(input, options);
+    return toSnapshot(snapshot.path, snapshot.bytes, snapshot.mode, snapshot.identity, snapshot.revision);
+  }
+
+  /** Read bounded binary assets through the same policy, identity, and no-symlink checks as text. */
+  async readBytes(
+    input: string,
+    options: WorkspaceReadOptions = {},
+  ): Promise<{ path: string; bytes: Buffer; mode: number; identity: string; revision: string }> {
     const { path, resolvedFile, identity } = await this.inspectReadPath(input, options.interruptedRename);
     // Inspection and open are separate operations. Do not follow a replacement
     // link or block opening a replacement FIFO before descriptor validation.
@@ -198,13 +212,19 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         options.maxBytes === undefined
           ? await handle.readFile()
           : await this.readBounded(handle, path, options.maxBytes, info.size);
-      const snapshot = toSnapshot(path, bytes, info.mode & 0o777, identity);
-      if (info.nlink !== 1 && snapshot.revision !== options.interruptedRename!.revision) {
+      const revision = createHash('sha256').update(bytes).digest('hex');
+      if (info.nlink !== 1 && revision !== options.interruptedRename!.revision) {
         throw new EditError(EditFailureReason.STALE, 'The interrupted rename no longer contains the reviewed bytes.', {
           path,
         });
       }
-      return snapshot;
+      return {
+        path,
+        bytes,
+        mode: info.mode & 0o777,
+        identity,
+        revision,
+      };
     } finally {
       await handle.close();
     }
@@ -524,7 +544,13 @@ function assertAllowedLinks(
     });
 }
 
-function toSnapshot(path: string, bytes: Buffer, mode: number, identity: string): WorkspaceTextSnapshot {
+function toSnapshot(
+  path: string,
+  bytes: Buffer,
+  mode: number,
+  identity: string,
+  revision = createHash('sha256').update(bytes).digest('hex'),
+): WorkspaceTextSnapshot {
   if (bytes.includes(0))
     throw new EditError(EditFailureReason.UNSUPPORTED, 'Binary/NUL files are not supported.', { path });
   const byteOrderMark = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
@@ -540,7 +566,7 @@ function toSnapshot(path: string, bytes: Buffer, mode: number, identity: string)
     path,
     text,
     byteOrderMark,
-    revision: createHash('sha256').update(bytes).digest('hex'),
+    revision,
     byteLength: bytes.length,
     mode,
     identity,

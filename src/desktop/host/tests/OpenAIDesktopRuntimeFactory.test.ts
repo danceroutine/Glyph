@@ -1,3 +1,4 @@
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
@@ -65,6 +66,10 @@ const captured = vi.hoisted(() => ({
   brokers: [] as { readonly broker: DesktopInteractionBroker; readonly emit: (event: GlyphHostEvent) => void }[],
   providerFactories: [] as ConstructorParameters<typeof OpenAIProviderFactory>[],
 }));
+
+beforeEach(() => {
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({ files: [], truncated: false });
+});
 
 it('resolves user rule URIs below the dedicated user rule root', () => {
   expect(userRuleUri('/home/user/.glyph', 'rules/test.mdc')).toBe('file:///home/user/.glyph/rules/test.mdc');
@@ -340,7 +345,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         if (!trusted) await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
         expect(requests).toHaveBeenCalledTimes(trusted ? 1 : 0);
         expect(indexing).toHaveBeenCalledTimes(trusted ? 1 : 0);
-        expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 10 : 0);
+        expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 16 : 0);
         await runtime.dispose();
         runtime = undefined;
       }
@@ -739,9 +744,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const fixture = await factoryFixture();
       const first = await fixture.create([await fixture.folder('one')]);
       await fixture.create([await fixture.folder('two')]);
-      expect(captured.indexOptions).toHaveLength(3);
+      expect(captured.indexOptions).toHaveLength(4);
       expect(captured.indexOptions[1]).toMatchObject({
-        root: join(isolatedUserDirectory, 'rules'),
+        root: join(fixture.userDirectory, 'rules'),
         respectGitIgnore: false,
       });
       const userIndex = captured.indexes[1]!;
@@ -962,7 +967,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           revision: contentRevision('Unsaved editor guidance', false),
         }),
       ]);
-      expect(glob).toHaveBeenCalledTimes(5);
+      expect(glob).toHaveBeenCalledTimes(8);
       expect(glob.mock.calls).toEqual(
         expect.arrayContaining([
           ['*.mdc', { limit: 10_000, rootFilesOnly: true }],
@@ -973,7 +978,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         ]),
       );
       await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
-      expect(glob).toHaveBeenCalledTimes(10);
+      expect(glob).toHaveBeenCalledTimes(16);
       expect(diskList).not.toHaveBeenCalled();
     });
 
@@ -1033,6 +1038,70 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       });
       expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual(['Manual body', 'Required body']);
     });
+    it('refreshes and captures user and project skills through their owning indexes', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const root = await fixture.folder('workspace');
+      for (const [base, path] of [
+        [root, '.glyph/skills/workflow'],
+        [fixture.userDirectory, 'skills/default'],
+      ] as const) {
+        await mkdir(join(base, path), { recursive: true });
+        await writeFile(
+          join(base, path, 'SKILL.md'),
+          `---\nname: ${basename(path)}\ndescription: perform work\n---\nInstructions`,
+        );
+      }
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => ({
+        operationId: 'mutation' in request ? request.mutation.operationId : request.operationId,
+        ok: true,
+      }));
+      const observe = vi.spyOn(SkillCatalog.prototype, 'refresh');
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
+        this: RustWorkspacePathIndex,
+        pattern,
+      ) {
+        const rootPath = captured.indexOptions[captured.indexes.indexOf(this)]!.root;
+        const files =
+          pattern === '**/.glyph/skills/**/*'
+            ? ['.glyph/skills/workflow/SKILL.md']
+            : pattern === '**/*' && rootPath.endsWith('/skills')
+              ? ['default/SKILL.md']
+              : pattern === '**/*'
+                ? ['SKILL.md']
+                : [];
+        return { files, truncated: false };
+      });
+      const refresh = vi
+        .spyOn(RustWorkspacePathIndex.prototype, 'refresh')
+        .mockResolvedValue({ truncated: false } as never);
+      const runtime = await fixture.create([root]);
+      const skills = (await runtime.snapshot()).skills!;
+      expect(skills.map(s => s.name).toSorted()).toEqual(['default', 'workflow']);
+      const coordinator = captured.providerFactories[0]![4]!;
+      const turn = await coordinator.beginTurn(
+        {
+          turnId: 'select',
+          attachmentPaths: [],
+          skillIds: skills.map(s => s.id),
+        },
+        new AbortController().signal,
+      );
+      expect(turn.snapshot().skills).toHaveLength(2);
+      expect(refresh).toHaveBeenCalledTimes(4);
+      await (observe.mock.contexts[0] as SkillCatalog).refreshIndexes();
+      expect(refresh).toHaveBeenCalledTimes(7);
+      const second = await coordinator.beginTurn({
+        turnId: 'no-signal',
+        attachmentPaths: [],
+        skillIds: [skills[0]!.id],
+      });
+      expect(second.snapshot().skills).toHaveLength(1);
+      refresh.mockResolvedValueOnce({ truncated: true } as never);
+      await expect(
+        coordinator.beginTurn({ turnId: 'incomplete', attachmentPaths: [], skillIds: [skills[0]!.id] }),
+      ).rejects.toThrow('incomplete');
+    });
 
     it('reports an unsafe user rules directory without querying its native index', async () => {
       const fixture = await factoryFixture();
@@ -1052,7 +1121,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         }),
       ]);
       expect(glob).not.toHaveBeenCalledWith('*.mdc', expect.anything());
-      expect(glob).toHaveBeenCalledTimes(4);
+      expect(glob).toHaveBeenCalledTimes(6);
     });
 
     it.each([
@@ -1213,6 +1282,11 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     it('runs agent reviews only through an available account with inference access', async () => {
       const fixture = await factoryFixture();
       await fixture.create([await fixture.folder('workspace')]);
+      const reviewTools = captured.providerFactories.at(-1)![2]!.tools;
+      expect(reviewTools.filter(tool => tool.namespace === 'skills').map(tool => tool.name)).toEqual([
+        'activate',
+        'read_resource',
+      ]);
       const account = (provider: string, id: string) => ({
         provider,
         id,
@@ -1316,7 +1390,8 @@ async function factoryFixture(options: { readonly transport?: typeof fetch } = {
   vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
   const initialize = vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
   const editors = new EditorRpcRouter();
-  const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport, isolatedUserDirectory);
+  const userDirectory = join(directory, 'user');
+  const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport, userDirectory);
   const runtimes: ProviderDesktopRuntime[] = [];
   onTestFinished(async () => {
     for (const runtime of runtimes) await runtime.dispose();
@@ -1326,6 +1401,7 @@ async function factoryFixture(options: { readonly transport?: typeof fetch } = {
     await rm(directory, { recursive: true, force: true });
   });
   return {
+    userDirectory,
     factory,
     editors,
     initialize,

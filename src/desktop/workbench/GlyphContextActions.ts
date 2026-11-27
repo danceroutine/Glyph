@@ -5,6 +5,7 @@ export enum GlyphContextCandidateKind {
   FILE = 'file',
   FOLDER = 'folder',
   RULE = 'rule',
+  SKILL = 'skill',
 }
 
 export interface GlyphContextCandidate {
@@ -15,6 +16,7 @@ export interface GlyphContextCandidate {
   readonly name?: string;
   readonly ancestry?: readonly string[];
   readonly ruleId?: string;
+  readonly skillId?: string;
   readonly revision?: string;
 }
 export interface GlyphContextActions {
@@ -22,8 +24,8 @@ export interface GlyphContextActions {
   selectIdeContext?(): Promise<readonly GlyphContextAttachment[]>;
   selectFiles(): Promise<readonly GlyphContextAttachment[]>;
   searchFiles(query: string): Promise<readonly GlyphContextCandidate[]>;
-  /** Finds enabled manual rules for the composer's slash-command picker. */
-  searchRules(query: string): Promise<readonly GlyphContextCandidate[]>;
+  /** Finds enabled manual rules and skills for the composer's slash-command picker. */
+  searchInstructions(query: string): Promise<readonly GlyphContextCandidate[]>;
   captureFile(uri: string): Promise<GlyphContextAttachment>;
   captureFolder?(uri: string): Promise<GlyphContextAttachment>;
   openAttachment(attachment: Pick<GlyphAttachmentPreview, 'path' | 'uri' | 'range'>): Promise<void>;

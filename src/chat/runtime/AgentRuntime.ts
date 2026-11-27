@@ -1,5 +1,9 @@
-import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
-import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
+import {
+  prepareModelContext,
+  type ModelTurnContext,
+  type TurnContextEnvelope,
+} from '#src/context/turns/TurnContextEnvelope.js';
+import { type TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import { AgentMode, type AgentModeID } from '#src/chat/AgentMode.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
@@ -77,6 +81,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       onReasoningSummary?: (delta: string) => void;
       onTrace?: (entry: ProviderTraceEntry) => void;
       onToolActivity?: (activity: ToolActivity) => void;
+      onSteeringRejected?: (request: ChatRequest, error: Error) => void;
       onStateCheckpoint?: (state: ChatProviderState) => void | Promise<void>;
       toolContext?: ToolExecutionContext;
     },
@@ -90,6 +95,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         ? { agentReviewId: request.agentReviewId }
         : {}),
       ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
+      ...(request.skillIds ? { skillIds: request.skillIds } : {}),
     });
     const modelRequest = modelInput(request);
     if (this.busy) throw new ProviderError('A response is already in progress.');
@@ -122,7 +128,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     const setMode = (next: AgentModeID): void => {
       mode = next;
     };
-    let boundaryInstructions: AgentInstructionContext | undefined;
+    let boundaryInstructions: ModelTurnContext | undefined;
     const context = (round: number): AgentTurnContext => ({
       signal,
       turnId,
@@ -161,23 +167,40 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       const turnContext = await this.turnContexts?.beginTurn(
         {
           turnId,
-          attachmentPaths: request.attachments.map(attachment => attachment.path),
+          attachmentPaths: attachmentPaths(request),
           manualRuleIds: request.manualRuleIds ?? [],
+          ...(request.skillIds?.length ? { skillIds: request.skillIds } : {}),
         },
         signal,
       );
       admittedContext = turnContext !== undefined;
-      boundaryInstructions = turnContext?.initialEnvelope();
+      boundaryInstructions = prepareModelContext(turnContext?.initialEnvelope());
       turn = await this.adapter.beginTurn(this.state, modelRequest, context(0));
       boundaryInstructions = undefined;
       let totalUsage: Usage | null = null;
       let usageIncomplete = false;
       let round = 0;
+      const applySteering = async (steeringRequest: ChatRequest): Promise<boolean> => {
+        try {
+          boundaryInstructions = prepareModelContext(await this.steeringInstructions(turnId, steeringRequest, signal));
+        } catch (error) {
+          if (signal.aborted) throw signal.reason;
+          const failure = error instanceof Error ? error : new Error('Selected context is unavailable.');
+          trace('steering.rejected', { message: failure.message }, round);
+          options.onSteeringRejected?.(steeringRequest, failure);
+          return false;
+        }
+        try {
+          turn = await this.adapter.steerTurn(turn!, modelInput(steeringRequest), context(round));
+        } finally {
+          boundaryInstructions = undefined;
+        }
+        return true;
+      };
       for (;;) {
         signal.throwIfAborted();
         for (const steering of options.takeSteering?.(false) ?? []) {
-          boundaryInstructions = this.steeringInstructions(turnId, steering);
-          turn = await this.adapter.steerTurn(turn, modelInput(steering), context(round));
+          if (!(await applySteering(steering))) continue;
           this.state = this.persistentState(this.adapter.snapshot(turn));
           hasToolCheckpoint = true;
           await options.onStateCheckpoint?.(structuredClone(this.state));
@@ -188,12 +211,17 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         usageIncomplete ||= step.usage === null;
         totalUsage = addUsage(totalUsage, step.usage);
         if (step.toolCalls.length === 0) {
-          const steering = options.takeSteering?.(true) ?? [];
-          if (steering.length > 0) {
-            for (const instruction of steering) {
-              boundaryInstructions = this.steeringInstructions(turnId, instruction);
-              turn = await this.adapter.steerTurn(turn, modelInput(instruction), context(round));
-            }
+          let appliedSteering = false;
+          // Admission can await filesystem/catalog work. Drain again after a
+          // rejected batch so input accepted during that await is either applied
+          // or covered by the mailbox's synchronous empty-and-close boundary.
+          for (;;) {
+            const steering = options.takeSteering?.(true) ?? [];
+            if (steering.length === 0) break;
+            for (const instruction of steering) appliedSteering = (await applySteering(instruction)) || appliedSteering;
+            if (appliedSteering) break;
+          }
+          if (appliedSteering) {
             this.state = this.persistentState(this.adapter.snapshot(turn));
             hasToolCheckpoint = true;
             await options.onStateCheckpoint?.(structuredClone(this.state));
@@ -278,21 +306,20 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     }
   }
 
-  private steeringInstructions(turnId: string, request: ChatRequest): AgentInstructionContext | undefined {
-    const contexts = [
-      this.turnContexts?.discloseAttachments(
+  private async steeringInstructions(
+    turnId: string,
+    request: ChatRequest,
+    signal: AbortSignal,
+  ): Promise<TurnContextEnvelope | undefined> {
+    return this.turnContexts?.steer(
+      {
         turnId,
-        request.attachments.map(attachment => attachment.path),
-      ),
-      this.turnContexts?.activateManualRules(turnId, request.manualRuleIds ?? []),
-    ].filter((value): value is AgentInstructionContext => value !== undefined);
-    if (contexts.length === 0) return undefined;
-    return {
-      schema: 'glyph.agent-instructions.v1',
-      sources: contexts.flatMap(context => context.sources),
-      activations: contexts.flatMap(context => context.activations ?? []),
-      candidates: contexts.flatMap(context => context.candidates ?? []),
-    };
+        attachmentPaths: attachmentPaths(request),
+        manualRuleIds: request.manualRuleIds ?? [],
+        skillIds: request.skillIds ?? [],
+      },
+      signal,
+    );
   }
 
   /** Every state entering durable storage passes through the same host policy. */
@@ -370,3 +397,10 @@ function modelInput(request: ChatRequest): ChatRequest {
 }
 
 export { toolInterruptionOutput as toolInterruptionOutput__TESTING_ONLY, errorDetails as errorDetails__TESTING_ONLY };
+
+/** Terminal and test display labels do not identify filesystem scopes. Legacy captures remain file-backed. */
+function attachmentPaths(request: ChatRequest): readonly string[] {
+  return request.attachments
+    .filter(attachment => attachment.source?.kind !== 'terminal' && attachment.source?.kind !== 'test')
+    .map(attachment => attachment.path);
+}

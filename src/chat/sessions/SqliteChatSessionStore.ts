@@ -1,3 +1,4 @@
+import { skillActivationSchema } from '#src/skills/SkillSchemas.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { planSchema } from '#src/planning/PlanSchema.js';
@@ -97,6 +98,7 @@ const instructionSourceSchema = z
 const instructionTurnContextSchema = z
   .object({
     schema: z.literal('glyph.turn-context.v1'),
+    skills: z.array(skillActivationSchema).optional(),
     turnId: z.string(),
     sources: z.array(instructionSourceSchema),
     activations: z.array(
@@ -116,7 +118,8 @@ const instructionTurnContextSchema = z
       z.object({ id: z.string(), name: z.string(), description: z.string(), scope: z.string() }).strict(),
     ),
   })
-  .strict();
+  .strict()
+  .transform(({ skills, ...context }) => ({ ...context, ...(skills !== undefined ? { skills } : {}) }));
 
 const transcriptTurnSchema = z
   .object({
@@ -127,6 +130,7 @@ const transcriptTurnSchema = z
             id: z.string(),
             text: z.string(),
             createdAt: z.iso.datetime(),
+            rejection: z.string().optional(),
             options: chatTurnOptionsSchema,
             attachments: z.array(
               z
@@ -151,7 +155,11 @@ const transcriptTurnSchema = z
                 })),
             ),
           })
-          .strict(),
+          .strict()
+          .transform(({ rejection, ...message }) => ({
+            ...message,
+            ...(rejection === undefined ? {} : { rejection }),
+          })),
       )
       .optional(),
     checkpoints: z.object({ before: historyCheckpointSchema, after: historyCheckpointSchema }).strict().optional(),

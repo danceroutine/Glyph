@@ -1,4 +1,5 @@
 import { resolveInstructionId } from '#vs/platform/glyph/instructions/resolveInstructionId.js';
+import type { GlyphSkill } from '#glyph/protocol/events/GlyphSkill.js';
 import { Emitter } from '#vs/base/common/event.js';
 import { RunOnceScheduler } from '#vs/base/common/async.js';
 import { DisposableStore, DisposableMap, MutableDisposable, type IDisposable } from '#vs/base/common/lifecycle.js';
@@ -35,6 +36,7 @@ import type { GlyphInstructionSource } from '#glyph/protocol/events/GlyphInstruc
 
 /** Capture context only from explicit file selection, search, or selected editor text. */
 export class GlyphContextController extends Disposable implements GlyphContextActions {
+  private skillSources: () => readonly GlyphSkill[] = () => [];
   private readonly instructionsChanged = this._register(new Emitter<void>());
   private readonly resourceIdentity = new ExtUri(
     uri => !this.files.hasCapability(uri, FileSystemProviderCapabilities.PathCaseSensitive),
@@ -74,6 +76,10 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     for (const editor of codeEditors.listCodeEditors()) watch(editor);
     this._register(codeEditors.onCodeEditorAdd(watch));
   }
+  setSkillSources(source: () => readonly GlyphSkill[], refresh?: () => Promise<void>): void {
+    this.skillSources = source;
+    if (refresh) this.setInstructionRefresh(refresh);
+  }
   setInstructionRefresh(refresh?: (invalidate?: boolean) => Promise<void>, roots?: () => readonly string[]): void {
     this.instructionRoots = roots ?? (() => []);
     this.rootWatches.clearAndDisposeAll();
@@ -94,7 +100,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       }, 300),
     );
     const relevant = (uri: URI) =>
-      /\/\.(?:glyph|cursor)(?:\/rules(?:\/|$)|$)/iu.test(uri.path) ||
+      /\/\.(?:glyph|cursor)(?:\/(?:rules|skills)(?:\/|$)|$)/iu.test(uri.path) ||
       /\/AGENTS\.md$/iu.test(uri.path) ||
       this.instructionSources().some(instruction => {
         if (instruction.uri === uri.toString()) return true;
@@ -167,7 +173,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       if (!this.rootWatches.has(root))
         this.rootWatches.set(root, this.files.watch(URI.parse(root), { recursive, excludes: [] }));
     for (const model of this.models.getModels()) this.watchInstructionModel?.(model);
-    const fingerprint = JSON.stringify(this.instructionSources());
+    const fingerprint = JSON.stringify([this.instructionSources(), this.skillSources()]);
     if (fingerprint !== this.instructionFingerprint) {
       this.instructionFingerprint = fingerprint;
       this.instructionsChanged.fire();
@@ -281,12 +287,12 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     }
     return candidates.slice(0, 50);
   }
-  async searchRules(query: string): Promise<readonly GlyphContextCandidate[]> {
+  async searchInstructions(query: string): Promise<readonly GlyphContextCandidate[]> {
     this.assertTrusted();
     await this.refreshInstructionSources?.();
     this.assertTrusted();
     const normalized = query.toLowerCase();
-    return this.instructionSources()
+    const rules = this.instructionSources()
       .filter(rule => isManualRule(rule))
       .filter(rule => {
         const name = rule.name ?? rule.path.split('/').at(-1)!;
@@ -305,6 +311,24 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
           ...(rule.revision ? { revision: rule.revision } : {}),
         };
       });
+    const skills = this.skillSources()
+      .filter(skill => skill.enabled && skill.status === 'active')
+      .filter(skill =>
+        `${skill.name} ${skill.description} ${skill.origin.label} ${skill.scope} ${skill.path}`
+          .toLowerCase()
+          .includes(normalized),
+      )
+      .map(skill => ({
+        uri: `glyph-skill:${encodeURIComponent(skill.id)}`,
+        path: skill.name,
+        name: skill.name,
+        detail: `${skill.path} · ${skill.origin.label} · ${skill.description}`,
+        ancestry: [skill.origin.label, ...skill.path.split('/')],
+        kind: GlyphContextCandidateKind.SKILL,
+        skillId: skill.id,
+        ...(skill.revision ? { revision: skill.revision } : {}),
+      }));
+    return [...rules, ...skills].slice(0, 50);
   }
   async selectFiles(): Promise<readonly GlyphContextAttachment[]> {
     this.assertTrusted();
@@ -412,6 +436,18 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       const { unavailable: _, ...reference } = attachment;
       return { ...reference, path: rule.name ?? attachment.path, contentRevision: rule.revision ?? rule.id };
     }
+    if (attachment.kind === GlyphContextAttachmentKind.SKILL) {
+      this.assertTrusted();
+      const source = this.skillSource(attachment.uri);
+      if (!source || source.status !== 'active' || !source.enabled)
+        throw new GlyphContextError(
+          GlyphDesktopErrorCode.NOT_FOUND,
+          'Selected instruction is unavailable. Choose it again.',
+        );
+      const { unavailable: _, ...reference } = attachment;
+      return { ...reference, path: source.name, contentRevision: source.revision ?? source.id };
+    }
+
     if (!['file', 'selection', 'folder'].includes(attachment.kind))
       throw new GlyphContextError(
         GlyphDesktopErrorCode.STALE_DOCUMENT,
@@ -429,6 +465,15 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     }));
   }
   async checkAttachment(attachment: GlyphContextAttachment): Promise<string | undefined> {
+    if (attachment.kind === GlyphContextAttachmentKind.SKILL) {
+      const source = this.skillSource(attachment.uri);
+      if (!source || source.status !== 'active' || !source.enabled)
+        return 'Selected instruction is unavailable. Remove it or choose it again.';
+      return source.revision && source.revision !== attachment.contentRevision
+        ? 'These instructions changed. The latest version will load when you send.'
+        : undefined;
+    }
+
     if (attachment.unavailable !== undefined && attachment.unavailable !== '') return attachment.unavailable;
     if (attachment.kind === GlyphContextAttachmentKind.RULE) {
       const rule = resolveInstructionId(
@@ -458,9 +503,13 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
 
   rebindAttachment(attachment: GlyphContextAttachment): GlyphContextAttachment {
     const { unavailable: _unavailable, token: _token, ...capture } = attachment;
-    if (attachment.kind === GlyphContextAttachmentKind.RULE) return capture;
     const uri = URI.parse(attachment.uri);
-    if (uri.scheme === 'untitled') return capture;
+    if (
+      uri.scheme === 'untitled' ||
+      capture.kind === GlyphContextAttachmentKind.SKILL ||
+      capture.kind === GlyphContextAttachmentKind.RULE
+    )
+      return capture;
     if (uri.scheme !== 'file')
       return { ...capture, unavailable: 'Workspace changed. Capture this context again before sending.' };
     if (!this.workspace.isInsideWorkspace(uri))
@@ -471,6 +520,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     return { ...capture, path: this.adapter.contextPath(uri) || '.' };
   }
   async openAttachment(attachment: Pick<GlyphAttachmentPreview, 'path' | 'uri' | 'range'>): Promise<void> {
+    if (attachment.uri?.startsWith('glyph-skill:')) return this.openSkill(attachment.uri);
     if (attachment.uri?.startsWith('glyph-rule:'))
       return this.openInstruction(decodeURIComponent(attachment.uri.slice('glyph-rule:'.length)));
     if (
@@ -593,6 +643,37 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     )
       throw unavailableInstruction();
     return folder.uri;
+  }
+
+  private async openSkill(reference: string): Promise<void> {
+    this.assertTrusted();
+    await this.refreshInstructionSources?.();
+    this.assertTrusted();
+    const source = this.skillSource(reference);
+    if (!source?.uri) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
+    const selectedUri = source.uri;
+    const resource = URI.parse(selectedUri);
+    if (resource.scheme !== 'file')
+      throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
+    // The host authorized the indexed manifest. Recheck its file and directory chain at editor-open time.
+    const depthToRoot = source.path.split('/').length;
+    let current = resource;
+    for (let depth = 0; depth <= depthToRoot; depth++) {
+      const stat = await this.files.stat(current);
+      if (stat.isSymbolicLink || (depth === 0 ? !stat.isFile : !stat.isDirectory))
+        throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
+      current = dirname(current);
+    }
+    this.assertTrusted();
+    if (this.skillSource(reference)?.uri !== selectedUri)
+      throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
+    await this.editors.openEditor({ resource, options: { pinned: true } });
+  }
+
+  private skillSource(value: string): GlyphSkill | undefined {
+    if (!value.startsWith('glyph-skill:')) return undefined;
+    const id = decodeURIComponent(value.slice('glyph-skill:'.length));
+    return this.skillSources().find(source => source.id === id);
   }
 
   private activeEditor(): ICodeEditor | undefined {

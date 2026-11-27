@@ -12,6 +12,7 @@ export enum GlyphContextAttachmentKind {
   TEST = 'test',
   /** Composer-only reference to a manual instruction rule; never serialized as captured file content. */
   RULE = 'rule',
+  SKILL = 'skill',
 }
 
 /** Immutable text captured when the user attaches context. The token identifies the source model, not permission to edit it. */
@@ -25,6 +26,7 @@ export interface GlyphContextAttachment {
   readonly text: string;
   readonly contentRevision: string;
   readonly ruleId?: string;
+  readonly skillId?: string;
   /** The capture remains visible, but cannot be sent under the current workspace authority. */
   readonly unavailable?: string;
   /** Historical snapshots have no live editor capability. */

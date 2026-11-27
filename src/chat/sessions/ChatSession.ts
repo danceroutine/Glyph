@@ -210,7 +210,14 @@ export class ChatSession {
     let result: ChatTurnResult;
     try {
       result = await this.conversation.send(request, recordingResponse, signal, {
-        ...(steering ? { takeSteering: steering.take } : {}),
+        ...(steering
+          ? {
+              takeSteering: steering.take,
+              onSteeringRejected: (steeringRequest, message) => {
+                steering.reject(steeringRequest, message);
+              },
+            }
+          : {}),
         onStateCheckpoint: async state => {
           this.unpersistedProviderState = state;
           await this.checkpoint(state, undefined, true);
@@ -248,6 +255,7 @@ export class ChatSession {
           ...(request.planProgress ? { planProgress: request.planProgress } : {}),
           ...(request.referenceSpans ? { referenceSpans: request.referenceSpans } : {}),
           ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
+          ...(request.skillIds ? { skillIds: request.skillIds } : {}),
         },
         attachmentPaths: request.attachments.map(attachment => attachment.path),
         ...(request.attachments.length > 0 ? { attachments: request.attachments } : {}),

@@ -1,3 +1,5 @@
+import type { TurnContextSnapshot } from '#src/context/turns/TurnContextEnvelope.js';
+import type { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { isReviewItemPending } from '#src/editing/reviews/isReviewItemPending.js';
 import type { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
@@ -76,6 +78,7 @@ interface ActiveRun {
 
 /** Adapts the existing application service to desktop commands without moving provider logic into Electron. */
 export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
+  private readonly unsubscribeSkills: (() => void) | undefined;
   private connected = true;
   private readonly unsubscribeAgentReviews: (() => void) | undefined;
   private readonly pendingShellEvents = new Map<
@@ -123,6 +126,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         | 'takePendingWake'
         | 'peekPendingWake'
       >;
+      readonly skills?: SkillCatalog;
       readonly refreshCatalogs?: (signal: AbortSignal) => Promise<void>;
       readonly instructionWatchRoots?: readonly string[];
       readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'>;
@@ -132,6 +136,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       readonly trusted?: boolean;
     },
   ) {
+    this.unsubscribeSkills = options.skills?.onDidChange(() => {
+      this.publish({ type: GlyphHostEventType.SKILLS_CHANGED, skills: options.skills!.skills });
+    });
     this.unsubscribeAgentReviews = options.agentReviews?.onDidChange(review => {
       this.publish({ type: GlyphHostEventType.AGENT_REVIEW_CHANGED, review });
     });
@@ -161,9 +168,11 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     const instructionSources = this.options.instructionCatalog
       ? await this.options.instructionCatalog.refresh()
       : undefined;
+    const skills = this.options.skills ? await this.options.skills.refresh() : undefined;
     for (const proposal of this.options.glyph.proposalReviews?.retainedReviews ?? [])
       this.proposals.set(proposal.id, toProposal(proposal));
     return {
+      ...(skills ? { skills } : {}),
       agentReviews: this.options.agentReviews?.reviews ?? [],
       ...(this.options.instructionWatchRoots ? { instructionWatchRoots: this.options.instructionWatchRoots } : {}),
       ...(instructionSources ? { instructionSources: toInstructionSources(instructionSources) } : {}),
@@ -722,6 +731,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     this.unsubscribeAgentReviews?.();
     this.unsubscribe?.();
     this.unsubscribeInstructions?.();
+    this.unsubscribeSkills?.();
     this.unsubscribeShells();
     this.unsubscribeWakes();
     await this.options.glyph.dispose();
@@ -874,6 +884,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           {
             push: part => {
               this.response(command.runId, part);
+              if (part.type === ChatResponsePartType.DIAGNOSTIC) {
+                const current = this.runs.get(command.runId)!;
+                this.setRun({ ...current, steering: steering.messages });
+              }
             },
           },
           signal,
@@ -1333,8 +1347,11 @@ function toRequestAttachments(attachments: readonly GlyphContextAttachment[]): C
       (
         attachment,
       ): attachment is GlyphContextAttachment & {
-        readonly kind: Exclude<GlyphContextAttachmentKind, GlyphContextAttachmentKind.RULE>;
-      } => attachment.kind !== GlyphContextAttachmentKind.RULE,
+        readonly kind: Exclude<
+          GlyphContextAttachmentKind,
+          GlyphContextAttachmentKind.RULE | GlyphContextAttachmentKind.SKILL
+        >;
+      } => attachment.kind !== GlyphContextAttachmentKind.RULE && attachment.kind !== GlyphContextAttachmentKind.SKILL,
     )
     .map(attachment => ({
       path: attachment.path,
@@ -1386,8 +1403,9 @@ function toInstructionSources(
   }));
 }
 
-function toTurnContext(context: import('#src/instructions/AgentInstructionSource.js').AgentInstructionTurnSnapshot) {
+function toTurnContext(context: TurnContextSnapshot) {
   return {
+    ...(context.skills?.length ? { skills: context.skills } : {}),
     sources: toInstructionSources(context.sources, true),
     activations: context.activations,
     candidates: context.candidates.map(({ id, name, description }) => ({ id, name, description })),

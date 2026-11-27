@@ -123,7 +123,9 @@ export class GlyphPromptEditor {
             h(GlyphContextBadge, {
               label: `${attachment.path.split('/').at(-1)}${range}${attachment.unavailable !== undefined && attachment.unavailable !== '' ? ' (unavailable)' : ''}`,
               title,
-              skill: attachment.kind === GlyphContextAttachmentKind.RULE,
+              skill:
+                attachment.kind === GlyphContextAttachmentKind.RULE ||
+                attachment.kind === GlyphContextAttachmentKind.SKILL,
               actionLabel: [
                 GlyphContextAttachmentKind.FILE,
                 GlyphContextAttachmentKind.SELECTION,
@@ -131,7 +133,8 @@ export class GlyphPromptEditor {
               ].includes(attachment.kind)
                 ? 'Preview'
                 : 'Open',
-              ...(attachment.kind === GlyphContextAttachmentKind.RULE
+              ...(attachment.kind === GlyphContextAttachmentKind.RULE ||
+              attachment.kind === GlyphContextAttachmentKind.SKILL
                 ? {}
                 : {
                     onClick: () => {

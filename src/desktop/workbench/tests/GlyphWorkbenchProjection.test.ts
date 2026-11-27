@@ -151,6 +151,12 @@ describe(GlyphWorkbenchProjection, () => {
   });
 
   describe(GlyphWorkbenchProjection.prototype.accept, () => {
+    it('replaces skill metadata from authoritative host events', () => {
+      const projection = new GlyphWorkbenchProjection();
+      projection.accept({ type: GlyphHostEventType.SKILLS_CHANGED, skills: [] });
+      expect(projection.state.skills).toEqual([]);
+    });
+
     it('replaces the active instruction source catalog', () => {
       const projection = new GlyphWorkbenchProjection();
       const sources = [

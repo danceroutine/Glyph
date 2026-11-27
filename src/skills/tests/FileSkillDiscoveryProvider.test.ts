@@ -1,0 +1,374 @@
+import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
+import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
+import { SkillToolRuntime } from '#src/skills/SkillToolRuntime.js';
+import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
+import { packageRevision, fileRevision } from '#src/skills/skillPackageRevision.js';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+
+describe(FileSkillDiscoveryProvider, () => {
+  it('discovers a larger catalog with bounded simultaneous metadata reads', async () => {
+    const fixture = await skillFixture();
+    const paths = Array.from({ length: 19 }, (_, i) => `.glyph/skills/example-${i}/SKILL.md`);
+    let active = 0,
+      peak = 0;
+    vi.spyOn(fixture.store, 'read').mockImplementation(async path => {
+      active++;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      active--;
+      const name = path.split('/').at(-2)!;
+      return {
+        path,
+        text: `---\nname: ${name}\ndescription: Example\n---\nBody`,
+        revision: 'revision',
+        byteOrderMark: false,
+        byteLength: 50,
+        mode: 0o644,
+        identity: path,
+      };
+    });
+    expect(await fixture.provider(paths).discover()).toHaveLength(19);
+    expect(peak).toBeLessThanOrEqual(8);
+  });
+
+  it('keeps valid, missing, and invalid packages visible and snapshots binary resources without expanding them', async () => {
+    const fixture = await skillFixture();
+    await fixture.write('.glyph/skills/example/SKILL.md', manifest());
+    await fixture.write('.glyph/skills/example/references/notes.md', 'REFERENCE');
+    await fixture.write('.glyph/skills/example/assets/data.bin', Buffer.from([0, 255]));
+    await fixture.write('.glyph/skills/example/assets/nul.bin', Buffer.from([0, 1]));
+    await fixture.write('.glyph/skills/missing/resource.md', 'Missing entry');
+    await fixture.write('src/.glyph/skills/bad/SKILL.md', 'Bad metadata');
+    const paths = [
+      '.glyph/skills/example/SKILL.md',
+      '.glyph/skills/example/references/notes.md',
+      '.glyph/skills/example/assets/data.bin',
+      '.glyph/skills/example/assets/nul.bin',
+      '.glyph/skills/missing/resource.md',
+      'src/.glyph/skills/bad/SKILL.md',
+      'unrelated/file.md',
+    ];
+    const provider = fixture.provider(paths);
+    const sources = await provider.discover();
+    expect(sources.map(source => [source.name, source.status, source.scope])).toEqual([
+      ['example', 'active', '.'],
+      ['missing', 'error', '.'],
+      ['bad', 'error', 'src'],
+    ]);
+    expect(JSON.stringify(sources)).not.toContain('BODY');
+    const snapshot = await provider.capture(sources[0]!);
+    expect(snapshot.body).toBe('BODY');
+    expect(snapshot.resources()).toEqual([]);
+    await fixture.write('.glyph/skills/example/references/notes.md', 'CHANGED');
+    expect(snapshot.readResource('references/notes.md').content).toBe('REFERENCE');
+    expect(snapshot.readResource('assets/data.bin')).toMatchObject({ encoding: 'base64', content: 'AP8=' });
+    expect(() => snapshot.readResource('../private.md')).toThrow('inside');
+    expect(() => snapshot.readResource('missing.md')).toThrow('missing');
+    await fixture.write('.glyph/skills/example/SKILL.md', manifest('CHANGED'));
+    await expect(provider.capture(sources[0]!)).rejects.toThrow('changed');
+    const user = fixture.provider(['.glyph/skills/example/SKILL.md'], 'future-claude');
+    const catalog = new SkillCatalog([provider, user]);
+    const descriptors = await catalog.refresh();
+    expect(descriptors.filter(source => source.name === 'example')).toHaveLength(2);
+  });
+
+  it('offers Edit only for indexed, readable manifests, including a manifest with invalid frontmatter', async () => {
+    const fixture = await skillFixture();
+    await fixture.write('.glyph/skills/ignored/SKILL.md', manifest());
+    await fixture.write('.glyph/skills/ignored/data.txt', 'ordinary resource');
+    await fixture.write('.glyph/skills/bad/SKILL.md', 'Missing frontmatter');
+    await fixture.write('.glyph/skills/linked/data.txt', 'ordinary resource');
+    await fixture.write('outside.md', manifest());
+    await symlink(join(fixture.root, 'outside.md'), join(fixture.root, '.glyph/skills/linked/SKILL.md'));
+    const read = vi.spyOn(fixture.store, 'read');
+    const results = await fixture
+      .provider(['.glyph/skills/ignored/data.txt', '.glyph/skills/bad/SKILL.md', '.glyph/skills/linked/SKILL.md'])
+      .discover();
+    expect(results.map(({ name, status, uri }) => [name, status, !!uri])).toEqual([
+      ['bad', 'error', true],
+      ['ignored', 'error', false],
+      ['linked', 'error', false],
+    ]);
+    expect(read.mock.calls.map(([path]) => path)).not.toContain('.glyph/skills/ignored/SKILL.md');
+  });
+
+  it.each([true, false])(
+    'uses owning store casing for discovery and qualified activation scope (caseSensitive=%s)',
+    async caseSensitive => {
+      const fixture = await skillFixture();
+      const path = 'Src/.GLYPH/Skills/example/skill.MD';
+      await fixture.write(path, manifest());
+      const exact = 'Exact/.glyph/skills/example/SKILL.md';
+      await fixture.write(exact, manifest());
+      const workspace = new FileSystemWorkspaceTextStore(fixture.root, { caseSensitive });
+      const provider = new FileSkillDiscoveryProvider({
+        origin: { id: 'one', label: 'One', scope: 'project', compatibility: 'glyph' },
+        directory: '.glyph/skills',
+        scopePrefix: 'Root',
+        workspace,
+        binaryStore: workspace,
+        listFiles: async () => ({ files: [path, exact], truncated: false }),
+        uriForPath: listed => listed,
+        refreshIndex: async () => {},
+      });
+      const catalog = new SkillCatalog([provider]);
+      const sources = await catalog.refresh();
+      if (caseSensitive) {
+        expect(sources.map(source => source.scope)).toEqual(['Root/Exact']);
+        const turn = await new SkillContextContributor(catalog).beginTurn({
+          turnId: 'strict',
+          attachmentPaths: ['Root/exact/task'],
+        });
+        expect(turn.initialEnvelope().skillCandidates).toEqual([]);
+        expect(turn.disclosePaths(['Root/Exact/task'])?.skillCandidates?.[0]?.id).toBe(sources[0]!.id);
+        return;
+      }
+      const nested = sources.find(source => source.path === path)!;
+      expect(nested).toMatchObject({ status: 'active', scope: 'Root/Src', path });
+      const contributor = new SkillContextContributor(catalog);
+      const turn = await contributor.beginTurn({ turnId: 'case', attachmentPaths: ['root/src/file'] });
+      expect(turn.initialEnvelope().skillCandidates).toEqual([]);
+      expect(turn.disclosePaths(['Root/sRc/file'])?.skillCandidates?.[0]?.id).toBe(nested.id);
+      expect((await turn.activateSource(nested.id, 'model', 'Task'))?.skills?.[0]?.body).toBe('BODY');
+      const initial = await contributor.beginTurn({ turnId: 'case2', attachmentPaths: ['Root/sRC'] });
+      expect(initial.initialEnvelope().skillCandidates).toHaveLength(1);
+    },
+  );
+
+  it('preserves short IDs and offers a stable bounded ID for deep packages on both selection routes', async () => {
+    const fixture = await skillFixture();
+    const path = `${'long-component/'.repeat(40)}.glyph/skills/example/SKILL.md`;
+    await fixture.write(path, manifest());
+    const provider = fixture.provider([path]);
+    const catalog = new SkillCatalog([provider]);
+    const [source] = await catalog.refresh();
+    const id = source!.id;
+    expect(id.length).toBeLessThanOrEqual(500);
+    expect((await catalog.refresh())[0]!.id).toBe(id);
+    const options = chatTurnOptionsSchema.parse({ skillIds: [id] });
+    const manual = await new SkillContextContributor(catalog).beginTurn({
+      turnId: 'long',
+      attachmentPaths: [],
+      ...options,
+    });
+    expect(manual.initialEnvelope().skills?.[0]?.body).toBe('BODY');
+    const model = await new SkillContextContributor(catalog).beginTurn({ turnId: 'model', attachmentPaths: [path] });
+    const runtime = new SkillToolRuntime({
+      activateSource: (_turnId, _contributor, sourceId, reason, explanation, signal) =>
+        model.activateSource(sourceId, reason, explanation, signal),
+      contribution: () => model,
+    });
+    const input = JSON.stringify({ id, reason: 'Task' });
+    runtime.tools[0]!.validateInput(input);
+    expect(
+      JSON.parse(await runtime.tools[0]!.execute(input, new AbortController().signal, { turnId: 'model' })),
+    ).toMatchObject({ activated: true });
+  });
+
+  it('uses disk permissions with editor-backed text and fingerprints only permission bits', async () => {
+    const fixture = await skillFixture();
+    const path = '.glyph/skills/example/SKILL.md';
+    await fixture.write(path, manifest());
+    const disk = await fixture.store.readBytes(path);
+    expect(fileRevision(disk.bytes)).toBe(disk.revision);
+    const provider = fixture.provider([path]);
+    const [source] = await provider.discover();
+    vi.spyOn(fixture.store, 'readBytes').mockResolvedValue({ ...disk, mode: 0o100755 });
+    const editor = await fixture.store.read(path);
+    vi.spyOn(fixture.store, 'read').mockResolvedValue({ ...editor, mode: 0o644 });
+    const pinned = await provider.capture(source!);
+    expect(pinned.revision).toBe(packageRevision(new Map([['SKILL.md', { revision: disk.revision, mode: 0o755 }]])));
+  });
+
+  it('rejects symlink resources rather than reading outside a package', async () => {
+    const fixture = await skillFixture();
+    await fixture.write('.glyph/skills/example/SKILL.md', manifest());
+    await fixture.write('outside.md', 'OUTSIDE');
+    await symlink(join(fixture.root, 'outside.md'), join(fixture.root, '.glyph/skills/example/link.md'));
+    const provider = fixture.provider(['.glyph/skills/example/SKILL.md', '.glyph/skills/example/link.md']);
+    const [source] = await provider.discover();
+    await expect(provider.capture(source!)).rejects.toThrow(/Symbolic|symbolic/u);
+  });
+
+  it('keeps other providers discoverable after a provider fails and preserves disabled preferences', async () => {
+    const fixture = await skillFixture();
+    await fixture.write('.glyph/skills/example/SKILL.md', manifest());
+    const provider = fixture.provider(['.glyph/skills/example/SKILL.md']);
+    const broken = fixture.provider([], 'broken');
+    vi.spyOn(broken, 'discover').mockRejectedValue(new Error('Index unavailable'));
+    const enabled = new Map([['project:.glyph/skills/example', false]]);
+    const catalog = new SkillCatalog([provider, broken], enabled);
+    const change = vi.fn();
+    const unsubscribe = catalog.onDidChange(change);
+    const sources = await catalog.refresh();
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'example', enabled: false }),
+        expect.objectContaining({ status: 'discovery-error', origin: broken.origin, message: 'Index unavailable' }),
+      ]),
+    );
+    await catalog.refresh();
+    expect(change).toHaveBeenCalledOnce();
+    await expect(catalog.capture(sources.find(source => source.name === 'example')!)).rejects.toThrow('disabled');
+    unsubscribe();
+    await catalog.refreshIndexes();
+    expect(fixture.refreshIndex).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses a current package-scoped index at activation and rejects an incomplete capture', async () => {
+    const fixture = await skillFixture();
+    const manifestPath = '.glyph/skills/example/SKILL.md';
+    await fixture.write(manifestPath, manifest());
+    const captureFiles = vi.fn(async () => ({ files: [manifestPath], truncated: false }));
+    const provider = new FileSkillDiscoveryProvider({
+      origin: { id: 'project', label: 'Project', scope: 'project', compatibility: 'glyph' },
+      directory: '.glyph/skills',
+      workspace: fixture.store,
+      uriForPath: path => path,
+      listFiles: async () => ({ files: ['.glyph', manifestPath], truncated: false }),
+      captureFiles,
+      refreshIndex: async () => {},
+    });
+    const [source] = await provider.discover();
+    expect((await provider.capture(source!)).body).toBe('BODY');
+    expect(captureFiles).toHaveBeenCalledWith(source!.directory, undefined);
+    captureFiles.mockResolvedValueOnce({ files: [], truncated: true });
+    await expect(provider.capture(source!)).rejects.toThrow('incomplete');
+  });
+
+  it('reports truncated discovery and respects cancellation', async () => {
+    const fixture = await skillFixture();
+    const provider = fixture.provider([]);
+    const controller = new AbortController();
+    controller.abort(new Error('Cancelled'));
+    await expect(provider.discover(controller.signal)).rejects.toThrow('Cancelled');
+    const truncated = new FileSkillDiscoveryProvider({
+      origin: { id: 'truncated', label: 'Truncated', scope: 'project', compatibility: 'glyph' },
+      directory: '.',
+      workspace: fixture.store,
+      listFiles: async () => ({ files: [], truncated: true }),
+      uriForPath: path => path,
+      refreshIndex: async () => {},
+    });
+    await expect(truncated.discover()).rejects.toThrow('incomplete');
+    expect(() => new SkillCatalog([provider, provider])).toThrow('unique');
+  });
+});
+
+async function skillFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'glyph-skill-package-'));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const store = new FileSystemWorkspaceTextStore(root);
+  const refreshIndex = vi.fn(async () => {});
+  return {
+    root,
+    store,
+    refreshIndex,
+    async write(path: string, content: string | Buffer) {
+      await mkdir(dirname(join(root, path)), { recursive: true });
+      await writeFile(join(root, path), content);
+    },
+    provider(paths: readonly string[], id = 'project') {
+      return new FileSkillDiscoveryProvider({
+        origin: { id, label: id, scope: 'project', compatibility: id },
+        directory: '.glyph/skills',
+        workspace: store,
+        binaryStore: store,
+        listFiles: async () => ({ files: paths, truncated: false }),
+        uriForPath: path => pathToFileURL(join(root, path)).href,
+        refreshIndex,
+      });
+    },
+  };
+}
+
+function manifest(body = 'BODY') {
+  return `---\nname: example\ndescription: Use for examples\n---\n${body}`;
+}
+
+describe('Skill compatibility location boundaries', () => {
+  it.each(['user', 'project'] as const)('supports independent %s layouts and scope prefixes', async scope => {
+    const fixture = await skillFixture();
+    await fixture.write(
+      'example/SKILL.md',
+      '---\nname: example\ndescription: Example\ncompatibility: Requires Python\n---\nBody',
+    );
+    const provider = new FileSkillDiscoveryProvider({
+      origin: { id: scope, label: scope, scope, compatibility: 'future' },
+      directory: '.',
+      scopePrefix: 'root',
+      workspace: fixture.store,
+      uriForPath: path => path,
+      listFiles: async () => ({ files: ['', 'orphan.md', 'example/SKILL.md'], truncated: false }),
+      refreshIndex: async () => {},
+    });
+    expect(await provider.discover()).toEqual([
+      expect.objectContaining({ scope: 'root', compatibility: 'Requires Python' }),
+    ]);
+    const nested = new FileSkillDiscoveryProvider({
+      origin: { id: scope, label: scope, scope: 'project', compatibility: 'future' },
+      directory: '.glyph/skills',
+      scopePrefix: 'root',
+      workspace: fixture.store,
+      uriForPath: path => path,
+      listFiles: async () => ({ files: ['src/.glyph/skills/example/SKILL.md'], truncated: false }),
+      refreshIndex: async () => {},
+    });
+    expect((await nested.discover())[0]?.scope).toBe('root/src');
+  });
+  it('propagates cancellation during a source read and reports non-Error failures', async () => {
+    const fixture = await skillFixture();
+    const controller = new AbortController();
+    const provider = fixture.provider(['.glyph/skills/example/SKILL.md']);
+    vi.spyOn(fixture.store, 'read').mockImplementationOnce(async () => {
+      controller.abort(new Error('Cancelled'));
+      throw new Error('Read failed');
+    });
+    await expect(provider.discover(controller.signal)).rejects.toThrow('Cancelled');
+    vi.spyOn(fixture.store, 'read').mockRejectedValueOnce('Unavailable');
+    expect((await provider.discover())[0]?.message).toBe('Skill metadata is unavailable.');
+  });
+});
+
+it('bounds aggregate manifest reads and preserves the admitted descriptors and overflow diagnostics', async () => {
+  const fixture = await skillFixture();
+  const names = Array.from({ length: 34 }, (_, index) => 'example-' + String(index).padStart(2, '0'));
+  const reads = vi.spyOn(fixture.store, 'read').mockImplementation(async (path, options) => {
+    const name = path.split('/').at(-2)!;
+    const text = `---\nname: ${name}\ndescription: Example\n---\nBody`.padEnd(256 * 1024, ' ');
+    expect(options?.maxBytes).toBe(Buffer.byteLength(text));
+    return {
+      path,
+      text,
+      revision: 'revision',
+      byteOrderMark: false,
+      byteLength: Buffer.byteLength(text),
+      mode: 0o644,
+      identity: path,
+    };
+  });
+  const found = await fixture.provider(names.map(name => '.glyph/skills/' + name + '/SKILL.md')).discover();
+  expect(reads).toHaveBeenCalledTimes(32);
+  expect(found.filter(skill => skill.status === 'active')).toHaveLength(32);
+  expect(found.slice(-2).every(skill => skill.message?.includes('8 MiB'))).toBe(true);
+});
+
+it('checks every resource again after reconciling a concurrent publication', async () => {
+  const fixture = await skillFixture();
+  const entry = '.glyph/skills/example/SKILL.md';
+  const resource = '.glyph/skills/example/references/notes.md';
+  await fixture.write(entry, manifest());
+  await fixture.write(resource, 'old');
+  const provider = fixture.provider([entry, resource]);
+  const [skill] = await provider.discover();
+  await expect(provider.capture(skill!, undefined, () => fixture.write(resource, 'updated'))).rejects.toThrow(
+    'changed during capture',
+  );
+  expect((await provider.capture(skill!)).readResource('references/notes.md').content).toBe('updated');
+});

@@ -126,7 +126,7 @@ it.describe('agent rules', () => {
   it('applies a manual rule only after the user selects its context badge', async ({ glyph, provider }) => {
     const skipped = await sendText(glyph, provider, 'No manual rule.', 'Skipped.');
     expect(JSON.stringify(skipped.body.input)).not.toContain('MANUAL BODY');
-    await glyph.composer.fill('Use @Man');
+    await glyph.composer.fill('Use /Man');
     await glyph.page.getByRole('option', { name: /Manual Rule/u }).click();
     const start = provider.requests.length;
     provider.enqueue({ chunks: ['Applied.'] });
@@ -188,7 +188,9 @@ it.describe('agent rules', () => {
     isolatedLaunch('reloads rule state'),
     async ({ glyph, provider }) => {
       const first = await sendText(glyph, provider, 'Do not modify files.', 'Understood.');
-      expect(initialContext(first).policy).toContain('cannot grant tools, permissions');
+      expect(initialContext(first).policy).toContain(
+        'within the tools, permissions and workspace access granted by host and user policy',
+      );
       await writeFile(join(glyph.workspace, '.glyph/rules/always.mdc'), '---\nalwaysApply: true\n---\nUPDATED BODY');
       await glyph.reload();
       const next = await sendText(glyph, provider, 'After reload.', 'Done.');

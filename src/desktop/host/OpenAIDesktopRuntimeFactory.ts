@@ -1,4 +1,10 @@
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
+import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
+import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
+import { SkillToolRuntime } from '#src/skills/SkillToolRuntime.js';
+import { InstructionContextContributor } from '#src/context/turns/InstructionContextContributor.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import { SqliteAgentReviewStore } from '#src/reviewing/SqliteAgentReviewStore.js';
@@ -85,6 +91,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   private readonly accounts = new OpenAIAccountService(new FileOpenAIAccountStore(this.configuration.stateDirectory));
   private initialized: Promise<void> | undefined;
   /** User rules are shared across workspaces; the factory owns this lazy index's lifetime. */
+  private userSkillIndex: RustWorkspacePathIndex | undefined;
   private userRuleIndex: RustWorkspacePathIndex | undefined;
 
   constructor(
@@ -253,6 +260,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             context.id,
             parts.map(part => ({ name: part.name, index: part.index })),
           );
+    let skills: SkillCatalog | undefined;
     let instructionCatalog: AgentInstructionCatalog | undefined;
     let turnContexts: TurnContextCoordinator | undefined;
     let userRules: UserAgentRuleManager | undefined;
@@ -322,7 +330,63 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         ],
         paths,
       );
-      turnContexts = new TurnContextCoordinator(instructionCatalog);
+      const skillRoot = join(userRuleRoot, 'skills');
+      await mkdir(skillRoot, { recursive: true });
+      const userSkillIndex = (this.userSkillIndex ??= new RustWorkspacePathIndex({
+        binaryPath: indexExecutable,
+        root: skillRoot,
+        caseSensitive: userRuleStore.caseSensitive,
+        respectGitIgnore: false,
+      }));
+      const userSkills = new FileSkillDiscoveryProvider({
+        origin: { id: 'user:glyph', label: 'User skill', scope: 'user', compatibility: 'glyph' },
+        directory: 'skills',
+        workspace: userRuleStore,
+        captureFiles: (directory, signal) =>
+          listSkillPackageFiles(userRuleStore, directory, indexExecutable, false, signal),
+        binaryStore: userRuleStore,
+        uriForPath: path => userRuleUri(userRuleRoot, path),
+        listFiles: async signal => {
+          await userRuleStore.canonicalPath('skills');
+          const result = await userSkillIndex.glob('**/*', { limit: 10_000, ...(signal ? { signal } : {}) });
+          return { ...result, files: result.files.map(path => `skills/${path}`) };
+        },
+        refreshIndex: async () => {
+          await userSkillIndex.refresh();
+        },
+      });
+      skills = new SkillCatalog([
+        userSkills,
+        ...parts.flatMap(part =>
+          ['.glyph', '.cursor'].map(
+            location =>
+              new FileSkillDiscoveryProvider({
+                origin: {
+                  id: `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:${location}`,
+                  label: `${part.name} ${location} skill`,
+                  scope: 'project',
+                  compatibility: location.slice(1),
+                },
+                directory: `${location}/skills`,
+                workspace: part.catalog,
+                captureFiles: (directory, signal) =>
+                  listSkillPackageFiles(part.disk, directory, indexExecutable, true, signal),
+                binaryStore: part.disk,
+                ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
+                uriForPath: path => userRuleUri(part.disk.root, path),
+                listFiles: signal =>
+                  part.index.glob(`**/${location}/skills/**/*`, { limit: 10_000, ...(signal ? { signal } : {}) }),
+                refreshIndex: async () => {
+                  await part.index.refresh();
+                },
+              }),
+          ),
+        ),
+      ]);
+      turnContexts = new TurnContextCoordinator([
+        new InstructionContextContributor(instructionCatalog),
+        new SkillContextContributor(skills),
+      ]);
       userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex);
     }
     const reviews = new ProposalReviewManager(
@@ -396,7 +460,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           logger,
           turnContexts,
         ),
-        ...(turnContexts ? [new RuleToolRuntime(turnContexts)] : []),
+        ...(turnContexts ? [new RuleToolRuntime(turnContexts), new SkillToolRuntime(turnContexts)] : []),
         new WebToolRuntime(new WebFetchService(webHttp), new DuckDuckGoSearch(webHttp)),
         new ProposeQuestionToolRuntime(interactions),
         new ShellToolRuntime(shells),
@@ -461,11 +525,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       await shells.dispose();
       throw error;
     }
-    // Share the account lifetime, but expose only project read/search tools to
-    // reviews. No shell, proposal, mode-switch, or interactive tools are registered.
+    // Reviews can read project files and the rules and skill resources advertised in their turn.
     const reviewProjectAccess = new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index, turnContexts);
     const reviewTools = turnContexts
-      ? new ToolRegistry([...reviewProjectAccess.tools, ...new RuleToolRuntime(turnContexts).tools])
+      ? new ToolRegistry([
+          ...reviewProjectAccess.tools,
+          ...new RuleToolRuntime(turnContexts).tools,
+          ...new SkillToolRuntime(turnContexts).tools,
+        ])
       : reviewProjectAccess;
     const reviewBackend = new OpenAIBackend(
       store,
@@ -506,10 +573,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       interactions,
       shellSessions: shells,
       ...(instructionCatalog ? { instructionCatalog } : {}),
+      ...(skills ? { skills } : {}),
       refreshCatalogs: async signal => {
-        await instructionCatalog?.refresh(signal);
+        await Promise.all([instructionCatalog?.refresh(signal), skills?.refresh(signal)]);
       },
-      instructionWatchRoots: userRules ? [userRules.directoryUri] : [],
+      instructionWatchRoots: userRules ? [userRules.directoryUri, userRuleUri(this.userDirectory, 'skills')] : [],
       ...(userRules ? { userRules } : {}),
       emit: input.emit,
       ownerWindowId: input.identity.windowId,
@@ -521,7 +589,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   async dispose(): Promise<void> {
     await this.initialized;
     try {
-      await this.userRuleIndex?.dispose();
+      const results = await Promise.allSettled([this.userRuleIndex?.dispose(), this.userSkillIndex?.dispose()]);
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed) throw failed.reason;
     } finally {
       await this.accounts.dispose();
     }

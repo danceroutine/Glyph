@@ -1,3 +1,8 @@
+import { InstructionContextContributor } from '#src/context/turns/InstructionContextContributor.js';
+import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
+import { TurnContextSession } from '#src/context/turns/TurnContextSession.js';
 import { describe, expect, it, vi } from 'vitest';
 import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
@@ -152,12 +157,15 @@ describe(TurnContextCoordinator, () => {
       new AgentInstructionCatalog([{ discover: async () => rules }], paths),
     );
     const turn = await coordinator.beginTurn({ turnId: 'bounded', attachmentPaths: [] });
-    expect(() => turn.disclosePaths(['api/SRC/ENTRY.TS', 'web/' + 'a'.repeat(1000)])).toThrow(
+    expect(() => coordinator.disclosePaths('bounded', ['api/SRC/ENTRY.TS', 'web/' + 'a'.repeat(1000)])).toThrow(
       'per-disclosure work limit',
     );
     expect(turn.snapshot().activations).toEqual([]);
-    expect(turn.disclosePaths(['web/SRC/ENTRY.TS'])).toBeUndefined();
-    expect(turn.disclosePaths(['api/SRC/ENTRY.TS'])?.sources.map(value => value.id)).toEqual(['glob', 'literal']);
+    expect(coordinator.disclosePaths('bounded', ['web/SRC/ENTRY.TS'])).toBeUndefined();
+    expect(coordinator.disclosePaths('bounded', ['api/SRC/ENTRY.TS'])?.sources.map(value => value.id)).toEqual([
+      'glob',
+      'literal',
+    ]);
   });
 
   it('blocks only attachments, reads and mutations below an unreadable guidance source', async () => {
@@ -360,10 +368,59 @@ describe(TurnContextCoordinator, () => {
     expect(() => coordinator.activateManualRules('ineligible', ['disabled', 'missing'])).toThrow('manual activation');
     expect(() => coordinator.activateManualRules('ineligible', ['missing'])).toThrow('unavailable');
     expect(coordinator.activateRule('ineligible', 'disabled')).toBeUndefined();
-    expect(() => session.activateRule('unnamed', AgentInstructionActivationReason.MANUAL)).toThrow('manual activation');
+    expect(() => coordinator.activateManualRules('ineligible', ['unnamed'])).toThrow('manual activation');
     await expect(
       coordinator.beginTurn({ turnId: 'queued', attachmentPaths: [], manualRuleIds: ['unnamed'] }),
     ).rejects.toThrow('manual activation');
-    expect(() => session.activateRule('missing', AgentInstructionActivationReason.MANUAL)).toThrow('unavailable');
   });
+});
+
+it('restores every domain after a steering disclosure exceeds the remaining instruction budget', async () => {
+  const nested = {
+    ...source('nested', AgentInstructionSourceKind.AGENTS_MD, 'src'),
+    content: 'n'.repeat(280 * 1024),
+  };
+  const manual = {
+    ...source(
+      'manual-large',
+      AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      '.',
+      AgentInstructionActivationMode.MANUAL,
+    ),
+    content: 'm'.repeat(280 * 1024),
+  };
+  const selected = aSkillDescriptor();
+  const nestedSkill = aSkillDescriptor({ id: 'nested-skill', name: 'nested-skill', scope: 'src' });
+  const skills = new SkillCatalog([
+    {
+      id: selected.origin.id,
+      origin: selected.origin,
+      discover: async () => [selected, nestedSkill],
+      capture: async descriptor => aSkillPackage(descriptor),
+      refreshIndex: async () => {},
+    },
+  ]);
+  const turns = new TurnContextCoordinator([
+    new InstructionContextContributor(new AgentInstructionCatalog([{ discover: async () => [nested, manual] }])),
+    new SkillContextContributor(skills),
+  ]);
+  const input = { turnId: 'steer', attachmentPaths: ['src/app.ts'], skillIds: [selected.id] };
+  const session = await turns.beginTurn({ turnId: input.turnId, attachmentPaths: [] });
+  const prior = session.snapshot();
+  await expect(turns.steer({ ...input, manualRuleIds: [manual.id] })).rejects.toThrow('512 KiB');
+  expect(session.snapshot()).toEqual(prior);
+  const accepted = await turns.steer(input);
+  expect(accepted?.skills?.[0]?.body).toBe('Skill instructions');
+  expect(accepted?.skillCandidates?.map(skill => skill.id)).toEqual([nestedSkill.id]);
+  expect(accepted?.sources.map(rule => rule.id)).toEqual([nested.id]);
+});
+
+it('admits manual instructions through the direct turn session and through coordinated steering', async () => {
+  const input = { turnId: 'direct', attachmentPaths: [], manualRuleIds: [] };
+  const session = new TurnContextSession({ ...input, sources });
+  expect(session.activateRule('manual', AgentInstructionActivationReason.MANUAL)?.sources[0]?.id).toBe('manual');
+  const coordinator = new TurnContextCoordinator(catalog() as never);
+  expect(await coordinator.steer(input)).toBeUndefined();
+  await coordinator.beginTurn(input);
+  expect((await coordinator.steer({ ...input, manualRuleIds: ['manual'] }))?.sources[0]?.id).toBe('manual');
 });

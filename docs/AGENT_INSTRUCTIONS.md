@@ -289,19 +289,40 @@ sequenceDiagram
 
 Creation collects the description or file globs required by the selected activation mode, derives a safe filename, and writes a template beneath `~/.glyph/rules`. Enable/disable and delete use `managementPath` and `managementRevision`, derived from the user rule's original source revision. A stale edit fails instead of overwriting newer text. The manager restricts mutations to direct `rules/*.mdc` children of its user store. Project rules are opened in the editor for normal file editing; these management commands do not grant arbitrary project or home-directory writes.
 
+## Skill discovery and activation
+
+Skills are packages containing `SKILL.md` and optional references, scripts, and assets. Project discovery uses the existing Rust indexes for `.glyph/skills` and the compatible `.cursor/skills` location. User discovery uses a separate, shared Rust index rooted at `~/.glyph/skills`. Each location supplies a [SkillDiscoveryProvider](../src/skills/SkillDiscoveryProvider.ts), so another compatibility location can be added independently of activation. Claude locations are reserved for a later compatibility provider.
+
+Discovery reads bounded `SKILL.md` snapshots and retains validated metadata. The model catalog contains descriptions and stable IDs, with each ID qualified by its origin and package location. Same-name packages remain visible. The Skills page in native Settings lists the catalog and its errors; **Edit** opens the selected package's `SKILL.md` in a pinned VS Code editor tab. The slash picker combines manual rules and skills, preserving the selected package ID separately from ordinary file attachments.
+
+[TurnContextCoordinator](../src/context/turns/TurnContextCoordinator.ts) prepares independent instruction and skill contributors for the same logical turn. Manual skill selections load during preparation. The model can select an advertised package with `skills.activate`, supplying its stable ID and a relevance explanation. Nested project candidates become visible when their scope participates through an attachment or file access. Candidate metadata is bounded to 50 entries and 32 KiB per turn; explicit user selections can address eligible packages beyond that advertised subset.
+
+Activation captures a bounded package snapshot in the host. This captures resource bytes, including binary assets, to keep later reads on the same package revision even if files change on disk. Only the instruction body enters model context at activation. `skills.read_resource` subsequently discloses an individual resource from that snapshot and records its revision in provenance. Reference prose is never recursively expanded into the model request. Reading a script returns its content; execution is a later capability with its own authorization boundary.
+
+The snapshot permits at most 256 files, 1 MiB per file, and 8 MiB in aggregate. An activated instruction body and each disclosed resource have separate 64 KiB limits. Oversized or unavailable content produces an error rather than truncated guidance. Each turn permits at most 32 active skill packages. These limits bound this skill contributor; the existing rules byte-budget TODO still concerns a combined instruction budget across domains.
+
+Activated packages and resources appear in “Context used” and are validated when the transcript is persisted. Their bodies are retained as provenance while the shared history-retention policy removes host envelopes from replayed conversation state. Activation records describe which context was used; they do not certify that a workflow completed.
+
+This discovery/activation milestone includes the Settings Edit action. Installation, updates, uninstall, persisted enablement management, and authorized script execution remain subsequent slices of rank 21. The package lifecycle contracts in `GlyphSkills.test.mjs` remain pending until those workflows are implemented and exercised.
+
 ## Completion, provenance, and history
 
 ```mermaid
 sequenceDiagram
     participant Runtime as AgentRuntime
     participant Coordinator as TurnContextCoordinator
-    participant Adapter as OpenAIProvider
+    participant Adapter as Provider adapter
+    participant Retention as AgentHistoryRetention
     participant Chat as ChatSession
     participant Store as SqliteChatSessionStore
     participant UI as GlyphAgentMessage
 
-    Runtime->>Adapter: commit(turn)
-    Adapter-->>Runtime: Provider history without standalone instruction envelopes
+    Runtime->>Adapter: snapshot(liveTurn)
+    Adapter-->>Runtime: Live provider wire state
+    Runtime->>Adapter: projectHistory(state, retention)
+    Adapter->>Retention: Project user messages and tool outputs
+    Retention-->>Adapter: Durable content
+    Adapter-->>Runtime: Provider state with transient envelopes removed
     Runtime->>Coordinator: completeTurn(turnId)
     Coordinator-->>Runtime: Activated sources, revisions, reasons, and advertised candidates
     Runtime-->>Chat: Turn result including context snapshot
@@ -313,7 +334,7 @@ sequenceDiagram
 
 The completed turn's context is persisted separately from user text. SQLite validates the stored context structure on load. This record preserves the activated source content and revisions even if the catalog changes later. The desktop projects provenance into the assistant message's “Context used” inspector. Expand a source in the inspector to read the instructions and revision retained for that turn, even after a file changes or is deleted. Open current file resolves through the current catalog.
 
-Provider commit removes standalone instruction-envelope messages. Instruction contexts inside tool results remain part of tool history; this filtering is not a guarantee that every old instruction body disappears from subsequent provider input. Durable provenance is also separate from provider history compaction. Activation decisions for the next turn are recomputed from a fresh catalog regardless of what older tool output remains in history.
+[AgentHistoryRetention](../src/chat/runtime/AgentHistoryRetention.ts) owns the persistence policy for all provider adapters. The runtime applies its projection at checkpoints and restoration, removing standalone host instruction messages and host-added envelopes from serialized tool outputs while retaining ordinary tool data. The live turn retains those instructions for subsequent tool rounds. Adapters locate protocol fields and preserve their ordering, call IDs, and opaque reasoning state. This also cleans older saved tool outputs before they are replayed. Completed-turn provenance remains separately available to the inspector, and activation decisions are recomputed from the next turn’s catalog.
 
 Failed or cancelled turns release their live session in `finally` and do not return a completed context snapshot. Ordinary tool intent/outcome checkpoints still retain their own provider state. The coordinator reserves a slot before refreshing instructions. It keeps up to 32 live or starting turns and returns a retryable admission message when all slots are in use.
 

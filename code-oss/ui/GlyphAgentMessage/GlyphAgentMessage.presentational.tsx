@@ -76,9 +76,9 @@ export function GlyphAgentMessage({
       )}
       {approval}
       {shells}
-      {context && context.sources.length > 0 && (
+      {context && (context.sources.length > 0 || (context.skills?.length ?? 0) > 0) && (
         <details class={styles.context}>
-          <summary>Context used ({context.sources.length})</summary>
+          <summary>Context used ({context.sources.length + (context.skills?.length ?? 0)})</summary>
           <ul class={styles.contextList}>
             {context.sources.map(source => {
               const activation = context.activations.find(value => value.sourceId === source.id);
@@ -107,6 +107,31 @@ export function GlyphAgentMessage({
                 </li>
               );
             })}
+            {context.skills?.map(skill => (
+              <li key={skill.descriptor.id}>
+                <button
+                  type="button"
+                  class={styles.contextSource}
+                  title={`Open ${skill.descriptor.path}`}
+                  onClick={() => {
+                    entry.openLink(`glyph-skill:${encodeURIComponent(skill.descriptor.id)}`);
+                  }}
+                >
+                  {skill.descriptor.name} · {skill.reason} · {skill.descriptor.origin.label}
+                </button>
+                <div>{skill.explanation}</div>
+                <details>
+                  <summary>Instructions used · {skill.revision.slice(0, 8)}</summary>
+                  <pre>{skill.body}</pre>
+                  {skill.resources.map(resource => (
+                    <details key={resource.path}>
+                      <summary>{resource.path}</summary>
+                      <pre>{resource.content}</pre>
+                    </details>
+                  ))}
+                </details>
+              </li>
+            ))}
           </ul>
         </details>
       )}

@@ -1,3 +1,4 @@
+import type { GlyphSkill } from './GlyphSkill.ts';
 import type { AgentReview } from '#src/reviewing/AgentReview.js';
 import type { GlyphBackgroundShell } from './GlyphBackgroundShell.ts';
 import type { GlyphAccountSummary } from './GlyphAccountSummary.ts';
@@ -10,6 +11,7 @@ import type { GlyphInstructionSource } from './GlyphInstructionSource.ts';
 
 /** Full recoverable projection used when replay is unavailable or unsafe. */
 export interface GlyphDesktopSnapshot {
+  readonly skills?: readonly GlyphSkill[];
   /** Host-authorized directories to observe for instruction changes. */
   readonly instructionWatchRoots?: readonly string[];
   readonly userRulesDirectoryUri?: string;

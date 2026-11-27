@@ -1,3 +1,4 @@
+import type { GlyphSkill } from '#glyph/protocol/events/GlyphSkill.js';
 import { describe, expect, it, vi, type Mock } from 'vitest';
 import { GlyphContextController } from '#vs/workbench/contrib/glyph/browser/GlyphContextController.js';
 import { URI } from '#vs/base/common/uri.js';
@@ -83,6 +84,7 @@ function controllerServices() {
       enabled?: boolean;
       name?: string;
       description?: string;
+      uri?: string;
       revision?: string;
       managementRevision?: string;
       references?: readonly string[];
@@ -115,7 +117,10 @@ function controllerServices() {
       })),
       openSource: vi.fn(async () => false),
     },
-    editors: { activeTextEditorControl: undefined as unknown, openEditor: vi.fn(async () => undefined) },
+    editors: {
+      activeTextEditorControl: undefined as unknown,
+      openEditor: vi.fn(async (_input: { resource: URI; options?: unknown }) => undefined),
+    },
     modelService: {
       onModelAdded: modelAdded.event,
       getModels: () => models,
@@ -171,12 +176,198 @@ function createController(services: ControllerServices) {
 }
 
 describe(GlyphContextController, () => {
+  it.each([GlyphContextAttachmentKind.SKILL, GlyphContextAttachmentKind.RULE])(
+    'treats %s badges as live references during refresh, open, and rebind',
+    async kind => {
+      const services = controllerServices();
+      const source = {
+        id: 'reference',
+        kind: 'glyph_project_rule',
+        activation: 'manual',
+        path: '.glyph/skills/example/SKILL.md',
+        directory: '.glyph/skills/example',
+        name: 'example',
+        description: 'Examples',
+        origin: { id: 'project', label: 'Project', scope: 'project' as const, compatibility: 'glyph' },
+        scope: '.',
+        status: 'active' as 'active' | 'error',
+        enabled: true,
+        allowedTools: [],
+        revision: 'one',
+        uri: 'file:///workspace/.glyph/skills/example/SKILL.md',
+      };
+      const controller = createController(services);
+      const sources = [source];
+      controller.setSkillSources(() => sources);
+      services.instructionSources.push(source);
+      const uri = kind === GlyphContextAttachmentKind.SKILL ? 'glyph-skill:reference' : 'glyph-rule:reference';
+      const badge: GlyphContextAttachment = { kind, uri, path: 'example', text: '', contentRevision: 'one' };
+      expect(await controller.checkAttachment(badge)).toBeUndefined();
+      source.revision = 'two';
+      expect(await controller.checkAttachment(badge)).toContain('latest version');
+      expect(await controller.refreshAttachment({ ...badge, unavailable: 'Old binding' })).toMatchObject({
+        contentRevision: 'two',
+      });
+      expect(controller.rebindAttachment({ ...badge, unavailable: 'Old binding' }).unavailable).toBeUndefined();
+      services.files.stat.mockImplementation(async resource => ({
+        isFile: resource.path.endsWith('SKILL.md'),
+        isDirectory: !resource.path.endsWith('SKILL.md'),
+      }));
+      if (kind === GlyphContextAttachmentKind.SKILL) {
+        const { revision: _revision, ...unversioned } = source;
+        controller.setSkillSources(() => [unversioned]);
+        expect((await controller.refreshAttachment(badge)).contentRevision).toBe(source.id);
+        controller.setSkillSources(() => sources);
+      }
+      await controller.openAttachment(badge);
+      expect(services.editors.openEditor.mock.calls.at(-1)?.[0].resource.toString()).toBe(source.uri);
+      expect(services.editors.openEditor).toHaveBeenCalledWith(expect.objectContaining({ options: { pinned: true } }));
+      source.enabled = false;
+      expect(await controller.checkAttachment(badge)).toContain('unavailable');
+      await expect(controller.refreshAttachment(badge)).rejects.toThrow('unavailable');
+      source.enabled = true;
+      source.status = 'error';
+      await expect(controller.refreshAttachment(badge)).rejects.toThrow('unavailable');
+      sources.splice(0);
+      services.instructionSources.splice(0);
+      await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+      expect(await controller.checkAttachment({ ...badge, uri: 'file:///not-a-reference' })).toContain('unavailable');
+      controller.dispose();
+    },
+  );
+
+  it('refreshes skill metadata before searching the slash catalog', async () => {
+    const services = controllerServices();
+    const controller = createController(services);
+    let sources: readonly GlyphSkill[] = [];
+    const refresh = vi.fn(async () => {
+      sources = [
+        {
+          id: 'new-skill',
+          name: 'new-skill',
+          description: 'Newly repaired workflow',
+          revision: 'repaired-r1',
+          path: '.glyph/skills/new-skill/SKILL.md',
+          directory: '.glyph/skills/new-skill',
+          scope: '.',
+          origin: { id: 'project', label: 'Project', scope: 'project', compatibility: 'glyph' },
+          enabled: true,
+          status: 'active',
+          allowedTools: [],
+          uri: 'file:///workspace/.glyph/skills/new-skill/SKILL.md',
+        },
+      ];
+    });
+    controller.setSkillSources(() => sources, refresh);
+    expect(await controller.searchInstructions('repaired')).toMatchObject([
+      { skillId: 'new-skill', revision: 'repaired-r1' },
+    ]);
+    expect(refresh).toHaveBeenCalledOnce();
+    services.trust.isWorkspaceTrusted.mockReturnValue(false);
+    await expect(controller.searchInstructions('repaired')).rejects.toThrow();
+    expect(refresh).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it('looks up the current skill identity and rejects unavailable, removed or linked editor targets', async () => {
+    const services = controllerServices();
+    const controller = createController(services);
+    const packageA = {
+      id: 'api',
+      name: 'task',
+      description: 'Workflow',
+      scope: 'api',
+      directory: 'api/.glyph/skills/task',
+      path: 'api/.glyph/skills/task/SKILL.md',
+      uri: 'file:///workspace/api/.glyph/skills/task/SKILL.md',
+      origin: { id: 'project', label: 'Project', scope: 'project' as const, compatibility: 'glyph' },
+      status: 'active' as const,
+      enabled: true,
+      allowedTools: [],
+    };
+    const packageB = { ...packageA, id: 'web', scope: 'web', path: 'web/.glyph/skills/task/SKILL.md' };
+    let sources: readonly GlyphSkill[] = [packageA, packageB];
+    const refresh = vi.fn(async () => {});
+    controller.setSkillSources(() => sources, refresh);
+    expect(
+      (await controller.searchInstructions('api')).map(candidate => [candidate.skillId, candidate.detail]),
+    ).toEqual([['api', `${packageA.path} · Project · Workflow`]]);
+    expect((await controller.searchInstructions('task')).map(candidate => candidate.detail)).toEqual([
+      `${packageA.path} · Project · Workflow`,
+      `${packageB.path} · Project · Workflow`,
+    ]);
+    expect((await controller.searchInstructions('web'))[0]?.ancestry).toEqual(['Project', ...packageB.path.split('/')]);
+    const badge = { uri: 'glyph-skill:api', path: 'task' };
+    refresh.mockImplementationOnce(async () => {
+      sources = [{ ...packageA, uri: '', status: 'error' }];
+    });
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    expect(services.files.stat).not.toHaveBeenCalled();
+    sources = [packageA];
+    services.files.stat.mockImplementation(async uri => ({
+      isFile: uri.path.endsWith('SKILL.md'),
+      isDirectory: !uri.path.endsWith('SKILL.md'),
+      isSymbolicLink: uri.path.endsWith('/task'),
+    }));
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    sources = [{ ...packageA, uri: 'https://example.com/SKILL.md' }];
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    sources = [packageA];
+    services.files.stat.mockResolvedValueOnce({ isDirectory: true, isFile: false });
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    services.files.stat.mockImplementation(async uri => {
+      sources = [{ ...packageA, uri: 'file:///other/package/SKILL.md' }];
+      return { isFile: uri.path.endsWith('SKILL.md'), isDirectory: !uri.path.endsWith('SKILL.md') };
+    });
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    refresh.mockImplementationOnce(async () => {
+      sources = [];
+    });
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    expect(services.editors.openEditor).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it('opens workspace rule references without direct URIs and refreshes an unversioned reference by ID', async () => {
+    const services = controllerServices();
+    services.instructionSources.push({
+      id: 'rule',
+      kind: 'glyph_project_rule',
+      activation: 'manual',
+      path: '.glyph/rules/example.mdc',
+      status: 'active',
+    });
+    const controller = createController(services);
+    const badge: GlyphContextAttachment = {
+      kind: GlyphContextAttachmentKind.RULE,
+      uri: 'glyph-rule:rule',
+      path: 'Example',
+      text: '',
+      contentRevision: 'old',
+    };
+    expect(await controller.checkAttachment(badge)).toBeUndefined();
+    expect(await controller.refreshAttachment(badge)).toMatchObject({ path: 'Example', contentRevision: 'rule' });
+    services.files.stat.mockImplementation(async resource => ({
+      isFile: resource.path.endsWith('.mdc'),
+      isDirectory: !resource.path.endsWith('.mdc'),
+    }));
+    await controller.openAttachment(badge);
+    expect(services.editors.openEditor.mock.calls.at(-1)?.[0].resource.toString()).toBe(
+      'file:///workspace/.glyph/rules/example.mdc',
+    );
+    expect(services.editors.openEditor).toHaveBeenCalledWith(expect.objectContaining({ options: { pinned: true } }));
+    controller.dispose();
+  });
+
   it.each([
     '/workspace/src/AGENTS.md',
     '/workspace/.glyph/rules/new.mdc',
     '/workspace/.cursor/rules/new.mdc',
     '/workspace/reference.md',
     '/custom/references/note.md',
+    '/workspace/pkg/.glyph/skills/new/SKILL.md',
+    '/workspace/.cursor/skills/new/SKILL.md',
+    '/custom/skills/new/SKILL.md',
   ])('refreshes instruction discovery after a relevant file or dirty-model change at %s', async path => {
     vi.useFakeTimers();
     const services = controllerServices();
@@ -203,7 +394,7 @@ describe(GlyphContextController, () => {
     const controller = createController(services);
     const refresh = vi.fn(async () => {});
     try {
-      controller.setInstructionRefresh(refresh, () => ['file:///custom/rules']);
+      controller.setInstructionRefresh(refresh, () => ['file:///custom/rules', 'file:///custom/skills']);
       controller.notifyInstructionsChanged();
       expect(services.files.watch).toHaveBeenCalledWith(URI.file('/custom/references/note.md'), {
         recursive: false,
@@ -500,7 +691,7 @@ describe(GlyphContextController, () => {
       await expect(controller.searchFiles('')).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
       });
-      await expect(controller.searchRules('')).rejects.toMatchObject({
+      await expect(controller.searchInstructions('')).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
       });
     });
@@ -596,7 +787,7 @@ describe(GlyphContextController, () => {
       );
 
       const controller = createController(services);
-      expect(await controller.searchRules('type')).toEqual([
+      expect(await controller.searchInstructions('type')).toEqual([
         {
           uri: 'glyph-rule:manual',
           path: 'TypeScript',
@@ -607,7 +798,7 @@ describe(GlyphContextController, () => {
           revision: 'one',
         },
       ]);
-      expect(await controller.searchRules('access')).toEqual([
+      expect(await controller.searchInstructions('access')).toEqual([
         {
           uri: 'glyph-rule:path-name',
           path: 'accessibility.mdc',
@@ -617,7 +808,7 @@ describe(GlyphContextController, () => {
           ruleId: 'path-name',
         },
       ]);
-      expect(await controller.searchRules('missing')).toEqual([]);
+      expect(await controller.searchInstructions('missing')).toEqual([]);
       expect(services.search.fileSearch).not.toHaveBeenCalled();
     });
 

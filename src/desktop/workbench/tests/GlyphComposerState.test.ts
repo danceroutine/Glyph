@@ -49,34 +49,39 @@ describe(GlyphComposerState, () => {
       expect(text.trim().slice(span!.from, span!.to)).toBe('@a.ts (2-3)');
     });
   });
-  it('sends manual rule badges as stable rule ids instead of captured attachments', async () => {
-    const composer = new GlyphComposerState();
-    composer.setDocument({
-      parts: [
-        { type: 'text', text: 'Use ' },
-        {
-          type: 'attachment',
-          attachment: {
-            kind: GlyphContextAttachmentKind.RULE,
-            uri: 'glyph-rule:rule-id',
-            path: 'Review discipline',
-            text: '',
-            contentRevision: 'revision',
-            ruleId: 'rule-id',
+  it.each([GlyphContextAttachmentKind.RULE, GlyphContextAttachmentKind.SKILL])(
+    'sends %s badges as stable IDs instead of captured attachments',
+    async kind => {
+      const composer = new GlyphComposerState();
+      composer.setDocument({
+        parts: [
+          { type: 'text', text: 'Use ' },
+          {
+            type: 'attachment',
+            attachment: {
+              kind,
+              uri: 'glyph-rule:rule-id',
+              path: 'Review discipline',
+              text: '',
+              contentRevision: 'revision',
+              ...(kind === GlyphContextAttachmentKind.RULE ? { ruleId: 'rule-id' } : { skillId: 'skill-id' }),
+            },
           },
-        },
-      ],
-      from: 5,
-      to: 5,
-    });
+        ],
+        from: 5,
+        to: 5,
+      });
 
-    await composer.submit(async (text, attachments, options) => {
-      expect(text).toBe('Use /Review discipline');
-      expect(attachments).toEqual([]);
-      expect(options).toMatchObject({ manualRuleIds: ['rule-id'] });
-      expect(options?.attachmentSpans).toBeUndefined();
-    });
-  });
+      await composer.submit(async (text, attachments, options) => {
+        expect(text).toBe('Use /Review discipline');
+        expect(attachments).toEqual([]);
+        expect(options).toMatchObject(
+          kind === GlyphContextAttachmentKind.RULE ? { manualRuleIds: ['rule-id'] } : { skillIds: ['skill-id'] },
+        );
+        expect(options?.attachmentSpans).toBeUndefined();
+      });
+    },
+  );
   it('restores annotations and mode after a rejected send and keeps edits and deletion scoped to the draft', async () => {
     const composer = new GlyphComposerState();
     composer.setMode(AgentModeID.PLAN);
