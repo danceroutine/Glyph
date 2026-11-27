@@ -6,6 +6,7 @@ use rustix::fs::{
 };
 use rustix::io::Errno;
 use std::ffi::{CStr, CString};
+mod parents;
 mod staging;
 
 #[cfg(test)]
@@ -93,6 +94,20 @@ pub(super) fn execute(request: &Request) -> Result<Option<String>, Failure> {
                 existing_depth,
             )?;
         }
+        Operation::StageParent { mode, staging_slot } => {
+            return Ok(Some(parents::stage(
+                &root,
+                staging::mode(*mode)?,
+                staging_slot,
+            )?));
+        }
+        Operation::RollbackParent {
+            relative,
+            identity,
+            staging_slot,
+        } => {
+            parents::rollback(&root, relative, identity, staging_slot)?;
+        }
         Operation::CreateStage { relative } => {
             staging::create_stage(&root, relative)?;
         }
@@ -111,6 +126,9 @@ pub(super) fn execute(request: &Request) -> Result<Option<String>, Failure> {
             let target = relative_components(target_relative)?;
             let (from, source_name) = open_parent(&root, &source)?;
             let (to, target_name) = open_parent(&root, &target)?;
+            if parents::is_staging_slot(&source) {
+                parents::inherit_permissions(&from, source_name, &to)?;
+            }
             rename_pinned(&from, source_name, &to, target_name)?;
         }
         Operation::RemoveTree { relative } => {
@@ -284,6 +302,10 @@ fn check_cleanup_identity(opened: &Stat, current: &Stat) -> Result<(), Failure> 
     Ok(())
 }
 
+fn unsupported_metadata(error: std::io::Error) -> Failure {
+    Failure::new("ENOTSUP", error.to_string())
+}
+
 fn inspect_metadata(
     parent: &OwnedFd,
     name: &CStr,
@@ -320,7 +342,7 @@ fn inspect_metadata(
     } else {
         glyph_filesystem_metadata::assert_access_metadata(&fd)
     };
-    metadata.map_err(|error| Failure::new("ENOTSUP", error.to_string()))?;
+    metadata.map_err(unsupported_metadata)?;
     let mut hash = Sha256::new();
     hash.update(info.st_uid.to_le_bytes());
     hash.update(info.st_gid.to_le_bytes());

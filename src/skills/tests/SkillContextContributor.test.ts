@@ -125,8 +125,11 @@ describe(SkillContextContributor, () => {
     const skills = turns.contribution('same', 'skills') as SkillTurnContext;
     const pending = session.prepareReplay();
     const handoff = await turns.authorizeDisclosure('same', undefined, pending);
-    skills.retireSource(active.id);
-    skills.retireSource(nested.id);
+    catalog.retirements.publish('unrelated', 'other-commit');
+    expect(handoff).not.toThrow();
+    catalog.retirements.publish(active.id, 'active-update');
+    catalog.retirements.publish(active.id, 'another-update');
+    catalog.retirements.publish(nested.id, 'nested-update');
     expect(handoff).toThrow('changed');
     expect(skills.disclosePaths(['src/file'])).toBeUndefined();
     expect(() => skills.activePackage(active.id)).toThrow('Activate the skill');
@@ -139,6 +142,34 @@ describe(SkillContextContributor, () => {
     expect(() => turns.authorizeDisclosure('same', undefined, pending)).toThrow('ended');
   });
 
+  it('keeps new turns on a committed replacement during recovery and isolates failing notification listeners', async () => {
+    const skill = aSkillDescriptor();
+    const catalog = new SkillCatalog([
+      {
+        id: skill.origin.id,
+        origin: skill.origin,
+        discover: async () => [skill],
+        capture: async () => aSkillPackage(skill),
+        refreshIndex: async () => {},
+      },
+    ]);
+    const contributor = new SkillContextContributor(catalog);
+    const disconnect = catalog.retirements.subscribe(() => {
+      throw new Error('Window closed');
+    });
+    const previous = await contributor.beginTurn({ turnId: 'old', attachmentPaths: [] });
+    catalog.retirements.publish(skill.id, 'commit');
+    expect(previous.initialEnvelope().skillCandidates).toEqual([]);
+    previous.release();
+    disconnect();
+    const current = await contributor.beginTurn({ turnId: 'new', attachmentPaths: [] });
+    catalog.retirements.publish(skill.id, 'commit');
+    expect(current.initialEnvelope().skillCandidates).toHaveLength(1);
+    catalog.retirements.settled('commit');
+    catalog.retirements.publish(skill.id, 'next commit');
+    expect(current.initialEnvelope().skillCandidates).toEqual([]);
+    current.release();
+  });
   it('allowlists model fields and keeps editor and installation provenance in the local snapshot', async () => {
     const descriptor = {
       ...aSkillDescriptor({ uri: 'file:///private/workspace', compatibility: 'Needs SDK', allowedTools: ['Read'] }),
@@ -337,11 +368,12 @@ describe(SkillContextContributor, () => {
       },
     ]);
     const session = new SkillTurnContext('turn', [source], [source], catalog);
+    await session.initialize([]);
     expect(() => session.readResource(source.id, 'reference.md')).toThrow('Activate');
     const activation = session.activateSource(source.id, 'model', 'Task');
     const duplicate = session.activateSource(source.id, 'model', 'Same task');
     if (state === 'ended') session.release();
-    else session.retireSource(source.id);
+    else catalog.retirements.publish(source.id, 'source-update');
     finish(aSkillPackage(source));
     const message = state === 'ended' ? 'ended' : 'changed during activation';
     await expect(activation).rejects.toThrow(message);

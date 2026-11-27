@@ -60,11 +60,12 @@ export class SkillLifecycleToolRuntime implements ToolSource {
           if (Boolean(change.remove_id) === Boolean(change.draft))
             throw new Error('Choose a package draft or a removal.');
           const preview = change.remove_id
-            ? await manager.prepareRemoval(change.remove_id)
+            ? await manager.prepareRemoval(change.remove_id, signal)
             : await manager.prepare(
                 change.target_id,
                 new SkillPackageDraft({ ...change.draft!, source: 'Agent-proposed package' }),
                 change.replace_id ?? undefined,
+                signal,
               );
           try {
             signal.throwIfAborted();
@@ -74,10 +75,7 @@ export class SkillLifecycleToolRuntime implements ToolSource {
             if (instructionContext) return proposalInstructionContext(instructionContext);
             if (!(await approve(preview, signal))) return JSON.stringify({ applied: false, denied: true });
             signal.throwIfAborted();
-            const retired = change.remove_id ?? change.replace_id;
-            const skills = turns.contribution(context.turnId, 'skills');
             const result = await manager.apply(preview.id, signal);
-            if (retired) skills?.retireSource?.(retired);
             return JSON.stringify({
               ...result,
               name: preview.name,

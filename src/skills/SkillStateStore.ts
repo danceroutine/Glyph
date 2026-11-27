@@ -1,3 +1,4 @@
+import { SkillPackageRetirements } from './SkillPackageRetirements.ts';
 import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import { inspectOwnerControlledDirectory, inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 import { z } from 'zod';
@@ -30,6 +31,7 @@ export class SkillStateStore {
   private readonly listeners = new Set<() => void>();
   readonly enabled = new Map<string, boolean>();
   readonly installations = new Map<string, { source: string; revision: string }>();
+  readonly retirements = new SkillPackageRetirements();
   readonly preferences: SkillPreferenceFile;
   constructor(
     readonly userDirectory: string,
@@ -77,16 +79,30 @@ export class SkillStateStore {
       signal,
     );
   }
-  record(id: string, source: string, revision: string): Promise<void> {
-    return this.update(next => {
-      next.installations[id] = { source, revision };
-    });
+  record(
+    id: string,
+    source: string,
+    revision: string,
+    signal?: AbortSignal,
+    verifySource?: () => Promise<void>,
+  ): Promise<void> {
+    return this.update(
+      next => {
+        next.installations[id] = { source, revision };
+      },
+      verifySource,
+      signal,
+    );
   }
-  forget(id: string): Promise<void> {
-    return this.update(next => {
-      delete next.enabled[id];
-      delete next.installations[id];
-    });
+  forget(id: string, signal?: AbortSignal, verifySource?: () => Promise<void>): Promise<void> {
+    return this.update(
+      next => {
+        delete next.enabled[id];
+        delete next.installations[id];
+      },
+      verifySource,
+      signal,
+    );
   }
   private async update(
     change: (data: Preferences) => void,

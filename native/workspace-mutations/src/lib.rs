@@ -59,6 +59,15 @@ enum Operation {
         mode: Option<u32>,
         create_suffix_length: Option<usize>,
     },
+    StageParent {
+        mode: u32,
+        staging_slot: String,
+    },
+    RollbackParent {
+        relative: String,
+        identity: String,
+        staging_slot: String,
+    },
     CreateStage {
         relative: String,
     },

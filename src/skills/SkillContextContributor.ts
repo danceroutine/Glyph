@@ -21,8 +21,7 @@ export class SkillContextContributor implements TurnContextContributor {
     const sources = await this.catalog.refresh(signal);
     const descriptors = sources.filter(skill => skill.enabled && skill.status === 'active');
     const candidates = this.catalog.applicableSkills(descriptors, input.attachmentPaths);
-    const origins = await enrollSources(descriptors, signal);
-    const session = new SkillTurnContext(input.turnId, descriptors, candidates, this.catalog, sources, origins);
+    const session = new SkillTurnContext(input.turnId, descriptors, candidates, this.catalog, sources);
     try {
       await session.initialize(input.skillIds ?? [], signal);
     } catch (error) {
@@ -43,36 +42,24 @@ export class SkillTurnContext implements TurnContextContribution {
   private retired: ReadonlySet<string> = new Set();
   replayFilter?: (context: TurnContextEnvelope) => TurnContextEnvelope | undefined;
   private released = false;
+  private stopObserving?: () => void;
+  private origins: ReadonlyMap<string, readonly SourcePin[]> = new Map();
   constructor(
     private readonly turnId: string,
     private readonly descriptors: readonly SkillDescriptor[],
     initial: readonly SkillDescriptor[],
     private readonly catalog: SkillCatalog,
     private readonly sources = descriptors,
-    private readonly origins: ReadonlyMap<string, readonly SourcePin[]> = new Map(),
   ) {
     this.initialCandidates = this.offerCandidates(initial);
   }
   async initialize(ids: readonly string[], signal?: AbortSignal): Promise<void> {
+    this.stopObserving = this.catalog.retirements.subscribe(id => {
+      this.retireSource(id);
+    });
+    this.origins = await enrollSources(this.descriptors, signal);
     const activation = await this.activateManualSkills(ids, 'Selected by the user', signal);
     this.initialSkills = activation?.skills ?? [];
-  }
-  retireSource(id: string): void {
-    const retired = new Set(this.retired).add(id);
-    this.retired = retired;
-    this.replayFilter = context => {
-      const remaining = {
-        ...context,
-        ...(context.skillCandidates && {
-          skillCandidates: context.skillCandidates.filter(candidate => !retired.has(candidate.id)),
-        }),
-        ...(context.skills && { skills: context.skills.filter(skill => !retired.has(skill.descriptor.id)) }),
-        ...(context.skillResources && {
-          skillResources: context.skillResources.filter(resource => !retired.has(resource.skillId)),
-        }),
-      };
-      return hasModelContext(remaining) ? remaining : undefined;
-    };
   }
   /** Collect the discovered manifest for advertisements and only the pinned package files
    * actually entering the provider input. Unopened resources remain outside each disclosure. */
@@ -93,11 +80,12 @@ export class SkillTurnContext implements TurnContextContribution {
     return result;
   }
   initialEnvelope(): TurnContextEnvelope {
+    const skills = this.initialSkills.filter(skill => !this.retired.has(skill.descriptor.id));
     return {
       schema: 'glyph.agent-instructions.v1',
       sources: [],
-      skillCandidates: this.initialCandidates,
-      ...(this.initialSkills.length > 0 ? { skills: this.initialSkills } : {}),
+      skillCandidates: this.initialCandidates.filter(candidate => !this.retired.has(candidate.id)),
+      ...(skills.length > 0 ? { skills } : {}),
     };
   }
   disclosePaths(paths: readonly string[]): TurnContextEnvelope | undefined {
@@ -167,9 +155,28 @@ export class SkillTurnContext implements TurnContextContribution {
     };
   }
   release(): void {
+    this.stopObserving?.();
     this.released = true;
     this.packages.clear();
     this.advertised.clear();
+  }
+  private retireSource(id: string): void {
+    if (this.retired.has(id) || !this.descriptors.some(skill => skill.id === id)) return;
+    const retired = new Set(this.retired).add(id);
+    this.retired = retired;
+    this.replayFilter = context => {
+      const remaining = {
+        ...context,
+        ...(context.skillCandidates && {
+          skillCandidates: context.skillCandidates.filter(candidate => !retired.has(candidate.id)),
+        }),
+        ...(context.skills && { skills: context.skills.filter(skill => !retired.has(skill.descriptor.id)) }),
+        ...(context.skillResources && {
+          skillResources: context.skillResources.filter(resource => !retired.has(resource.skillId)),
+        }),
+      };
+      return hasModelContext(remaining) ? remaining : undefined;
+    };
   }
   private async activate(
     requested: readonly string[],

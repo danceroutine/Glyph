@@ -1,14 +1,32 @@
-import { chmod, lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, rename, rm, rmdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
 import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 
 /** Local fault-injection double. Integration tests exercise the actual descriptor-relative helper. */
 export function testPackageMutations(root: string): WorkspaceDirectoryMutations {
+  const identity = async (path: string) => {
+    const info = await lstat(path, { bigint: true });
+    return createHash('sha256').update([info.dev, info.ino, info.birthtimeNs].join(':')).digest('hex');
+  };
   return {
     assertReplaceableMetadata: async () => '0'.repeat(64),
     async ensureDirectory(relative, mode = 0o700) {
       await mkdir(join(root, relative), { recursive: true, mode });
+    },
+    async stageParent(relative, mode, slot) {
+      await mkdir(join(root, slot), { mode });
+      return { relative, identity: await identity(join(root, slot)) };
+    },
+    async rollbackParent(receipt, slot) {
+      for (const path of [join(root, slot), join(root, receipt.relative)]) {
+        try {
+          if ((await identity(path)) === receipt.identity) await rmdir(path);
+        } catch (error) {
+          if (!['ENOENT', 'ENOTEMPTY', 'ENOTDIR'].includes(errorCodeOf(error) ?? '')) throw error;
+        }
+      }
     },
     async createStage(relative) {
       await mkdir(join(root, relative), { mode: 0o700 });

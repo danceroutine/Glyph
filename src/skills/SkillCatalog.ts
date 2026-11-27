@@ -1,5 +1,25 @@
+import { SkillPackageRetirements } from './SkillPackageRetirements.ts';
 import type { SkillDescriptor } from './SkillDescriptor.ts';
 import type { SkillDiscoveryProvider } from './SkillDiscoveryProvider.ts';
+
+interface SkillCatalogOptions {
+  /** The shared user profile supplies package state and committed retirements across attached workspaces. */
+  readonly profile?: {
+    readonly enabled?: ReadonlyMap<string, boolean>;
+    readonly installations?: ReadonlyMap<string, { source: string; revision: string }>;
+    readonly retirements?: SkillPackageRetirements;
+    onDidChange?(listener: () => void): () => void;
+  };
+  readonly ensureReady?: () => Promise<void>;
+  readonly ensureLocation?: (originId: string, directory?: string) => Promise<void>;
+  readonly workspaceRoutes?: {
+    equivalents(path: string): string[];
+    prepare?(paths: readonly string[]): void;
+  };
+  readonly migratePreferences?: (skills: readonly SkillDescriptor[]) => Promise<void>;
+  /** Invalidate the host's alias snapshot before each provider establishes ownership during discovery. */
+  readonly beforeDiscovery?: () => void;
+}
 
 /** Aggregates compatibility providers without hiding same-name packages from different origins. */
 export class SkillCatalog {
@@ -10,21 +30,19 @@ export class SkillCatalog {
   private current: readonly SkillDescriptor[] = [];
   private unsubscribePreferences: (() => void) | undefined;
   private readonly listeners = new Set<() => void>();
+  readonly retirements: SkillPackageRetirements;
+  private observePreferences: ((listener: () => void) => () => void) | undefined;
+  private readonly enabled: ReadonlyMap<string, boolean>;
+  private readonly installations: ReadonlyMap<string, { source: string; revision: string }>;
   constructor(
     private readonly providers: readonly SkillDiscoveryProvider[],
-    private readonly enabled: ReadonlyMap<string, boolean> = new Map(),
-    private readonly installations: ReadonlyMap<string, { source: string; revision: string }> = new Map(),
-    private readonly ensureReady?: () => Promise<void>,
-    private readonly ensureLocation?: (originId: string, directory?: string) => Promise<void>,
-    private observePreferences?: (listener: () => void) => () => void,
-    private readonly workspaceRoutes?: {
-      equivalents(path: string): string[];
-      prepare?(paths: readonly string[]): void;
-    },
-    private readonly migratePreferences?: (skills: readonly SkillDescriptor[]) => Promise<void>,
-    /** Invalidate the host's previous alias snapshot. Each provider establishes ownership inside its discovery call. */
-    private readonly beforeDiscovery?: () => void,
+    private readonly options: SkillCatalogOptions = {},
   ) {
+    const { profile } = options;
+    this.enabled = profile?.enabled ?? new Map();
+    this.installations = profile?.installations ?? new Map();
+    this.observePreferences = profile?.onDidChange?.bind(profile);
+    this.retirements = profile?.retirements ?? new SkillPackageRetirements();
     this.byId = new Map(providers.map(provider => [provider.id, provider]));
     if (this.byId.size !== providers.length) throw new Error('Skill provider IDs must be unique.');
   }
@@ -52,17 +70,17 @@ export class SkillCatalog {
     const generation = ++this.generation;
     let unavailable: { cause: unknown } | undefined;
     try {
-      if (this.ensureReady) await this.ensureReady();
+      if (this.options.ensureReady) await this.options.ensureReady();
     } catch (cause) {
       unavailable = { cause };
     }
-    this.beforeDiscovery?.();
+    this.options.beforeDiscovery?.();
     const discovered = (
       await Promise.all(
         this.providers.map(async provider => {
           try {
             if (unavailable) throw unavailable.cause;
-            if (this.ensureLocation) await this.ensureLocation(provider.id);
+            if (this.options.ensureLocation) await this.options.ensureLocation(provider.id);
             return await provider.discover(signal);
           } catch (error) {
             if (signal?.aborted) throw signal.reason;
@@ -96,7 +114,7 @@ export class SkillCatalog {
       const previous = unique.get(skill.id);
       if (!previous || skill.directory.length < previous.directory.length) unique.set(skill.id, skill);
     }
-    if (this.migratePreferences) await this.migratePreferences([...unique.values()]);
+    if (this.options.migratePreferences) await this.options.migratePreferences([...unique.values()]);
     signal?.throwIfAborted();
     if (generation < this.published) return this.current;
     this.published = generation;
@@ -133,7 +151,7 @@ export class SkillCatalog {
   /** Match one batch of paths against each provider's scope hierarchy, retaining catalog precedence. */
   applicableSkills(skills: readonly SkillDescriptor[], paths: readonly string[]): readonly SkillDescriptor[] {
     if (paths.length === 0) return skills.filter(skill => skill.scope === '.');
-    this.workspaceRoutes?.prepare?.([...new Set([...paths, ...skills.map(skill => skill.scope)])]);
+    this.options.workspaceRoutes?.prepare?.([...new Set([...paths, ...skills.map(skill => skill.scope)])]);
     let routes: Set<string> | undefined;
     const byOrigin = new Map<string, { ancestors: Set<string>; scopes: Map<string, boolean> }>();
     return skills.filter(skill => {
@@ -143,7 +161,9 @@ export class SkillCatalog {
       let index = byOrigin.get(skill.origin.id);
       if (!index) {
         const ancestors = new Set<string>();
-        routes ??= new Set([...new Set(paths)].flatMap(path => this.workspaceRoutes?.equivalents(path) ?? [path]));
+        routes ??= new Set(
+          [...new Set(paths)].flatMap(path => this.options.workspaceRoutes?.equivalents(path) ?? [path]),
+        );
         for (const route of routes) {
           let scope = key(route);
           while (!ancestors.has(scope)) {
@@ -166,12 +186,12 @@ export class SkillCatalog {
   }
 
   async capture(descriptor: SkillDescriptor, signal?: AbortSignal) {
-    if (this.ensureReady) await this.ensureReady();
+    if (this.options.ensureReady) await this.options.ensureReady();
     if (!descriptor.enabled || descriptor.status !== 'active' || this.enabled.get(descriptor.id) === false)
       throw new Error('Skill is disabled or unavailable.');
     const provider = this.byId.get(descriptor.origin.id);
     if (!provider) throw new Error('Skill provider is unavailable.');
-    const reconcile = this.ensureLocation?.bind(this, provider.id, descriptor.directory);
+    const reconcile = this.options.ensureLocation?.bind(this, provider.id, descriptor.directory);
     if (reconcile) await reconcile();
     const snapshot = await provider.capture(descriptor, signal, reconcile);
     if (this.enabled.get(descriptor.id) === false) throw new Error('Skill was disabled during capture.');

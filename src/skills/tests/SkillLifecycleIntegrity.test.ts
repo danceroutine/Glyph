@@ -181,7 +181,7 @@ it('blocks discovery, capture, management and stale approvals while preferences 
   const installed = await install();
   const { SkillCatalog } = await import('#src/skills/SkillCatalog.js');
   const ready = async () => state.initialize();
-  const catalog = new SkillCatalog([provider], state.enabled, state.installations, ready);
+  const catalog = new SkillCatalog([provider], { profile: state, ensureReady: ready });
   const manager = new SkillPackageManager([location], catalog, state, ready);
   await catalog.refresh();
   const change = await manager.prepare(location.id, aSkillDraft('New workflow', 'another'));

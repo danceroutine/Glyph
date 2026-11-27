@@ -59,7 +59,7 @@ export async function aSkillLifecycle(
     refreshIndex,
     uriForPath: path => `file://${root}/${path}`,
   });
-  const catalog = new SkillCatalog([provider], state.enabled, state.installations);
+  const catalog = new SkillCatalog([provider], { profile: state });
   const location = {
     id: provider.id,
     scope: 'user' as const,

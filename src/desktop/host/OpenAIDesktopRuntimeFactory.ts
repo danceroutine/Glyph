@@ -676,25 +676,25 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             }),
           ),
         ],
-        skillState.enabled,
-        skillState.installations,
-        ensureSkillsReady,
-        (originId, directory) => skillManager!.recover(originId, directory),
-        skillState.onDidChange.bind(skillState),
-        routes,
-        descriptors =>
-          skillState.migratePackageIds(
-            new Map(
-              descriptors.flatMap(skill => {
-                if (skill.origin.id === userSkills.id && skill.directory)
-                  return [[skill.id, userSkillDirectory.previousPackageIds(skill.directory)] as const];
-                const identity = skillIdentities.get(skill.origin.id);
-                return identity && skill.directory ? [[skill.id, identity.legacyIds(skill.directory)] as const] : [];
-              }),
+        {
+          profile: skillState,
+          ensureReady: ensureSkillsReady,
+          ensureLocation: (originId, directory) => skillManager!.recover(originId, directory),
+          workspaceRoutes: routes,
+          migratePreferences: descriptors =>
+            skillState.migratePackageIds(
+              new Map(
+                descriptors.flatMap(skill => {
+                  if (skill.origin.id === userSkills.id && skill.directory)
+                    return [[skill.id, userSkillDirectory.previousPackageIds(skill.directory)] as const];
+                  const identity = skillIdentities.get(skill.origin.id);
+                  return identity && skill.directory ? [[skill.id, identity.legacyIds(skill.directory)] as const] : [];
+                }),
+              ),
             ),
-          ),
-        () => {
-          userSkillDirectory.refresh();
+          beforeDiscovery: () => {
+            userSkillDirectory.refresh();
+          },
         },
       );
       skillManager = new SkillPackageManager(

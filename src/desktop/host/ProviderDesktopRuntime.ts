@@ -397,21 +397,20 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         const previous = this.skillPreview;
         let preview: SkillPreview;
         this.skillManagementMessage = undefined;
-        if (command.removeId) preview = await manager.prepareRemoval(command.removeId);
+        if (command.removeId) preview = await manager.prepareRemoval(command.removeId, commandSignal);
         else {
           const draft = command.draft
             ? new SkillPackageDraft(command.draft)
             : command.source && this.options.skillSources
-              ? await this.options.skillSources.read(
-                  skillPackageSourceSchema.parse(command.source),
-                  this.discovery.signal,
-                )
+              ? await this.options.skillSources.read(skillPackageSourceSchema.parse(command.source), commandSignal)
               : undefined;
           if (!draft) throw new Error('Choose a skill package or draft.');
-          preview = await manager.prepare(command.targetId, draft, command.replaceId);
+          commandSignal.throwIfAborted();
+          preview = await manager.prepare(command.targetId, draft, command.replaceId, commandSignal);
         }
-        if (this.disposed || revision !== this.skillPreviewRevision) {
+        if (commandSignal.aborted || this.disposed || revision !== this.skillPreviewRevision) {
           manager.discard(preview.id);
+          commandSignal.throwIfAborted();
           throw new Error('A newer skill preview replaced this request.');
         }
         if (previous) manager.discard(previous.id);

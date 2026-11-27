@@ -67,6 +67,61 @@ mod supported {
         fs::remove_dir_all(root.join(".glyph")).unwrap();
         assert_eq!(ensure_approved(2)["ok"], true);
     }
+    #[test]
+    fn rolls_back_only_empty_installation_parents_with_the_recorded_identity() {
+        let fixture = tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let op = |action| run(&request(&root, action));
+        let stage = ".skill-staging/test";
+        let slot = ".skill-staging/test/parent-0";
+        assert_eq!(
+            op(json!({"operation":"create_stage","relative":stage}))["ok"],
+            true
+        );
+        let prepare = || op(json!({"operation":"stage_parent","mode":0o755,"stagingSlot":slot}));
+        let rollback = |id: &Value| {
+            op(
+                json!({"operation":"rollback_parent","relative":"skills","identity":id,"stagingSlot":slot}),
+            )
+        };
+        assert_eq!(
+            op(json!({"operation":"stage_parent","mode":0o700,"stagingSlot":"skills"}))["code"],
+            "INVALID_INPUT"
+        );
+        assert_eq!(
+            op(
+                json!({"operation":"rollback_parent","relative":"missing/parent","identity":"unknown","stagingSlot":slot})
+            )["ok"],
+            true
+        );
+        let first = prepare()["digest"].clone();
+        assert!(!root.join("skills").exists());
+        assert_eq!(rollback(&first)["ok"], true);
+        assert_eq!(rollback(&first)["ok"], true);
+        let id = prepare()["digest"].clone();
+        assert_eq!(op(rename(slot, "skills"))["ok"], true);
+        fs::write(root.join("skills/peer"), b"keep").unwrap();
+        assert_eq!(rollback(&id)["ok"], true);
+        assert_eq!(fs::read(root.join("skills/peer")).unwrap(), b"keep");
+        fs::remove_file(root.join("skills/peer")).unwrap();
+        fs::rename(root.join("skills"), root.join("moved")).unwrap();
+        fs::create_dir(root.join("skills")).unwrap();
+        assert_eq!(rollback(&id)["ok"], true);
+        assert!(root.join("skills").is_dir());
+        // A restarted helper may find a peer already claimed into staging. Restore it without clobbering
+        // a live directory, and retry successfully once the independent occupant has moved away.
+        fs::rename(root.join("skills"), root.join(slot)).unwrap();
+        fs::create_dir(root.join("skills")).unwrap();
+        assert_eq!(rollback(&id)["code"], "EEXIST");
+        assert!(root.join(slot).is_dir());
+        fs::remove_dir(root.join("skills")).unwrap();
+        assert_eq!(rollback(&id)["ok"], true);
+        fs::remove_dir(root.join("skills")).unwrap();
+        fs::rename(root.join("moved"), root.join("skills")).unwrap();
+        assert_eq!(rollback(&id)["ok"], true);
+        assert!(!root.join("skills").exists());
+        assert_eq!(rollback(&id)["ok"], true);
+    }
     fn remove(path: &str) -> Value {
         json!({"operation":"remove_tree","relative":path})
     }

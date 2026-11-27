@@ -172,16 +172,13 @@ it('reads idle project roots without creating private state and isolates provide
     capture: vi.fn(),
     refreshIndex: async () => {},
   };
-  const scoped = new SkillCatalog(
-    [provider, otherProvider],
-    state.enabled,
-    state.installations,
-    undefined,
-    async id => {
+  const scoped = new SkillCatalog([provider, otherProvider], {
+    profile: state,
+    ensureLocation: async id => {
       if (id === other.id) throw new Error('Only this root needs recovery');
       await manager.recover(id);
     },
-  );
+  });
   expect(await scoped.refresh()).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ id: skill.id, status: 'active' }),
@@ -198,14 +195,7 @@ it('updates every subscribed catalog after a durable preference write and indepe
   state.onDidChange(() => {
     throw new Error('Disconnected window');
   });
-  const other = new SkillCatalog(
-    [provider],
-    state.enabled,
-    state.installations,
-    undefined,
-    undefined,
-    state.onDidChange.bind(state),
-  );
+  const other = new SkillCatalog([provider], { profile: state });
   await other.refresh();
   const changed = vi.fn();
   other.onDidChange(changed);
@@ -258,7 +248,7 @@ it('reconciles an unfinished publication before accepting captured bytes and rec
     .mockImplementationOnce(async () => {
       await manager.apply(prepared.id);
     });
-  const guarded = new SkillCatalog([provider], state.enabled, state.installations, undefined, reconcile);
+  const guarded = new SkillCatalog([provider], { profile: state, ensureLocation: reconcile });
   await expect(guarded.capture(skill)).rejects.toThrow('skill changed');
   reconcile.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
     await state.setEnabled(skill.id, false, new AbortController().signal);

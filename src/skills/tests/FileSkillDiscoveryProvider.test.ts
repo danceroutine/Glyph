@@ -121,9 +121,7 @@ describe(FileSkillDiscoveryProvider, () => {
         provider('owner', 'skills/example'),
         provider('alias', 'root/skills/example'),
       ],
-      undefined,
-      undefined,
-      refresh,
+      { ensureReady: refresh },
     );
     expect(await catalog.refresh()).toMatchObject([{ id: 'same', scope: '.', origin: { id: 'owner' } }]);
     expect(refresh).toHaveBeenCalledOnce();
@@ -191,7 +189,7 @@ describe(FileSkillDiscoveryProvider, () => {
         uriForPath: path => path,
         refreshIndex: fixture.refreshIndex,
       });
-      const catalog = new SkillCatalog([provider], undefined, undefined, undefined, undefined, undefined, routes);
+      const catalog = new SkillCatalog([provider], { workspaceRoutes: routes });
       const turn = await new SkillContextContributor(catalog).beginTurn({ turnId: 't', attachmentPaths: [] });
       const attachments = [decomposed + '/file', decomposed + '/new'];
       expect(turn.disclosePaths(attachments)?.skillCandidates?.length).toBe(sharesScope ? 1 : undefined);
@@ -390,7 +388,7 @@ describe(FileSkillDiscoveryProvider, () => {
     const broken = fixture.provider([], 'broken');
     vi.spyOn(broken, 'discover').mockRejectedValue(new Error('Index unavailable'));
     const enabled = new Map([['project:.glyph/skills/example', false]]);
-    const catalog = new SkillCatalog([provider, broken], enabled);
+    const catalog = new SkillCatalog([provider, broken], { profile: { enabled } });
     const change = vi.fn();
     const unsubscribe = catalog.onDidChange(change);
     const sources = await catalog.refresh();
