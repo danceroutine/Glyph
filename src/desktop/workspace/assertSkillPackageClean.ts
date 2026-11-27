@@ -1,3 +1,4 @@
+import type { FilesystemNamePolicy } from '#src/workspace/FilesystemNamePolicy.js';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -13,6 +14,7 @@ export async function assertSkillPackageClean(
   absolutePackageDirectory: string,
   logicalProjectDirectoryUri?: string,
   ownerIntersections: readonly string[] = [],
+  namePolicy?: FilesystemNamePolicy,
 ): Promise<void> {
   if (!isAbsolute(absolutePackageDirectory))
     throw new Error('Skill working-copy checks require an absolute package directory.');
@@ -29,6 +31,7 @@ export async function assertSkillPackageClean(
         scope,
         directoryUri: logicalProjectDirectoryUri ?? physicalPackageUri,
         physicalPackageUri,
+        namePolicy,
       } as const,
     },
     ...ownerIntersections.map(directoryUri => ({
@@ -40,6 +43,7 @@ export async function assertSkillPackageClean(
         peerWorkspaceIntersection: true,
         directoryUri,
         physicalPackageUri,
+        namePolicy,
       } as const,
     })),
     ...peers.map(peer => ({
@@ -50,6 +54,7 @@ export async function assertSkillPackageClean(
         scope,
         peerWorkspaceIntersection: true,
         physicalPackageUri,
+        namePolicy,
         directoryUri:
           peer.directoryUri ??
           (() => {

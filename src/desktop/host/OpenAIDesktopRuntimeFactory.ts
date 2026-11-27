@@ -271,7 +271,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           ? { ...dirty[0]!, snapshot: { ...dirty[0]!.snapshot!, path: request.path } }
           : responses[0]!;
       });
-      return { name: workspaceRoot.name, workspace, catalog, disk, index };
+      return { name: workspaceRoot.name, workspace, catalog, disk, index, namePolicy: namePolicies[i]! };
     });
     const routes = new WorkspaceSourceRoutes(
       parts.map((part, index) => ({
@@ -532,7 +532,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 input.identity,
                 'skill',
                 basename(path),
-                userRuleStore.caseSensitive,
+                userWorkingCopyPolicy,
                 path,
                 this.userDirectory,
               ),
@@ -577,6 +577,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                   path,
                   logicalDirectory,
                   intersections,
+                  part.namePolicy,
                 );
               },
               store: part.disk,

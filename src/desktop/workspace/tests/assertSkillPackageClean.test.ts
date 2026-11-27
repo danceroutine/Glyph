@@ -15,18 +15,22 @@ it('checks the owner and overlapping peer through each editor’s authorized log
     packageClean: true,
   }));
   const registry = vi.fn(() => [peer]);
+  const namePolicy = { caseSensitive: false, normalizesUnicode: true, foldsUnicode: true };
   await assertSkillPackageClean(
     { request, trustedSkillEditors: registry },
     identity,
     'project',
     '/physical/.glyph/skills/example',
     'file:///logical/.glyph/skills/example',
+    [],
+    namePolicy,
   );
   expect(request.mock.calls.map(([, command]) => command)).toEqual([
     {
       operationId: expect.any(String),
       type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
       scope: 'project',
+      namePolicy,
       physicalPackageUri: 'file:///physical/.glyph/skills/example',
       directoryUri: 'file:///logical/.glyph/skills/example',
     },
@@ -34,6 +38,7 @@ it('checks the owner and overlapping peer through each editor’s authorized log
       operationId: expect.any(String),
       type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
       scope: 'project',
+      namePolicy,
       physicalPackageUri: 'file:///physical/.glyph/skills/example',
       directoryUri: peer.directoryUri,
       peerWorkspaceIntersection: true,

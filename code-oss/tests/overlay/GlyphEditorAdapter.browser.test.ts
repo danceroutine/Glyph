@@ -1942,3 +1942,27 @@ it('discovers an existing dirty instruction buffer through a filesystem alias an
   services.fileService.realpath.mockResolvedValue(undefined);
   expect((await adapter.handle(command)).ok).toBe(false);
 });
+
+it('checks project and peer-intersection skill buffers with the host volume policy', async () => {
+  const services = editorServices();
+  const adapter = createAdapter(services);
+  const directory = URI.file('/workspace/.glyph/skills/ss');
+  const command = {
+    type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES as const,
+    operationId: 'project',
+    scope: 'project' as const,
+    directoryUri: directory.toString(),
+    physicalPackageUri: directory.toString(),
+  };
+  const namePolicy = { caseSensitive: false, normalizesUnicode: true, foldsUnicode: true };
+  const sensitive = { caseSensitive: true, normalizesUnicode: false, foldsUnicode: false };
+  const dirty = URI.file('/workspace/.glyph/skills/ß/references/café.md');
+  for (const scheme of ['file', 'untitled']) {
+    services.workingCopyService.dirtyWorkingCopies.splice(0, Infinity, { resource: dirty.with({ scheme }) });
+    expect((await adapter.handle({ ...command, namePolicy })).packageClean).toBe(false);
+    expect((await adapter.handle({ ...command, namePolicy: sensitive })).packageClean).toBe(true);
+    expect((await adapter.handle({ ...command, peerWorkspaceIntersection: true, namePolicy })).packageClean).toBe(
+      false,
+    );
+  }
+});

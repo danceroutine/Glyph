@@ -28,6 +28,7 @@ export type GlyphEditorRequest =
       readonly peerWorkspaceIntersection?: true;
       readonly directoryUri: string;
       readonly physicalPackageUri?: string;
+      readonly namePolicy?: FilesystemNamePolicy;
     }
   | {
       readonly type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES;
