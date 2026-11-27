@@ -1,3 +1,4 @@
+import { resolveInstructionId } from '#vs/platform/glyph/instructions/resolveInstructionId.js';
 import type { AgentReviewInput } from '#vs/platform/glyph/reviewing/AgentReview.js';
 import { GlyphShellTerminals } from './GlyphShellTerminals.js';
 import { BrowserViewUri } from '#vs/platform/browserView/common/browserViewUri.js';
@@ -299,7 +300,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
               restoreGlyphPrompt(
                 event.draft,
                 (_kind, id) => {
-                  const source = this.state.instructionSources?.find(rule => rule.id === id);
+                  const source = resolveInstructionId(this.state.instructionSources ?? [], id);
                   return source
                     ? {
                         name: source.name ?? source.path.split('/').at(-1)!,

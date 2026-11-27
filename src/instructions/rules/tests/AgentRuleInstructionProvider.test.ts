@@ -436,3 +436,20 @@ describe(AgentRuleInstructionProvider, () => {
     ]);
   });
 });
+
+it('preserves distinct source identities on a case-sensitive project filesystem', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'glyph-case-sensitive-rule-'));
+  roots.push(root);
+  const { WorkspaceSourceRoutes } = await import('#src/workspace/WorkspaceSourceRoutes.js');
+  const paths = new InstructionPaths(true, new WorkspaceSourceRoutes([{ name: 'App', path: root }]));
+  await mkdir(join(root, '.glyph/rules'), { recursive: true });
+  await writeFile(join(root, '.glyph/rules/Rule.mdc'), 'Rules');
+  const provider = new AgentRuleInstructionProvider(new FileSystemWorkspaceTextStore(root), {
+    kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+    directory: '.glyph',
+    paths,
+  });
+  const [rule] = await provider.discover();
+  expect(rule?.id).toMatch(/^glyph_project_rule:file:/u);
+  expect(rule?.legacyIds).toContain('glyph_project_rule:App/.glyph/rules/Rule.mdc');
+});

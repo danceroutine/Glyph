@@ -1,8 +1,34 @@
+import { createHash } from 'node:crypto';
+import { AgentInstructionSourceKind } from './AgentInstructionSource.ts';
+import type { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { posix, win32 } from 'node:path';
 
 /** Logical root names are exact routing keys. Each root owns its filesystem's casing semantics. */
 export class InstructionPaths {
-  constructor(private readonly casing: boolean | ReadonlyMap<string, boolean> = true) {}
+  constructor(
+    private readonly casing: boolean | ReadonlyMap<string, boolean> = true,
+    readonly routes?: WorkspaceSourceRoutes,
+  ) {}
+
+  sourceIdentity(kind: AgentInstructionSourceKind, path: string) {
+    const legacyId = (route: string) => {
+      const id = kind + ':' + route;
+      return kind === AgentInstructionSourceKind.AGENTS_MD || id.length <= 500
+        ? id
+        : kind + ':sha256:' + createHash('sha256').update(route).digest('hex');
+    };
+    const physical = this.routes?.physicalPath(path);
+    if (!physical) return { id: legacyId(path) };
+    const key = this.caseSensitive(path) ? physical : physical.toLowerCase();
+    return {
+      id: kind + ':file:' + createHash('sha256').update(key).digest('hex'),
+      legacyIds: this.routes!.legacyPaths(path).map(route => legacyId(route)),
+    };
+  }
+
+  equivalents(path: string): string[] {
+    return this.routes?.equivalents(path) ?? [path];
+  }
 
   isWorkspaceRoot(scope: string): boolean {
     return scope === '.' || (typeof this.casing !== 'boolean' && this.casing.has(scope));
@@ -22,12 +48,20 @@ export class InstructionPaths {
   contains(scope: string, path: string): boolean {
     if (scope === '.') return true;
     const key = this.key(scope);
-    const target = this.key(path);
-    return target === key || target.startsWith(`${key}/`);
+    return this.equivalents(path).some(route => {
+      const target = this.key(route);
+      return target === key || target.startsWith(key + '/');
+    });
   }
 
   relativeToScope(scope: string, path: string): string {
-    if (scope !== '.') return path.split('/').slice(scope.split('/').length).join('/');
+    if (scope !== '.') {
+      const key = this.key(scope);
+      const route = this.equivalents(path).find(
+        route => this.key(route) === key || this.key(route).startsWith(key + '/'),
+      )!;
+      return route.split('/').slice(scope.split('/').length).join('/');
+    }
     return typeof this.casing === 'boolean' ? path : path.split('/').slice(1).join('/');
   }
 

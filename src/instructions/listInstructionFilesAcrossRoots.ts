@@ -23,12 +23,12 @@ export async function listInstructionFilesAcrossRoots(
   roots: readonly InstructionDiscoveryRoot[],
   maxFiles: number,
   globPattern: string,
+  qualifyPaths = roots.length > 1,
 ): Promise<InstructionFileListing> {
   const files: string[] = [];
   let truncated = false;
   const failures = new Map<InstructionDiscoveryRoot, string>();
-  const qualify = (root: InstructionDiscoveryRoot, path: string) =>
-    roots.length === 1 ? path : `${root.name}/${path}`;
+  const qualify = (root: InstructionDiscoveryRoot, path: string) => (qualifyPaths ? `${root.name}/${path}` : path);
   const agents = globPattern === '**/AGENTS.md';
   if (agents) {
     // Reserve mandatory guidance across every root before spending the shared allowance on nested files.

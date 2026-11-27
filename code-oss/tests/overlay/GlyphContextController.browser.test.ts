@@ -134,6 +134,7 @@ function controllerServices() {
       fileSearch: vi.fn(async (): Promise<{ results: { resource: URI }[]; limitHit?: boolean }> => ({ results: [] })),
     },
     files: {
+      realpath: vi.fn(async (uri: URI): Promise<URI | undefined> => uri),
       hasCapability: vi.fn(() => true),
       getProvider: vi.fn(() => ({ onDidChangeFile: fileChanges.event })),
       onDidChangeFileSystemProviderRegistrations: registrations.event,
@@ -1166,6 +1167,27 @@ describe(GlyphContextController, () => {
     await expect(controller.refreshAttachment(attachment)).rejects.toThrow('unavailable');
   });
 
+  it('opens a registered alias through the logical editor URI only while its physical file still matches', async () => {
+    const services = controllerServices();
+    const controller = createController(services);
+    const physical = URI.file('/actual/AGENTS.md');
+    const source = { id: 'guidance', path: 'AGENTS.md', status: 'active', uri: physical.toString() };
+    services.instructionSources.push(source);
+    services.files.stat.mockImplementation(async uri => ({
+      isFile: uri.path.endsWith('.md'),
+      isDirectory: !uri.path.endsWith('.md'),
+      isSymbolicLink: uri.path === '/workspace',
+    }));
+    services.files.realpath.mockResolvedValue(physical);
+    await controller.openInstruction('guidance');
+    expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(
+      'file:///workspace/AGENTS.md',
+    );
+    services.files.realpath.mockResolvedValue(undefined);
+    await expect(controller.openInstruction('guidance')).rejects.toThrow('unavailable');
+    services.files.stat.mockResolvedValueOnce({ isFile: true, isSymbolicLink: true });
+    await expect(controller.openInstruction('guidance')).rejects.toThrow('unavailable');
+  });
   it('opens only currently authorized instruction files through their owning root', async () => {
     const services = controllerServices();
     const controller = createController(services);

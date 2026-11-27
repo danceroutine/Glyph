@@ -204,6 +204,8 @@ async function modules() {
             contents: 'export class GlyphEditorAdapter {}',
           }));
           builder.onResolve({ filter: /^#vs\// }, args => {
+            if (args.path.endsWith('/resolveInstructionId.js'))
+              return { path: resolve('src/instructions/resolveInstructionId.ts') };
             if (args.path.startsWith('#vs/base/') || args.path.endsWith('/browserViewUri.js'))
               return { path: resolve('.code-oss/src/src/vs', args.path.slice(4).replace(/\.js$/, '.ts')) };
             return { path: args.path, namespace: 'services' };

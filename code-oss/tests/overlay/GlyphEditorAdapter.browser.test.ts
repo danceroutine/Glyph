@@ -166,6 +166,7 @@ function editorServices() {
     },
     trustService: { isWorkspaceTrusted: vi.fn(() => state.trusted) },
     fileService: {
+      realpath: vi.fn(async (resource: URI): Promise<URI | undefined> => resource),
       exists: vi.fn(async (resource: URI) => disk.has(resource.path)),
       stat: vi.fn(async (resource: URI): Promise<{ size?: number }> => ({ size: disk.get(resource.path)?.length })),
       readFile: vi.fn(async (resource: URI) => ({ value: VSBuffer.fromString(disk.get(resource.path) ?? '') })),
@@ -1573,4 +1574,30 @@ describe(GlyphEditorAdapter, () => {
       );
     });
   });
+});
+
+it('reads consistent dirty catalog snapshots from logical and physical buffers and rejects conflicting edits', async () => {
+  const services = editorServices();
+  const adapter = createAdapter(services);
+  const path = 'AGENTS.md';
+  const logical = URI.file('/workspace/AGENTS.md');
+  const physical = URI.file('/actual/AGENTS.md');
+  services.fileService.realpath.mockResolvedValue(physical);
+  const command = {
+    type: GlyphEditorRequestType.READ_OPEN_SNAPSHOT as const,
+    operationId: 'source',
+    path,
+    physicalUri: physical.toString(),
+  };
+  const first = textModel(physical, 'physical edit');
+  services.models.push(first);
+  services.dirty.add(physical.path);
+  expect((await adapter.handle(command)).snapshot?.text).toBe('physical edit');
+  services.models.push(textModel(logical, 'other edit'));
+  services.dirty.add(logical.path);
+  expect((await adapter.handle(command)).ok).toBe(false);
+  services.fileService.realpath.mockResolvedValue(undefined);
+  expect((await adapter.handle(command)).ok).toBe(false);
+  services.dirty.clear();
+  expect(await adapter.handle(command)).toEqual({ operationId: 'source', ok: true });
 });

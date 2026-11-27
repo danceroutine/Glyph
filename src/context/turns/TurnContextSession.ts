@@ -9,6 +9,7 @@ import {
   type AgentInstructionSource,
   type AgentInstructionTurnSnapshot,
 } from '#src/instructions/AgentInstructionSource.js';
+import { resolveInstructionId } from '#src/instructions/resolveInstructionId.js';
 import { AgentInstructionSet, isUnavailableGuidance } from '#src/instructions/AgentInstructionSet.js';
 import { defaultInstructionPaths, type InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { matchesAgentRulePath, RuleGlobBudget } from '#src/instructions/rules/matchesAgentRulePath.js';
@@ -98,7 +99,7 @@ export class TurnContextSession {
     reason: AgentInstructionActivationReason.MANUAL | AgentInstructionActivationReason.MODEL,
   ): AgentInstructionContext | undefined {
     if (reason === AgentInstructionActivationReason.MANUAL) return this.activateManualRules([ruleId]);
-    const source = this.input.sources.find(candidate => candidate.id === ruleId);
+    const source = resolveInstructionId(this.input.sources, ruleId);
     if (
       source &&
       eligible(source) &&
@@ -116,7 +117,9 @@ export class TurnContextSession {
     return {
       schema: 'glyph.turn-context.v1',
       turnId: this.input.turnId,
-      sources: this.input.sources.filter(source => ids.has(source.id)),
+      sources: this.input.sources
+        .filter(source => ids.has(source.id))
+        .map(({ legacyIds: _legacyIds, ...source }) => source),
       activations,
       candidates: [...this.advertisedCandidates.values()],
     };
@@ -149,8 +152,8 @@ export class TurnContextSession {
   private stageManualRules(ids: readonly string[]): void {
     const selected: AgentInstructionSource[] = [];
     for (const id of unique(ids)) {
-      const source = this.input.sources.find(candidate => candidate.id === id);
-      if (!source) continue;
+      const source = resolveInstructionId(this.input.sources, id);
+      if (!source) throw new Error('Selected manual rule is unavailable. Remove it or choose another rule.');
       if (!eligible(source) || source.activation !== AgentInstructionActivationMode.MANUAL)
         throw new Error(
           `Selected rule ${source.path} is no longer available for manual activation. Remove it or choose another rule.`,
@@ -214,7 +217,7 @@ export class TurnContextSession {
     const envelope: AgentInstructionContext = {
       schema: 'glyph.agent-instructions.v1',
       sources: pending.map(([source]) => {
-        const { uri: _editorUri, ...instruction } = source;
+        const { uri: _editorUri, legacyIds: _legacyIds, ...instruction } = source;
         return instruction;
       }),
       activations: pending.map(([, activation]) => activation),

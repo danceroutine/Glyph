@@ -1360,6 +1360,7 @@ function toInstructionSources(
   return sources.map(source => ({
     id: source.id,
     kind: source.kind,
+    ...(source.legacyIds ? { legacyIds: source.legacyIds } : {}),
     label: source.label,
     path: source.path,
     scope: source.scope,

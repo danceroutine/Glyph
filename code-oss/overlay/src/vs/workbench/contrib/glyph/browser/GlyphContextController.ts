@@ -1,3 +1,4 @@
+import { resolveInstructionId } from '#vs/platform/glyph/instructions/resolveInstructionId.js';
 import { Emitter } from '#vs/base/common/event.js';
 import { RunOnceScheduler } from '#vs/base/common/async.js';
 import { DisposableStore, DisposableMap, MutableDisposable, type IDisposable } from '#vs/base/common/lifecycle.js';
@@ -399,8 +400,9 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       this.assertTrusted();
       await this.refreshInstructionSources?.();
       this.assertTrusted();
-      const rule = this.instructionSources().find(
-        source => source.id === (attachment.ruleId ?? decodeURIComponent(attachment.uri.slice('glyph-rule:'.length))),
+      const rule = resolveInstructionId(
+        this.instructionSources(),
+        attachment.ruleId ?? decodeURIComponent(attachment.uri.slice('glyph-rule:'.length)),
       );
       if (!rule || !isManualRule(rule))
         throw new GlyphContextError(
@@ -429,8 +431,9 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   async checkAttachment(attachment: GlyphContextAttachment): Promise<string | undefined> {
     if (attachment.unavailable !== undefined && attachment.unavailable !== '') return attachment.unavailable;
     if (attachment.kind === GlyphContextAttachmentKind.RULE) {
-      const rule = this.instructionSources().find(
-        source => source.id === (attachment.ruleId ?? decodeURIComponent(attachment.uri.slice('glyph-rule:'.length))),
+      const rule = resolveInstructionId(
+        this.instructionSources(),
+        attachment.ruleId ?? decodeURIComponent(attachment.uri.slice('glyph-rule:'.length)),
       );
       if (!rule || !isManualRule(rule)) return 'Selected manual rule is unavailable. Remove it or choose it again.';
       return rule.revision && rule.revision !== attachment.contentRevision
@@ -532,7 +535,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     this.assertTrusted();
     await this.refreshInstructionSources?.(true);
     this.assertTrusted();
-    const source = this.instructionSources().find(candidate => candidate.id === id);
+    const source = resolveInstructionId(this.instructionSources(), id);
     if (!source || (source.status === 'error' && !source.revision && !source.managementRevision))
       throw unavailableInstruction();
 
@@ -547,21 +550,8 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       if (resource.scheme !== 'file' || !stillOwned()) throw unavailableInstruction();
       root = dirname(rules);
     } else {
-      const folders = this.workspace.getWorkspace().folders.filter(folder => folder.uri.scheme === 'file');
-      const roots = folders.map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
       const segments = source.path.split('/');
-      const rootId = folders.length === 1 ? undefined : segments.shift();
-      const folder =
-        folders.length === 1
-          ? folders[0]
-          : folders.find((_folder, index) => getGlyphWorkspaceRootId(roots[index], roots) === rootId);
-      if (
-        !folder ||
-        segments.length === 0 ||
-        segments.some(part => !part || part === '..' || part === '.' || part.includes('\\'))
-      )
-        throw unavailableInstruction();
-      root = folder.uri;
+      root = this.projectSourceRoot(segments);
       stillOwned = () =>
         this.workspace.getWorkspace().folders.some(candidate => candidate.uri.toString() === root.toString());
       resource = URI.joinPath(root, ...segments);
@@ -569,15 +559,40 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     let current = resource;
     for (;;) {
       const stat = await this.files.stat(current);
-      if (stat.isSymbolicLink || (current === resource ? !stat.isFile : !stat.isDirectory))
+      const projectAnchor = current.toString() === root.toString() && source.kind !== 'glyph_user_rule';
+      if (
+        (stat.isSymbolicLink && !(projectAnchor && source.uri)) ||
+        (projectAnchor && source.uri && !(await this.matchesPhysicalSource(resource, source.uri))) ||
+        (current === resource ? !stat.isFile : !stat.isDirectory)
+      )
         throw unavailableInstruction();
       if (current.toString() === root.toString()) break;
       current = dirname(current);
     }
     this.assertTrusted();
-    if (!stillOwned() || this.instructionSources().find(candidate => candidate.id === id) !== source)
-      throw unavailableInstruction();
+    if (!stillOwned() || resolveInstructionId(this.instructionSources(), id) !== source) throw unavailableInstruction();
     await this.editors.openEditor({ resource, options: { pinned: true } });
+  }
+
+  private async matchesPhysicalSource(resource: URI, expected: string) {
+    return this.resourceIdentity.isEqual(await this.files.realpath(resource), URI.parse(expected));
+  }
+
+  private projectSourceRoot(segments: string[]): URI {
+    const folders = this.workspace.getWorkspace().folders.filter(folder => folder.uri.scheme === 'file');
+    const roots = folders.map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
+    const rootId = folders.length === 1 ? undefined : segments.shift();
+    const folder =
+      folders.length === 1
+        ? folders[0]
+        : folders.find((_folder, index) => getGlyphWorkspaceRootId(roots[index], roots) === rootId);
+    if (
+      !folder ||
+      segments.length === 0 ||
+      segments.some(part => !part || part === '..' || part === '.' || part.includes('\\'))
+    )
+      throw unavailableInstruction();
+    return folder.uri;
   }
 
   private activeEditor(): ICodeEditor | undefined {

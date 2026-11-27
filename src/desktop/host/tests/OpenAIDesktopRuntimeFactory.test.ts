@@ -1008,6 +1008,32 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       ]);
     });
 
+    it('retains mandatory and manual instruction identity when an alias becomes a second workspace route', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      useFilesystemIndex();
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
+        return { operationId: request.operationId, ok: true };
+      });
+      const root = await fixture.folder('actual', { 'AGENTS.md': 'Required body' });
+      await mkdir(join(root, '.glyph/rules'), { recursive: true });
+      await writeFile(join(root, '.glyph/rules/manual.mdc'), '---\nactivation: manual\n---\nManual body');
+      const alias = join(dirname(root), 'alias');
+      await symlink(root, alias);
+      const first = await (await fixture.create([root])).snapshot();
+      const current = await (await fixture.create([root, alias])).snapshot();
+      expect(current.instructionSources!.map(source => source.id)).toEqual(
+        first.instructionSources!.map(source => source.id),
+      );
+      const turn = await captured.providerFactories.at(-1)![4]!.beginTurn({
+        turnId: 'legacy',
+        attachmentPaths: [],
+        manualRuleIds: ['glyph_project_rule:.glyph/rules/manual.mdc'],
+      });
+      expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual(['Manual body', 'Required body']);
+    });
+
     it('reports an unsafe user rules directory without querying its native index', async () => {
       const fixture = await factoryFixture();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
@@ -1271,6 +1297,17 @@ describe(OpenAIDesktopRuntimeFactory, () => {
 
 const repositoryRoot = resolve(import.meta.dirname, '..', '..', '..', '..');
 const factoryIdentity: GlyphConnectionIdentity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
+
+function useFilesystemIndex(): void {
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
+    this: RustWorkspacePathIndex,
+    pattern,
+    options,
+  ) {
+    const configuration = captured.indexOptions[captured.indexes.indexOf(this)]!;
+    return new FileSystemWorkspaceTextStore(configuration.root).list(options.limit, pattern);
+  });
+}
 
 async function factoryFixture(options: { readonly transport?: typeof fetch } = {}) {
   for (const values of Object.values(captured)) values.length = 0;
