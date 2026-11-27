@@ -832,7 +832,7 @@ export class GlyphEditorAdapter extends Disposable {
         return [resource.with({ scheme: 'file' })];
       return resource.scheme === 'file' ? [resource] : [];
     });
-    if (!dirty.length) return true;
+    if (dirty.length === 0) return true;
     const configured = env['GLYPH_USER_DIRECTORY'];
     const profile = configured
       ? URI.file(configured)
@@ -849,7 +849,7 @@ export class GlyphEditorAdapter extends Disposable {
     for (const folder of this.workspaceContextService.getWorkspace().folders) {
       if (folder.uri.scheme !== 'file') continue;
       const owned = dirty.filter(resource => identity.isEqualOrParent(resource, folder.uri));
-      if (!owned.length) continue;
+      if (owned.length === 0) continue;
       const root = await this.fileService.realpath(folder.uri);
       if (!root) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
       if (owned.some(resource => contains(physical, URI.joinPath(root, identity.relativePath(folder.uri, resource)!))))
