@@ -37,9 +37,6 @@ export interface AgentTurnContext {
   readonly round: number;
   /** Provider-neutral instructions prepared by the host for this boundary. */
   readonly instructionContext?: AgentInstructionContext;
-  /** Called after preparing each model request to reauthorize the frozen sources in its input.
-   * The returned guard also runs at transport handoff and on any subsequent transport retry. */
-  readonly authorizeDisclosure?: () => Promise<() => void>;
   readonly onText: (delta: string) => void;
   readonly onReasoningSummary?: (delta: string) => void;
   readonly trace: (kind: string, data: unknown, round?: number) => void;
@@ -73,7 +70,13 @@ export interface AgentModelAdapter<TTurn> {
    * Adapters own provider-specific delivery; this operation must not execute or cancel tools.
    */
   steerTurn(turn: TTurn, request: ChatRequest, context: AgentTurnContext): Promise<TTurn>;
-  streamStep(turn: TTurn, context: AgentTurnContext): Promise<AgentTurnStep<TTurn>>;
+  /** Prepare credentials and other asynchronous transport state before the runtime authorizes the
+   * model request. Only the returned sender may trace or transmit protected input. It invokes the
+   * supplied synchronous guard again at its transport handoff, including any retries. */
+  prepareStep(
+    turn: TTurn,
+    context: AgentTurnContext,
+  ): Promise<(assertCurrent?: () => void) => Promise<AgentTurnStep<TTurn>>>;
   appendToolResults(turn: TTurn, results: readonly AgentToolResult[]): TTurn;
   /** Snapshot live wire state. The runtime projects it into durable history before storing or publishing it. */
   snapshot(turn: TTurn): ChatProviderState;
