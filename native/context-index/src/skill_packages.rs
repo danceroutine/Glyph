@@ -129,14 +129,10 @@ mod tests {
         ]
         .map(String::from)
         .into();
+        // The same admission source guards a project marker and a user package root.
         let visible = |path: &Path| {
-            ![
-                ".glyph/skills/a",
-                ".glyph/skills/b/SKILL.md",
-                ".glyph/skills/c/SKILL.md",
-            ]
-            .iter()
-            .any(|hidden| path == Path::new(hidden))
+            let relative = path.strip_prefix(".glyph/skills").unwrap_or(path);
+            !matches!(relative.to_str(), Some("a" | "b/SKILL.md" | "c/SKILL.md"))
         };
         let result = list(&paths, Some(".glyph"), Path::new("."), 2, false, visible);
         assert!(result.truncated);
@@ -147,6 +143,16 @@ mod tests {
             result.packages[1].manifest.as_deref(),
             Some(".glyph/skills/d/SKILL.md")
         );
+        let user_paths = paths
+            .iter()
+            .filter_map(|path| path.strip_prefix(".glyph/skills/").map(str::to_owned))
+            .collect();
+        let user = list(&user_paths, None, Path::new("."), 2, false, visible);
+        assert!(user.truncated);
+        assert_eq!(user.packages.len(), 2);
+        assert_eq!(user.packages[0].directory, "c");
+        assert!(user.packages[0].manifest.is_none());
+        assert_eq!(user.packages[1].manifest.as_deref(), Some("d/SKILL.md"));
     }
 
     #[test]
