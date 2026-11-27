@@ -348,6 +348,21 @@ mod tests {
         assert!(repaired.assert_path(&alias.join("one.mdc"), None).is_err());
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn an_unresolved_chain_never_becomes_a_name_only_reservation() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for i in 0..130 {
+            symlink((i + 1).to_string(), root.join(i.to_string())).unwrap();
+        }
+        fs::create_dir(root.join("130")).unwrap();
+        assert!(WorkspacePaths::current(&[root.join("0")]).is_err());
+        fs::write(root.join("ordinary"), b"file").unwrap();
+        assert!(WorkspacePaths::current(&[root.join("ordinary/child")]).is_err());
+    }
+
     #[test]
     fn admits_ordinary_siblings_and_reserves_only_the_selected_objects() {
         let dir = tempfile::tempdir().unwrap();
