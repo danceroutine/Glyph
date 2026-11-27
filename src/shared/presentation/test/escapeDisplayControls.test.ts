@@ -7,4 +7,5 @@ it('reveals controls while preserving international text and source line structu
   );
   expect(escapeDisplayControls('name\n\r\t\u202Ejs', true)).toBe('name\\u000A\\u000D\\u0009\\u202Ejs');
   expect(escapeDisplayControls('normal.txt')).toBe('normal.txt');
+  expect(escapeDisplayControls('می\u200Cروم 👩\u200D💻')).toBe('می\u200Cروم 👩\u200D💻');
 });
