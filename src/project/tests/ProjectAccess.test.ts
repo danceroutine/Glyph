@@ -275,7 +275,11 @@ describe(ProjectAccess, () => {
       ) as ProjectOutput;
 
       expect(result).toEqual({ files: ['src/app.ts'], truncated: false });
-      expect(glob).toHaveBeenCalledWith('*.ts', { targetDirectory: 'src', limit: 37 });
+      expect(glob).toHaveBeenCalledWith('*.ts', {
+        targetDirectory: 'src',
+        limit: 37,
+        retainAccess: expect.any(Function),
+      });
     });
 
     it('exposes structured native content search with readable filters and pagination', async () => {
@@ -350,6 +354,7 @@ describe(ProjectAccess, () => {
       });
       expect(result.matches).toEqual([expect.objectContaining({ path: 'src/app.ts', matchedText: 'two' })]);
       expect(searchContents).toHaveBeenCalledWith('two', {
+        retainAccess: expect.any(Function),
         patternKind: 'literal',
         path: 'src',
         fileGlob: '*.ts',
@@ -362,6 +367,41 @@ describe(ProjectAccess, () => {
         limit: 50,
         offset: 0,
         signal: controller.signal,
+      });
+    });
+
+    it('withholds file content when its owning root changes during instruction disclosure', async () => {
+      const { root } = await fixture();
+      const workspace = fixtureWorkspace(root);
+      const read = workspace.read.bind(workspace);
+      let selected = true;
+      vi.spyOn(workspace, 'read').mockImplementation(async (path, options) => {
+        options?.retainAccess?.(() => {
+          if (!selected) throw new Error('The selected workspace folder changed.');
+        });
+        return read(path, options);
+      });
+      const access = new ProjectAccess(
+        workspace,
+        { glob: async () => ({ files: [], truncated: false }) },
+        {},
+        {
+          disclosePaths: async () => {
+            selected = false;
+            return undefined;
+          },
+        },
+      );
+      const result = JSON.parse(
+        await access.execute(
+          'read_project_file',
+          JSON.stringify({ path: 'src/app.ts', start_line: null, end_line: null }),
+          undefined,
+          { turnId: 'turn' },
+        ),
+      );
+      expect(result).toEqual({
+        error: { code: 'PROJECT_ACCESS_FAILED', message: 'The selected workspace folder changed.' },
       });
     });
 

@@ -1,3 +1,4 @@
+import type { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import {
   AgentReviewStatus as Status,
   type AgentReview,
@@ -40,8 +41,15 @@ export class AgentReviewService {
         });
     }
   }
-  start(input: AgentReviewInput, model: AgentReviewModel): Promise<void> {
+  start(
+    input: AgentReviewInput,
+    model: AgentReviewModel,
+    signal?: AbortSignal,
+    disclosure?: WorkspaceDisclosure,
+  ): Promise<void> {
     return this.serial(async () => {
+      signal?.throwIfAborted();
+      disclosure?.assertCurrent();
       if (this.closed) throw new Error('Review service has stopped.');
       const capture = agentReviewInputSchema.parse(input);
       const previous = this.records.get(capture.id);
@@ -65,7 +73,8 @@ export class AgentReviewService {
       // Admission must reach disk before any provider request can start.
       await this.commit(review);
       const controller = new AbortController();
-      const completion = Promise.resolve().then(() => this.execute(review, controller.signal));
+      const ownerSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+      const completion = Promise.resolve().then(() => this.execute(review, ownerSignal, disclosure));
       this.active = { id: review.id, controller, completion };
       void completion.finally(() => {
         this.active = undefined;
@@ -107,7 +116,7 @@ export class AgentReviewService {
     this.listeners.clear();
     await this.store.dispose();
   }
-  private async execute(review: AgentReview, signal: AbortSignal): Promise<void> {
+  private async execute(review: AgentReview, signal: AbortSignal, disclosure?: WorkspaceDisclosure): Promise<void> {
     let text = '';
     let progress: Promise<unknown> = Promise.resolve();
     const files = new Map<string, AgentReviewFileLines>(
@@ -122,6 +131,7 @@ export class AgentReviewService {
     );
     try {
       signal.throwIfAborted();
+      (await disclosure?.authorize(signal))?.();
       await this.executor.run(
         review,
         delta => {
@@ -141,6 +151,7 @@ export class AgentReviewService {
           });
         },
         signal,
+        disclosure,
       );
       await progress;
       await this.serial(async () => {
@@ -166,7 +177,7 @@ export class AgentReviewService {
           if (current.status !== Status.RUNNING) return;
           await this.commit({
             ...current,
-            status: Status.FAILED,
+            status: signal.aborted ? Status.INTERRUPTED : Status.FAILED,
             error: error instanceof Error ? error.message : String(error),
           });
         });

@@ -7,11 +7,12 @@ import type { AgentReviewModel } from './AgentReview.ts';
 /** Uses a fresh provider conversation with a read-only tool registry per review. */
 export class ConversationAgentReviewExecutor implements AgentReviewExecutor {
   constructor(private readonly createConversation: (model: AgentReviewModel) => ChatConversation) {}
-  async run(...[review, onText, signal]: Parameters<AgentReviewExecutor['run']>): Promise<void> {
+  async run(...[review, onText, signal, disclosure]: Parameters<AgentReviewExecutor['run']>): Promise<void> {
     const conversation = this.createConversation(review);
     await conversation.send(
       {
         mode: AgentModeID.PLAN,
+        ...(disclosure && { disclosure }),
         text: [
           'Review the captured Git comparison for actionable bugs and regressions introduced by these changes.',
           `Comparison: ${review.label}.`,
