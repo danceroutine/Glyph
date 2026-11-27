@@ -169,7 +169,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     this.options = {
       ...parsed,
       ...accessPolicy.toJSON(),
-      ...(accessPolicy.privatePaths.length ? { privatePaths: [...accessPolicy.privatePaths] } : {}),
+      ...(accessPolicy.privatePaths.length > 0 ? { privatePaths: [...accessPolicy.privatePaths] } : {}),
       excludedPaths: [...new Set([...parsed.excludedPaths, ...projected.excludedPaths])],
       ...(projected.privateRoot ? { excludeRoot: true } : {}),
       binaryPath: resolve(parsed.binaryPath),

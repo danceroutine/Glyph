@@ -82,7 +82,7 @@ describe(RustWorkspacePathIndex, () => {
         );
         await expect(result).rejects.toThrow('private paths changed');
         await expect(index.searchContents('text', { outputMode: 'content' })).rejects.toThrow('private paths changed');
-        expect(workers[1]!.requests.map(request => request.method)).toEqual(['initialize']);
+        expect(workers[1]!.requests.map(message => message.method)).toEqual(['initialize']);
       } finally {
         await index.dispose();
       }
