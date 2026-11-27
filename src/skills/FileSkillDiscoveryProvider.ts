@@ -23,6 +23,7 @@ export interface SkillDiscoveryLocation {
   readonly listFiles: (
     signal?: AbortSignal,
   ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+  readonly packageId?: (directory: string) => string;
   readonly uriForPath: (path: string) => string;
   /** Optional package-scoped inventory for native indexes. */
   readonly captureFiles?: (
@@ -90,7 +91,7 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
       const path = indexedPath ?? `${directory}/SKILL.md`;
       const name = posix.basename(directory);
       const source: SkillDescriptor = {
-        id: skillPackageId(this.id, directory),
+        id: this.location.packageId?.(directory) ?? skillPackageId(this.id, directory),
         origin: this.location.origin,
         path,
         directory,

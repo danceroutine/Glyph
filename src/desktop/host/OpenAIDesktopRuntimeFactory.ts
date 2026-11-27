@@ -1,3 +1,4 @@
+import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
@@ -355,22 +356,24 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           await userSkillIndex.refresh();
         },
       });
-      skills = new SkillCatalog([
-        userSkills,
-        ...parts.flatMap(part =>
-          ['.glyph', '.cursor'].map(
-            location =>
-              new FileSkillDiscoveryProvider({
+      skills = new SkillCatalog(
+        [
+          userSkills,
+          ...physicalParts.flatMap(part =>
+            ['.glyph', '.cursor'].map(location => {
+              const identity = new ProjectSkillIdentity(part.disk.root, location);
+              return new FileSkillDiscoveryProvider({
+                packageId: directory => identity.forDirectory(directory),
                 origin: {
-                  id: `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:${location}`,
+                  id: identity.originId,
                   label: `${part.name} ${location} skill`,
                   scope: 'project',
                   compatibility: location.slice(1),
                 },
                 directory: `${location}/skills`,
-                workspace: part.catalog,
                 captureFiles: (directory, signal) =>
                   listSkillPackageFiles(part.disk, directory, indexExecutable, true, signal),
+                workspace: part.catalog,
                 binaryStore: part.disk,
                 ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
                 uriForPath: path => userRuleUri(part.disk.root, path),
@@ -379,10 +382,13 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 refreshIndex: async () => {
                   await part.index.refresh();
                 },
-              }),
+              });
+            }),
           ),
-        ),
-      ]);
+        ],
+        undefined,
+        routes,
+      );
       turnContexts = new TurnContextCoordinator([
         new InstructionContextContributor(instructionCatalog),
         new SkillContextContributor(skills),

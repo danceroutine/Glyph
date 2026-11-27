@@ -10,6 +10,7 @@ export class SkillCatalog {
   constructor(
     private readonly providers: readonly SkillDiscoveryProvider[],
     private readonly enabled: ReadonlyMap<string, boolean> = new Map(),
+    private readonly workspaceRoutes?: { equivalents(path: string): string[] },
   ) {
     if (new Set(providers.map(provider => provider.id)).size !== providers.length)
       throw new Error('Skill provider IDs must be unique.');
@@ -57,9 +58,16 @@ export class SkillCatalog {
       .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     signal?.throwIfAborted();
     if (generation < this.published) return this.current;
+    // A package indexed through overlapping roots belongs to the most specific provider that found it.
+    const unique = new Map<string, SkillDescriptor>();
+    for (const skill of discovered) {
+      const previous = unique.get(skill.id);
+      if (!previous || skill.directory.length < previous.directory.length) unique.set(skill.id, skill);
+    }
     this.published = generation;
-    if (JSON.stringify(discovered) !== JSON.stringify(this.current)) {
-      this.current = discovered;
+    const projected = [...unique.values()];
+    if (JSON.stringify(projected) !== JSON.stringify(this.current)) {
+      this.current = projected;
       for (const listener of this.listeners) listener();
     }
     return this.current;
@@ -68,10 +76,12 @@ export class SkillCatalog {
     if (skill.scope === '.') return true;
     const provider = this.providers.find(candidate => candidate.id === skill.origin.id);
     const scope = provider?.scopePathKey?.(skill.scope) ?? skill.scope;
-    return paths.some(path => {
-      const key = provider?.scopePathKey?.(path) ?? path;
-      return key === scope || key.startsWith(`${scope}/`);
-    });
+    return paths
+      .flatMap(path => this.workspaceRoutes?.equivalents(path) ?? [path])
+      .some(path => {
+        const key = provider?.scopePathKey?.(path) ?? path;
+        return key === scope || key.startsWith(`${scope}/`);
+      });
   }
 
   async capture(descriptor: SkillDescriptor, signal?: AbortSignal) {
