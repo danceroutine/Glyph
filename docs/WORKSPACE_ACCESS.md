@@ -22,6 +22,16 @@ The desktop host grants access after checking ownership and trust. Its
 trust loss, or a change of roots. Reconnecting issues a fresh signal. Carry the
 original signal through approvals and lock waits, then check it alongside the
 resource policy before submitting the write or returning data to the window.
+Attachment negotiation also belongs to the submitting renderer port. A replacement
+port that resumes the same window ID must finish its own handshake before it can
+receive a snapshot or run a command. Queued requests from the previous port expire
+on disconnect.
+
+When the host asks the workbench to edit a file, the editor RPC router holds
+the root and trust checks for that pending operation. The workbench asks the
+original port to run them again after native file-operation participants finish
+and before applying or saving edits. Completing the RPC or disconnecting the
+port retires its grant.
 
 ## Composing a host
 
@@ -75,7 +85,13 @@ current turn and stay in host memory.
 Native search and the shell run outside the JavaScript process. Pass the host's
 policy to their adapters. An OS sandbox is established at launch. For an
 intentional move of private storage, stop existing commands that could reach the
-new location, including detached commands, before switching the boundary.
+new location, including detached commands, before switching the boundary. Glyph verifies the startup profile's directory identity
+when issuing a project, selected-file, catalog, or sandbox operation and when a
+host-mediated result is delivered. An observed removal or replacement invalidates
+outstanding operations and cached projections. New operations resume when the
+original directory returns to its enrolled path. A running sandbox keeps the
+OS rules installed at launch. External moves between host checks, including
+moves during a running command, require the same stop-before-move procedure.
 
 ## Extending access
 

@@ -894,7 +894,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       } as const;
       await expect(client.request(text)).resolves.toMatchObject({ snapshot: { path: 'file.txt' } });
-      expect(request).toHaveBeenLastCalledWith(factoryIdentity, text, undefined);
+      expect(request).toHaveBeenLastCalledWith(factoryIdentity, text, undefined, expect.any(Function));
+      expect(request.mock.lastCall![3]).not.toThrow();
       const rename = fileMutation({
         kind: GlyphFileMutationKind.RENAME,
         path: 'file.txt',
@@ -904,7 +905,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       });
       await expect(client.request(rename)).resolves.toMatchObject({ snapshot: { path: 'renamed.txt' } });
       expect(validate).toHaveBeenLastCalledWith('renamed.txt');
-      expect(request).toHaveBeenLastCalledWith(factoryIdentity, rename, undefined);
+      expect(request).toHaveBeenLastCalledWith(factoryIdentity, rename, undefined, expect.any(Function));
       const create = fileMutation({
         kind: GlyphFileMutationKind.CREATE,
         path: 'new.txt',

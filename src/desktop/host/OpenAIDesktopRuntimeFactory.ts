@@ -268,7 +268,15 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 mutation: { ...wire.mutation, target: `${workspaceRoot.name}/${wire.mutation.target}` },
               };
             operation.assertCurrent();
-            const response = await this.editors.request(input.identity, wire, signal);
+            const mutation =
+              wire.type === GlyphEditorRequestType.APPLY_FILE_MUTATION ||
+              wire.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION;
+            const response = mutation
+              ? await this.editors.request(input.identity, wire, signal, () => {
+                  input.assertTrusted();
+                  operation.assertCurrent();
+                })
+              : await this.editors.request(input.identity, wire, signal);
             if (path !== undefined && path !== '') {
               await admitted.validateAccess(path);
               if (
