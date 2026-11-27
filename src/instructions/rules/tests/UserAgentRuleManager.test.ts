@@ -1,6 +1,6 @@
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
-import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
@@ -83,6 +83,7 @@ describe(UserAgentRuleManager, () => {
     const workspace = new FileSystemWorkspaceTextStore(profile);
     const manager = new UserAgentRuleManager(workspace, { refresh: async () => [] }, files, testFilesystemMetadata);
     await manager.create('Protected', 'manual');
+    expect((await stat(join(profile, 'rules/protected.mdc'))).mode & 0o777).toBe(0o600);
     const staging = join(profile, '.skill-staging');
     const lock = 'user-rules.sqlite';
     expect(await readFile(join(staging, lock))).toHaveLength(0);
@@ -172,7 +173,7 @@ describe(UserAgentRuleManager, () => {
       'rules/typescript-safety.mdc',
       expect.stringContaining('activation: model'),
       false,
-      undefined,
+      0o600,
       undefined,
     );
     expect(refresh).toHaveBeenCalledOnce();
