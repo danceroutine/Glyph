@@ -116,21 +116,37 @@ mod tests {
     #[test]
     fn admits_only_visible_directories_and_files_before_the_package_limit() {
         let paths = [
-            "a/SKILL.md",
-            "b/SKILL.md",
-            "c/0-asset",
-            "c/SKILL.md",
-            "d/SKILL.md",
+            ".cursor/skills/other/SKILL.md",
+            ".glyph/skills",
+            ".glyph/skills/0-unpackaged",
+            ".glyph/skills/a/SKILL.md",
+            ".glyph/skills/b/SKILL.md",
+            ".glyph/skills/c/first-asset",
+            ".glyph/skills/c/second-asset",
+            ".glyph/skills/c/SKILL.md",
+            ".glyph/skills/d/SKILL.md",
+            ".glyph/skills/e/SKILL.md",
         ]
         .map(String::from)
         .into();
-        let visible =
-            |path: &Path| !matches!(path.to_str(), Some("a" | "b/SKILL.md" | "c/SKILL.md"));
-        let result = list(&paths, None, Path::new("."), 1, false, visible);
+        let visible = |path: &Path| {
+            ![
+                ".glyph/skills/a",
+                ".glyph/skills/b/SKILL.md",
+                ".glyph/skills/c/SKILL.md",
+            ]
+            .iter()
+            .any(|hidden| path == Path::new(hidden))
+        };
+        let result = list(&paths, Some(".glyph"), Path::new("."), 2, false, visible);
         assert!(result.truncated);
-        assert_eq!(result.packages.len(), 1);
-        assert_eq!(result.packages[0].directory, "c");
+        assert_eq!(result.packages.len(), 2);
+        assert_eq!(result.packages[0].directory, ".glyph/skills/c");
         assert!(result.packages[0].manifest.is_none());
+        assert_eq!(
+            result.packages[1].manifest.as_deref(),
+            Some(".glyph/skills/d/SKILL.md")
+        );
     }
 
     #[test]
