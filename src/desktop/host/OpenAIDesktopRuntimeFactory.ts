@@ -2,6 +2,7 @@ import { StartupUserProfile } from '#src/workspace/policy/StartupUserProfile.js'
 import { readSourcePathAliases, type SourcePathAliases } from '#src/workspace/SourcePathAliases.js';
 import { UserSkillDirectory } from '#src/skills/UserSkillDirectory.js';
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
+import { readDirectoryNamePolicies } from '#src/workspace/readDirectoryNamePolicies.js';
 import { projectIntersection, WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { filesystemPolicyDirectory, workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
@@ -232,9 +233,10 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const workspace = new EditorWorkspaceTextStore(workspaceRoot.path, disk.caseSensitive, {
         canonicalPath: (path, mutation, onManagedPathAdmitted) =>
           disk.canonicalPath(path, mutation, onManagedPathAdmitted),
-        listPaths: (limit, glob = '**/*', targetDirectory) =>
+        listPaths: (limit, glob = '**/*', targetDirectory, signal) =>
           index.glob(glob, {
             limit,
+            ...(signal && { signal }),
             ...(targetDirectory !== undefined && targetDirectory !== '' ? { targetDirectory } : {}),
           }),
         request: async (request, signal) => {
@@ -326,6 +328,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         foldsUnicode: namePolicies[index]!.foldsUnicode,
         uri: input.roots[index]!.uri,
       })),
+      readDirectoryNamePolicies.bind(undefined, indexExecutable),
     );
     const workspace =
       roots.length === 1
@@ -358,8 +361,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         (part, partIndex) => parts.findIndex(other => other.disk.root === part.disk.root) === partIndex,
       );
       // Reuse each root's watched native index; instruction refreshes must not rescan the workspace.
-      const listProjectInstructions = async (maxFiles: number, globPattern: string) => {
-        const listed = await listInstructionFilesAcrossRoots(physicalParts, maxFiles, globPattern, parts.length > 1);
+      const listProjectInstructions = async (maxFiles: number, globPattern: string, signal?: AbortSignal) => {
+        const listed = await listInstructionFilesAcrossRoots(
+          physicalParts,
+          maxFiles,
+          globPattern,
+          parts.length > 1,
+          signal,
+        );
         return { ...listed, files: routes.uniqueFiles(listed.files) };
       };
       const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
@@ -419,8 +428,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         paths,
         this.sourcePathAliases,
       );
-      const listProjectRules = async (maxFiles: number, pattern: string) => {
-        const listed = await listProjectInstructions(maxFiles, pattern);
+      const listProjectRules = async (maxFiles: number, pattern: string, signal?: AbortSignal) => {
+        const listed = await listProjectInstructions(maxFiles, pattern, signal);
         this.profile.verify();
         userRuleDirectory.refresh();
         return { ...listed, files: listed.files.filter(path => !userRuleDirectory.ownsProjectRule(path)) };
@@ -436,13 +445,13 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               projectAlias: path => userRuleDirectory.projectAlias(path),
               uriForPath: userRuleUri.bind(undefined, userRuleRoot),
             },
-            async maxFiles => {
+            async (maxFiles, _pattern, signal) => {
               // The index root must obey the store's no-symlink rule too, not just its children.
               this.profile.ensureDirectory();
               await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
               await userInstructionStore.canonicalPath('rules');
               userRuleDirectory.refresh();
-              return this.profile.access(() => listUserRuleFiles(userRuleIndex, maxFiles));
+              return this.profile.access(() => listUserRuleFiles(userRuleIndex, maxFiles, signal));
             },
           ),
           new AgentsMdInstructionProvider(catalogWorkspace, { paths, uriForPath: projectUri }, listProjectInstructions),

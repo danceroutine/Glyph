@@ -17,7 +17,10 @@ export class SkillCatalog {
     private readonly ensureReady?: () => Promise<void>,
     private readonly ensureLocation?: (originId: string, directory?: string) => Promise<void>,
     private observePreferences?: (listener: () => void) => () => void,
-    private readonly workspaceRoutes?: { equivalents(path: string): string[] },
+    private readonly workspaceRoutes?: {
+      equivalents(path: string): string[];
+      prepare?(paths: readonly string[]): void;
+    },
     private readonly migratePreferences?: (skills: readonly SkillDescriptor[]) => Promise<void>,
   ) {
     this.byId = new Map(providers.map(provider => [provider.id, provider]));
@@ -120,6 +123,8 @@ export class SkillCatalog {
 
   /** Match one batch of paths against each provider's scope hierarchy, retaining catalog precedence. */
   applicableSkills(skills: readonly SkillDescriptor[], paths: readonly string[]): readonly SkillDescriptor[] {
+    if (paths.length === 0) return skills.filter(skill => skill.scope === '.');
+    this.workspaceRoutes?.prepare?.([...new Set([...paths, ...skills.map(skill => skill.scope)])]);
     let routes: Set<string> | undefined;
     const byOrigin = new Map<string, { ancestors: Set<string>; scopes: Map<string, boolean> }>();
     return skills.filter(skill => {

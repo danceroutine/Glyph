@@ -9,6 +9,7 @@ describe(InstructionPaths, () => {
     ]),
   );
   it('compares paths with the casing of the routed root while preserving distinct aliases', () => {
+    expect(roots.contains('.', 'App/src/A.ts')).toBe(true);
     expect(roots.contains('App/Src', 'App/src/A.ts')).toBe(true);
     expect(roots.contains('App/Src', 'app/src/A.ts')).toBe(false);
     expect(roots.contains('app/Src', 'app/src/A.ts')).toBe(false);

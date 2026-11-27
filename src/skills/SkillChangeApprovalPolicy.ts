@@ -6,6 +6,11 @@ import type {
 } from '#src/interaction/approvals/ApprovalCapabilityPolicy.js';
 import type { ApprovalRequest, ApprovalRequestInput } from '#src/interaction/approvals/ApprovalRequest.js';
 
+/**
+ * Authorizes one reviewed skill package change. The package manager binds the
+ * approval to the preview and verifies the target revision, source authority
+ * and editor state again at publication. Each new change needs its own approval.
+ */
 export class SkillChangeApprovalPolicy implements ApprovalCapabilityPolicy<ApprovalCapability.SKILL_CHANGE> {
   readonly capability = ApprovalCapability.SKILL_CHANGE;
   createRequest(

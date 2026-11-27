@@ -95,7 +95,11 @@ describe(FileSkillDiscoveryProvider, () => {
     const sameDirectoryEntry = await fixture.store.exists(decomposed + '/.glyph/skills/example/SKILL.md');
     for (const normalizesUnicode of [false, true]) {
       const sharesScope = normalizesUnicode && sameDirectoryEntry;
-      const routes = new WorkspaceSourceRoutes([{ name: 'project', path: fixture.root, normalizesUnicode }]);
+      const prepare = vi.fn();
+      const routes = Object.assign(
+        new WorkspaceSourceRoutes([{ name: 'project', path: fixture.root, normalizesUnicode }]),
+        { prepare },
+      );
       const paths = new InstructionPaths(fixture.store.caseSensitive, routes);
       const provider = new FileSkillDiscoveryProvider({
         origin: { id: 'project', label: 'Project', scope: 'project', compatibility: 'glyph' },
@@ -108,7 +112,9 @@ describe(FileSkillDiscoveryProvider, () => {
       });
       const catalog = new SkillCatalog([provider], undefined, undefined, undefined, undefined, undefined, routes);
       const turn = await new SkillContextContributor(catalog).beginTurn({ turnId: 't', attachmentPaths: [] });
-      expect(turn.disclosePaths([decomposed + '/file'])?.skillCandidates?.length).toBe(sharesScope ? 1 : undefined);
+      const attachments = [decomposed + '/file', decomposed + '/new'];
+      expect(turn.disclosePaths(attachments)?.skillCandidates?.length).toBe(sharesScope ? 1 : undefined);
+      expect(prepare).toHaveBeenLastCalledWith([...attachments, composed]);
       expect(turn.disclosePaths([composed + '/file'])?.skillCandidates?.length).toBe(sharesScope ? undefined : 1);
     }
   });

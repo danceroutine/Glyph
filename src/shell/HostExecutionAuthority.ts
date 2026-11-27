@@ -4,7 +4,13 @@ import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAutho
 /** Current attached roots, including peer windows and roots retained during reconnection. */
 export type HostWorkspaceRoots = readonly string[] | (() => readonly string[]);
 
-/** Retains host-only locations and rechecks them against changing workspace authority before each subprocess. */
+/**
+ * Binds host tools and their inputs to locations outside attached workspaces.
+ * Admission retains logical and physical paths. Call validate immediately
+ * before each subprocess, including a retry, to consult the latest roots and
+ * native filesystem identity. A validated command still runs under its chosen
+ * execution profile.
+ */
 export class HostExecutionAuthority {
   private readonly paths = new Set<string>();
 

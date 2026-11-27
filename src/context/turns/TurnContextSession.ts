@@ -49,7 +49,7 @@ export class TurnContextSession {
       );
     const attachments = unique(input.attachmentPaths);
     const batch = new RulePathBatch(attachments, this.paths);
-    const applicable = this.sourcesFor(attachments, this.scopeIndex.rootGuidance);
+    const applicable = this.sourcesFor(batch, this.scopeIndex.rootGuidance);
     const candidates = this.advertiseCandidates(applicable);
     for (const source of applicable) {
       if (!eligible(source)) continue;
@@ -145,7 +145,7 @@ export class TurnContextSession {
   ): TurnContextEnvelope | undefined {
     const normalized = unique(paths);
     const batch = new RulePathBatch(normalized, this.paths);
-    const applicable = this.sourcesFor(normalized);
+    const applicable = this.sourcesFor(batch);
     const candidates = this.advertiseCandidates(applicable);
     const matched = new Map<AgentInstructionSource, readonly string[]>();
     for (const source of applicable) {
@@ -187,16 +187,14 @@ export class TurnContextSession {
   }
 
   private sourcesFor(
-    paths: readonly string[],
+    batch: RulePathBatch,
     upfront: readonly AgentInstructionSource[] = [],
   ): readonly AgentInstructionSource[] {
-    const applicable = new Set([...this.scopeIndex.forPath('.'), ...upfront]);
-    if (paths.length > 0) {
-      for (const source of this.scopeIndex.forPaths(paths, true)) {
-        if (isUnavailableGuidance(source))
-          throw new Error(`Required instruction ${source.path} could not be loaded. ${source.message ?? ''}`.trimEnd());
-        applicable.add(source);
-      }
+    const applicable = new Set(upfront);
+    for (const source of this.scopeIndex.forScopes(batch.scopeKeys, true)) {
+      if (isUnavailableGuidance(source))
+        throw new Error(`Required instruction ${source.path} could not be loaded. ${source.message ?? ''}`.trimEnd());
+      applicable.add(source);
     }
     return [...applicable].toSorted((a, b) => this.precedence.get(a)! - this.precedence.get(b)!);
   }

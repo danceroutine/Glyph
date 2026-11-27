@@ -17,5 +17,6 @@ export interface EditorWorkspaceClient {
     maxFiles: number,
     globPattern?: string,
     targetDirectory?: string,
+    signal?: AbortSignal,
   ): Promise<{ files: string[]; truncated: boolean }>;
 }

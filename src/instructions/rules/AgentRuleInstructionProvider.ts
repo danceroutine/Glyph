@@ -44,8 +44,9 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     private readonly listFiles: (
       maxFiles: number,
       globPattern: string,
-    ) => Promise<{ files: string[]; truncated: boolean }> = (maxFiles, globPattern) =>
-      workspace.list(maxFiles, globPattern),
+      signal?: AbortSignal,
+    ) => Promise<{ files: string[]; truncated: boolean }> = (maxFiles, globPattern, signal) =>
+      workspace.list(maxFiles, globPattern, undefined, signal),
   ) {
     this.paths = options.paths ?? new InstructionPaths(workspace.caseSensitive);
   }
@@ -55,13 +56,14 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     const pattern = this.options.directory === '.' ? 'rules/*.mdc' : `**/${this.options.directory}/rules/*.mdc`;
     let listed: { files: string[]; truncated: boolean };
     try {
-      listed = await this.listFiles(this.options.maxFiles ?? DEFAULT_MAX_FILES, pattern);
+      listed = await this.listFiles(this.options.maxFiles ?? DEFAULT_MAX_FILES, pattern, signal);
     } catch (error) {
       signal?.throwIfAborted();
       return [
         this.errorSource(`${this.options.directory}/rules`, '.', describe(error, 'Rules could not be discovered.')),
       ];
     }
+    signal?.throwIfAborted();
     const sources: AgentInstructionSource[] = [];
     const budget = {
       readBytes: this.options.maxDiscoveryBytes ?? 8 * 1024 * 1024,
@@ -163,7 +165,10 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     const references: string[] = [];
     const revisions = [sourceRevision];
     const cache = new Map<string, { parsed: AgentRuleFile; revision: string }>();
-    const ancestors = new Set([this.paths.key(normalized)]);
+    // Indexed catalog references open existing entries. Their stored spelling identifies repeat reads
+    // without acquiring directory policies one rule at a time during asynchronous discovery.
+    const referenceKey = (path: string) => this.paths.routes?.storedSpelling(path) ?? this.paths.key(path);
+    const ancestors = new Set<string>();
     let edges = 0;
     let remaining = Math.min(this.options.maxExpandedBytes ?? 256 * 1024, budget.outputBytes);
     const append = (value: string) => {
@@ -181,7 +186,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
         if (++edges > (this.options.maxReferenceEdges ?? 128) || --budget.edges < 0)
           throw new Error('Rule reference count exceeds the discovery limit.');
         const target = this.workspace.normalizePath(this.paths.reference(scope, child));
-        const key = this.paths.key(target);
+        const key = referenceKey(target);
         if (ancestors.has(key)) throw new Error(`Circular rule reference: ${[...ancestors, target].join(' -> ')}`);
         let entry = cache.get(key);
         if (!entry) {
@@ -199,7 +204,10 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
       }
     };
     append(parsed.body);
-    await expand(parsed.references);
+    if (parsed.references.length > 0) {
+      ancestors.add(referenceKey(normalized));
+      await expand(parsed.references);
+    }
     return {
       content: contents.join('\n\n'),
       references,

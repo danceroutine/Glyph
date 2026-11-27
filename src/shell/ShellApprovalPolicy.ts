@@ -15,6 +15,11 @@ import { ShellPermissionDecision } from './ShellPermissionDecision.ts';
 import { ShellSandboxProfile } from './ShellSandboxProfile.ts';
 import { isSafeShellCommand } from './isSafeShellCommand.ts';
 
+/**
+ * Translates the user's decision about a command and directory into a grant and
+ * a sandbox profile. Match that grant against the operation being requested.
+ * The shell launcher enforces the selected profile when it starts the process.
+ */
 export class ShellApprovalPolicy implements ApprovalCapabilityPolicy<ApprovalCapability.SHELL> {
   readonly capability = ApprovalCapability.SHELL;
   constructor(private readonly availableChoices: readonly string[] = Object.values(ShellPermissionDecision)) {}

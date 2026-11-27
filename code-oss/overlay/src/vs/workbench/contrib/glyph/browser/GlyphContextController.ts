@@ -149,17 +149,22 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         if (event.scheme === 'file') observeProvider();
       }),
     );
-    const watched = new WeakSet<ITextModel>();
+    const watched = this.instructionWatchers.add(new DisposableMap<ITextModel>());
     const watch = (model: ITextModel) => {
-      if (!watched.has(model) && relevant(model.uri)) {
-        watched.add(model);
-        this.instructionWatchers.add(
+      if (!relevant(model.uri)) watched.deleteAndDispose(model);
+      else if (!watched.has(model))
+        watched.set(
+          model,
           model.onDidChangeContent(() => {
             changed.schedule();
           }),
         );
-      }
     };
+    this.instructionWatchers.add(
+      this.models.onModelRemoved(model => {
+        watched.deleteAndDispose(model);
+      }),
+    );
     this.watchInstructionModel = watch;
     for (const model of this.models.getModels()) watch(model);
     this.instructionWatchers.add(this.models.onModelAdded(watch));
