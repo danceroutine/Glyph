@@ -88,6 +88,7 @@ describe(TurnContextCoordinator, () => {
     await writeFile(join(root, 'AGENTS.md'), 'root guidance');
     await writeFile(join(root, 'guide.md'), 'reference');
     await writeFile(join(root, '.glyph', 'rules', 'one.mdc'), '---\nreferences: [guide.md]\n---\nrule');
+    await writeFile(join(root, '.glyph', 'rules', 'two.mdc'), '---\nreferences: [guide.md]\n---\nanother rule');
     const store = fixtureWorkspace(root);
     const authority = {
       capture: vi.fn(async (paths: readonly string[]) =>
@@ -114,7 +115,11 @@ describe(TurnContextCoordinator, () => {
     const session = await coordinator.beginTurn({ turnId: 't', attachmentPaths: [] });
     expect(session.initialEnvelope().sources[0]?.content).toBe('root guidance');
     expect(authority.capture).toHaveBeenCalledTimes(1);
-    expect(authority.capture.mock.calls[0]![0]).toHaveLength(3);
+    expect(authority.capture.mock.calls[0]![0].toSorted()).toEqual(
+      ['AGENTS.md', 'guide.md', '.glyph/rules/one.mdc', '.glyph/rules/two.mdc']
+        .map(path => join(root, path))
+        .toSorted(),
+    );
     const guard = await coordinator.authorizeDisclosure('t');
     const pending = coordinator.disclosePaths('t', ['file']);
     coordinator.discardTurn('t');
@@ -169,6 +174,20 @@ describe(TurnContextCoordinator, () => {
     await expect(coordinator.beginTurn({ turnId: 't', attachmentPaths: [] }, controller.signal)).rejects.toThrow(
       'Stopped',
     );
+  });
+
+  it('stops enrollment retries when the turn is cancelled during a partial capture', async () => {
+    const { capture, coordinator, files } = fixture();
+    const controller = new AbortController();
+    capture.mockRejectedValueOnce(new Error('A file is unavailable')).mockImplementationOnce(async paths => {
+      controller.abort(new Error('Turn cancelled'));
+      return files.filter(file => paths.includes(file.path));
+    });
+    await expect(coordinator.beginTurn({ turnId: 't', attachmentPaths: [] }, controller.signal)).rejects.toThrow(
+      'Turn cancelled',
+    );
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(coordinator.snapshot('t')).toBeUndefined();
   });
 
   it('rejects a changed read identity before admitting the turn', async () => {
