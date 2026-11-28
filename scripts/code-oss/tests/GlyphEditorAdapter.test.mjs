@@ -769,11 +769,17 @@ async function pendingEdit({
   const finish = Promise.withResolvers();
   let dirty = true;
   let diskText = initial;
-  const save = vi.fn(async (/** @type {URIValue} */ resource) => {
-    diskText = text;
-    dirty = false;
-    return resource;
-  });
+  const save = vi.fn(
+    async (
+      /** @type {URIValue} */ resource,
+      /** @type {{ validateBeforeWrite: () => Promise<() => void> }} */ options,
+    ) => {
+      (await options.validateBeforeWrite())();
+      diskText = text;
+      dirty = false;
+      return resource;
+    },
+  );
   let folders = [{ name: 'A', uri: URI.file('/workspace/A') }];
   let workspaceId = 'workspace';
   let profileId = 'profile';
@@ -862,7 +868,7 @@ async function pendingEdit({
         };
       },
     },
-    { getModels: () => [model] },
+    { getModels: () => [model], getModel: resource => (resource.toString() === model.uri.toString() ? model : null) },
     { isDirty: () => dirty, save },
     { isWorkspaceTrusted: () => true },
     {},
@@ -1018,6 +1024,7 @@ it('saves an applied text edit before reporting success even with Auto Save off'
     expect(fixture.diskText()).toBe('replacement');
     expect(fixture.save).toHaveBeenCalledWith(expect.objectContaining({ path: '/workspace/A/file.ts' }), {
       skipSaveParticipants: true,
+      validateBeforeWrite: expect.any(Function),
     });
     expect((await fixture.apply(true)).ok).toBe(true);
     expect(fixture.launch).toHaveBeenCalledTimes(1);
