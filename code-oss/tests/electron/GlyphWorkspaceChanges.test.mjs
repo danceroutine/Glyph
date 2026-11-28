@@ -25,6 +25,8 @@ async function attach(glyph, file) {
   await expect(glyph.page.locator('.editor-instance .monaco-editor').first()).toBeVisible();
   await glyph.page.keyboard.press('ControlOrMeta+a');
   await glyph.page.keyboard.press('ControlOrMeta+l');
+  await expect(glyph.composer.getByRole('button', { name: /^Preview /u })).toBeVisible();
+  await expect(glyph.composer).toBeFocused();
 }
 /**
  * @param {GlyphWorkbench} glyph
