@@ -130,7 +130,7 @@ export class ProjectAccess {
     private readonly workspace: Pick<WorkspaceTextStore, 'read' | 'normalizePath'>,
     private readonly pathIndex: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
     options: ProjectAccessOptions = {},
-    private readonly turnContexts?: Pick<TurnContextCoordinator, 'disclosePaths'>,
+    private readonly turnContexts?: Pick<TurnContextCoordinator, 'withPathInstructions'>,
     private readonly sourceAuthority?: PinnedSourceAuthority,
   ) {
     this.options = projectAccessOptionsSchema.parse(options);
@@ -190,6 +190,7 @@ export class ProjectAccess {
   ): Promise<string> {
     const access = new WorkspaceDisclosure();
     const deliver = (value: object) => {
+      const output = JSON.stringify(value);
       signal?.throwIfAborted();
       access.assertCurrent();
       if (access.hasSources)
@@ -197,8 +198,17 @@ export class ProjectAccess {
           access.assertCurrent,
           access.hasValidators ? cancellation => access.authorize(cancellation) : undefined,
         );
-      return JSON.stringify(value);
+      return output;
     };
+    const deliverWithInstructions = (result: object, paths: readonly string[]) =>
+      context?.turnId && this.turnContexts
+        ? this.turnContexts.withPathInstructions(
+            context.turnId,
+            paths,
+            instructions => deliver(instructions ? { ...result, instructionContext: instructions } : result),
+            signal,
+          )
+        : deliver(result);
     try {
       switch (isEnumValue(ProjectToolName, name) ? name : undefined) {
         case ProjectToolName.LIST_FILES:
@@ -208,7 +218,7 @@ export class ProjectAccess {
         case ProjectToolName.READ_FILE: {
           const arguments_ = readProjectFileArguments.parse(JSON.parse(rawArguments));
           const result = await this.readFile(arguments_, access);
-          return deliver(await this.withInstructions(result, [result.path], context, signal));
+          return await deliverWithInstructions(result, [result.path]);
         }
         case ProjectToolName.SEARCH_CONTENTS: {
           const result = await this.searchContents(
@@ -216,7 +226,7 @@ export class ProjectAccess {
             access,
             signal,
           );
-          return deliver(await this.withInstructions(result, searchResultPaths(result), context, signal));
+          return await deliverWithInstructions(result, searchResultPaths(result));
         }
         default:
           throw new Error(`Unknown project tool: ${name}`);
@@ -239,18 +249,6 @@ export class ProjectAccess {
               },
       });
     }
-  }
-
-  private async withInstructions(
-    result: object,
-    paths: readonly string[],
-    context?: ToolExecutionContext,
-    signal?: AbortSignal,
-  ): Promise<object> {
-    const instructions = context?.turnId
-      ? await this.turnContexts?.disclosePaths(context.turnId, paths, signal)
-      : undefined;
-    return instructions ? { ...result, instructionContext: instructions } : result;
   }
 
   private async searchContents(
