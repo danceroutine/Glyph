@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import { readEditorContentOverrides } from '#src/desktop/workspace/readEditorContentOverrides.js';
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
@@ -79,6 +80,33 @@ describe(readEditorContentOverrides, () => {
     await expect(test.read()).rejects.toThrow(
       'Editor search snapshot for one/a.ts exceeds the 512 KiB per-file limit.',
     );
+  });
+
+  it('reports the routed dirty file when a retained source exceeds the limit and retries the live source', async () => {
+    const test = fixture();
+    const readSource = vi
+      .fn<(path: string, maxBytes: number) => Promise<string>>()
+      .mockRejectedValueOnce(new WorkspaceReadLimitError('a.ts', 512 * 1024, 530_000))
+      .mockResolvedValueOnce('Needle after revert');
+    const read = () =>
+      readEditorContentOverrides(
+        { validateAccess: test.validateAccess },
+        { filterPaths: test.filterPaths },
+        test.request,
+        'one/',
+        undefined,
+        readSource,
+      );
+    await expect(read()).rejects.toThrow('Editor search snapshot for one/a.ts exceeds the 512 KiB per-file limit.');
+    await expect(read()).resolves.toEqual({ 'a.ts': 'Needle after revert' });
+    expect(readSource.mock.calls).toEqual([
+      ['a.ts', 512 * 1024],
+      ['a.ts', 512 * 1024],
+    ]);
+    expect(test.request.mock.calls.map(([command]) => command.type)).toEqual([
+      GlyphEditorRequestType.LIST_WORKING_COPY_PATHS,
+      GlyphEditorRequestType.LIST_WORKING_COPY_PATHS,
+    ]);
   });
 
   it.each(['failed', 'missing', 'wrong path'] as const)(
