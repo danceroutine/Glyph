@@ -213,6 +213,61 @@ describe(DesktopAttachmentAccess, () => {
     (await disclosure.authorize(signal))();
   });
 
+  it('refreshes folder captures through their selected URI and the current indexed directory entries', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'glyph-folder-listing-')));
+    const root = join(base, 'project');
+    const alias = join(base, 'linked');
+    const savedPath = 'src/café';
+    const otherPath = 'SRC/CAFE\u0301';
+    await mkdir(join(root, savedPath), { recursive: true });
+    await writeFile(join(root, savedPath, 'saved.ts'), '');
+    await symlink(root, alias);
+    const caseSensitive = workspaceCaseSensitivity(root);
+    const authority = new WorkspaceRootAccess(new WorkspaceAccessPolicy(), root, caseSensitive);
+    const binaryPath = resolve('target/release/glyph-context-index');
+    const disk = new FileSystemWorkspaceTextStore(root, {
+      access: authority,
+      physicalAccess: new NativeFilesystemMetadata(binaryPath),
+    });
+    const index = new RustWorkspacePathIndex({ access: authority, binaryPath });
+    onTestFinished(async () => {
+      await index.dispose();
+      await rm(base, { recursive: true, force: true });
+    });
+    const routes = new WorkspaceSourceRoutes([{ name: 'project', path: root, uri: pathToFileURL(alias).href }]);
+    const access = new DesktopAttachmentAccess(
+      routes,
+      [{ name: 'project', disk, selectedDisk: disk, index }],
+      () => authority.beginOperation().assertCurrent,
+    );
+    const resource = (path: string) => ({ path, uri: pathToFileURL(join(alias, path)).href, folder: true });
+    const signal = new AbortController().signal;
+    const listing = { files: ['saved.ts'], truncated: false };
+    const capture = {
+      ...resource(savedPath),
+      kind: Kind.FOLDER,
+      text: formatFolderAttachment(savedPath, listing.files, false),
+      folderListing: listing,
+      contentRevision: 'captured',
+    };
+    expect(await access.resolve(resource(savedPath), signal)).toEqual(listing);
+    if (caseSensitive) {
+      await mkdir(join(root, otherPath), { recursive: true });
+      await writeFile(join(root, otherPath, 'other.ts'), '');
+    } else {
+      await rename(join(root, savedPath), join(root, 'src', 'CAFE\u0301'));
+      await rename(join(root, 'src'), join(root, 'SRC'));
+    }
+    await index.refresh();
+    expect(await access.resolve(resource(otherPath), signal)).toEqual({
+      files: [caseSensitive ? 'other.ts' : 'saved.ts'],
+      truncated: false,
+    });
+    expect(await access.resolve(resource(savedPath), signal)).toEqual(listing);
+    await expect(access.admit([capture], signal)).resolves.toBeUndefined();
+    expect((await access.resolve(resource('.'), signal))?.files).toHaveLength(caseSensitive ? 2 : 1);
+  });
+
   it('binds root-qualified captures to the selected alias and excludes siblings from root folder listings', async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), 'glyph-attach-alias-')));
     onTestFinished(() => rm(base, { recursive: true, force: true }));
@@ -247,6 +302,11 @@ describe(DesktopAttachmentAccess, () => {
       access.resolve({ path: 'one', uri: pathToFileURL(alias).href, folder: true }, signal),
     ).resolves.toEqual({ files: ['notes.md'], truncated: false });
     expect(second.glob).not.toHaveBeenCalled();
+    owner.inspectDirectory.mockResolvedValueOnce({ root: actual, searchRoot: alias });
+    await expect(access.resolve({ path: 'one', uri: pathToFileURL(alias).href, folder: true }, signal)).rejects.toThrow(
+      'folder changed its workspace location',
+    );
+    expect(first.glob).toHaveBeenCalledTimes(1);
     const file = { path: 'one/notes.md', uri: pathToFileURL(join(alias, 'notes.md')).href, folder: false };
     await expect(access.resolve(file, signal)).resolves.toBeUndefined();
     await expect(access.resolve({ ...file, path: 'two/notes.md' }, signal)).rejects.toThrow('declared workspace path');
