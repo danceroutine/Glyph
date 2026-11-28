@@ -69,6 +69,14 @@ impl Reservation {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn is_terminal_link_cycle(path: &Path) -> io::Result<bool> {
+    Ok(matches!(
+        Reservation::resolve(path)?,
+        Reservation::CyclicLink(_)
+    ))
+}
+
 fn future_name(value: &str, normalizes: bool, fold: bool, sensitive: bool) -> String {
     use unicode_normalization::UnicodeNormalization;
     let name = if normalizes {

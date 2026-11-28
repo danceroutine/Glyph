@@ -111,6 +111,14 @@ impl<'a> MountTable<'a> {
             {
                 for entry in [&source, &candidate] {
                     match entry.metadata() {
+                        // A verified cycle at the requested entry has no object to expose.
+                        Err(error)
+                            if entry == path
+                                && error.raw_os_error() == Some(libc::ELOOP)
+                                && crate::workspace_paths::is_terminal_link_cycle(path)? =>
+                        {
+                            return Ok(BTreeSet::new());
+                        }
                         Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
                         _ => {}
                     }
@@ -206,6 +214,48 @@ mod tests {
             assert!(MountTable::parse(table).is_err());
         }
     }
+    #[test]
+    fn a_terminal_source_cycle_has_no_visible_aliases_but_unresolved_descendants_fail() {
+        use std::os::unix::fs::symlink;
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let skills = root.join("skills");
+        symlink("other", &skills).unwrap();
+        symlink("skills", root.join("other")).unwrap();
+        let table = MountTable::parse(b"1 0 0:1 / / rest").unwrap();
+
+        assert!(table.visible_aliases(&skills, true).unwrap().is_empty());
+        assert_eq!(
+            table
+                .visible_aliases(&skills.join("child"), true)
+                .unwrap_err()
+                .raw_os_error(),
+            Some(libc::ELOOP)
+        );
+        let ordinary = root.join("ordinary");
+        std::fs::create_dir(&ordinary).unwrap();
+        let records = format!(
+            "1 0 0:1 / / rest\n2 0 0:1 {} {} rest",
+            ordinary.display(),
+            skills.display()
+        );
+        let overmounted = MountTable::parse(records.as_bytes()).unwrap();
+        assert_eq!(
+            overmounted
+                .visible_aliases(&ordinary, false)
+                .unwrap_err()
+                .raw_os_error(),
+            Some(libc::ELOOP)
+        );
+        std::fs::remove_file(&skills).unwrap();
+        std::fs::create_dir(&skills).unwrap();
+        assert!(!crate::workspace_paths::is_terminal_link_cycle(&skills).unwrap());
+        assert_eq!(
+            table.visible_aliases(&skills, true).unwrap(),
+            BTreeSet::from([skills])
+        );
+    }
+
     #[test]
     fn editor_routes_reject_overmounted_objects_and_include_visible_descendant_aliases() {
         use std::os::unix::ffi::OsStrExt;
