@@ -493,6 +493,10 @@ describe(FileSystemWorkspaceTextStore, () => {
       await writeFile(join(root, 'sub/.skill-staging'), 'reserved');
       const privateRoot = fixtureWorkspace(nested);
       await expect(privateRoot.list(2)).resolves.toEqual({ files: [], truncated: false });
+      await expect(privateRoot.inspectDirectory()).rejects.toMatchObject({
+        reason: EditFailureReason.UNSUPPORTED,
+        message: 'That directory is excluded from project access.',
+      });
       await expect(privateRoot.read('old.txt')).rejects.toThrow('excluded');
       await expect(fixtureWorkspace(root).list(2)).resolves.toEqual({ files: [], truncated: false });
     });
