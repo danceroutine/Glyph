@@ -1,6 +1,8 @@
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { chmod, mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { it, expect, vi, onTestFinished } from 'vitest';
 import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
@@ -34,6 +36,57 @@ it('rechecks frozen configuration authority when a peer attaches its dotfiles ch
   roots = [dotfiles];
   await expect(transport.run(['--version'])).rejects.toThrow('outside writable workspaces');
 });
+it.each(['file URL', 'absolute path', 'Git suffix'])(
+  'leases the effective %s mirror for fetch and later object reads',
+  async form => {
+    const base = await fixture();
+    const preview = join(base, 'preview');
+    const mirror = join(base, 'local mirror.git');
+    await mkdir(preview);
+    execFileSync('git', ['init', '--bare', '--quiet', '--template=', mirror]);
+    const url = 'https://example.invalid/selected.git';
+    const source =
+      form === 'Git suffix'
+        ? pathToFileURL(mirror.slice(0, -4)).href
+        : form === 'file URL'
+          ? pathToFileURL(mirror).href
+          : mirror;
+    await writeFile(join(base, 'trusted.config'), `[url "${source}"]\ninsteadOf = ${url}\n`);
+    let roots: string[] = [];
+    const leases = new HostProcessLeases(() => roots);
+    const transport = new SkillRepositoryGit(preview, new AbortController().signal, leases, testFilesystemMetadata);
+    await transport.initialize(url);
+    const list = () => transport.run(['--git-dir=source.git', 'ls-remote', 'origin']);
+    expect(await list()).toEqual(Buffer.alloc(0));
+    await leases.admitWorkspace(
+      () => [mirror],
+      attached => {
+        roots = [...attached];
+      },
+    );
+    await expect(transport.run(['--git-dir=source.git', 'cat-file', '--batch-check'])).rejects.toThrow(
+      'outside writable workspaces',
+    );
+    await expect(list()).rejects.toThrow('outside writable workspaces');
+    roots = [];
+    expect(await list()).toEqual(Buffer.alloc(0));
+  },
+);
+
+it.each(['../mirror.git', 'file://server/mirror.git', 'file:///~/mirror.git', 'file:///one/%2E%2E/mirror.git'])(
+  'requires an unambiguous absolute path before opening a local mirror at %s',
+  async source => {
+    const root = await fixture();
+    await writeFile(
+      join(root, 'trusted.config'),
+      `[url "${source}"]\ninsteadOf = https://example.invalid/selected.git\n`,
+    );
+    const git = new SkillRepositoryGit(root, new AbortController().signal, [], testFilesystemMetadata);
+    await git.initialize('https://example.invalid/selected.git');
+    await expect(git.run(['--git-dir=source.git', 'ls-remote', 'origin'])).rejects.toThrow('absolute repository path');
+  },
+);
+
 it('rejects a repository object store over budget before starting another object fetch', async () => {
   const root = await fixture();
   await writeFile(join(root, 'objects.pack'), Buffer.alloc(32 * 1024 * 1024 + 1));
@@ -63,9 +116,9 @@ it.skipIf(process.platform === 'win32')(
     });
   },
 );
-it.skipIf(process.platform === 'win32')(
-  'holds the configured credential helper through transport close and releases it for the next preview',
-  async () => {
+it.skipIf(process.platform === 'win32').each(['credential helper', 'mirror'])(
+  'holds the configured %s through transport close and releases it for the next preview',
+  async input => {
     const base = await fixture();
     const cwd = join(base, 'preview');
     const helpers = join(base, 'helpers');
@@ -73,7 +126,12 @@ it.skipIf(process.platform === 'win32')(
     const helper = join(helpers, 'fixture-helper');
     await writeFile(helper, '#!/bin/sh\nexit 0\n');
     await chmod(helper, 0o700);
-    await writeFile(join(base, 'trusted.config'), '[credential]\nhelper = ' + helper + '\n');
+    const url = 'https://example.invalid/selected.git';
+    const configuration =
+      input === 'mirror'
+        ? `[url "${pathToFileURL(helpers).href}"]\ninsteadOf = ${url}\n`
+        : '[credential]\nhelper = ' + helper + '\n';
+    await writeFile(join(base, 'trusted.config'), configuration);
     let roots: string[] = [];
     const leases = new HostProcessLeases(() => roots);
     const cancel = new AbortController();
@@ -81,6 +139,7 @@ it.skipIf(process.platform === 'win32')(
       cancel.abort();
     });
     const transport = new SkillRepositoryGit(cwd, cancel.signal, leases, testFilesystemMetadata);
+    await transport.initialize(url);
     const running = transport.run([
       '-c',
       'alias.wait-for-peer=!sleep 30 & echo $! > helper-pid; wait',
@@ -136,13 +195,23 @@ it('freezes URL-selected settings after recording the remote and before using tr
   await writeFile(included, '[user]\nname = Selected remote identity\n');
   await writeFile(
     join(root, 'trusted.config'),
-    '[includeIf "hasconfig:remote.*.url:https://example.invalid/**"]\npath = company.config\n',
+    '[includeIf "hasconfig:remote.*.url:https://example.invalid/**"]\npath = company.config\n' +
+      '[remote "other"]\nurl = file:///unselected\npromisor = true\npartialCloneFilter = blob:none\n' +
+      '[extensions]\npartialClone = other\n',
   );
   const git = new SkillRepositoryGit(root, new AbortController().signal, [], testFilesystemMetadata);
   await git.initialize('https://example.invalid/selected.git');
   expect((await git.run(['--git-dir=source.git', 'config', '--get-all', 'remote.origin.url'])).toString()).toBe(
     'https://example.invalid/selected.git\n',
   );
+  await expect(
+    git.run([
+      '--git-dir=source.git',
+      'config',
+      '--get-regexp',
+      '^(remote.other.(promisor|partialclonefilter)|extensions.partialclone)$',
+    ]),
+  ).rejects.toThrow('Git repository access failed');
   const name = () => git.run(['--git-dir=source.git', 'config', '--get', 'user.name']);
   expect((await name()).toString().trim()).toBe('Selected remote identity');
   await writeFile(included, '[user]\nname = Changed after capture\n');

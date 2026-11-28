@@ -176,6 +176,8 @@ export async function captureRepositoryEnvironment(
       throw new Error(
         'Repository preview cannot run command-valued Git transport settings. Use a named credential helper or import a local package.',
       );
+    // Only the selected origin supplies missing objects for this private partial clone.
+    if (key === 'extensions.partialclone' || /^remote\..*\.(?:promisor|partialclonefilter)$/u.test(key)) continue;
     const option = key.slice(key.lastIndexOf('.') + 1);
     if (parsed.value && key.startsWith('http.') && option === 'sslcapath')
       throw new Error(

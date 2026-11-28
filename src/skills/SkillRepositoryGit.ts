@@ -6,7 +6,8 @@ import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 import { spawn } from 'node:child_process';
 import { readdir, lstat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const maxStorage = 32 * 1024 * 1024;
 async function storageBytes(root: string): Promise<number> {
@@ -37,7 +38,8 @@ async function storageBytes(root: string): Promise<number> {
 
 /** Git transport, lazy object reads, and their helper processes share one deadline and storage budget. */
 export class SkillRepositoryGit {
-  private environment?: Promise<NodeJS.ProcessEnv>;
+  private gitDirectory?: string;
+  private environment: Promise<NodeJS.ProcessEnv> | undefined;
   private readonly authority: HostExecutionAuthority;
   constructor(
     private readonly cwd: string,
@@ -56,6 +58,8 @@ export class SkillRepositoryGit {
     };
     await this.execute(['init', '--bare', '--template=', 'source.git'], 1024 * 1024, empty);
     await this.execute(['--git-dir=source.git', 'remote', 'add', 'origin', url], 1024 * 1024, empty);
+    this.gitDirectory = 'source.git';
+    this.environment = undefined;
   }
   run(args: string[], maxOutput = 2 * 1024 * 1024): Promise<Buffer> {
     return this.execute(args, maxOutput);
@@ -82,16 +86,7 @@ export class SkillRepositoryGit {
     ];
     const windows = process.platform === 'win32';
     // Transport sees the initialized repository and its selected remote when evaluating conditional includes.
-    const env =
-      initialization ??
-      (await (this.environment ??= captureRepositoryEnvironment(
-        this.authority.workspaceRoots,
-        this.cwd,
-        this.signal,
-        this.metadata,
-        args.find(arg => arg.startsWith('--git-dir='))?.slice('--git-dir='.length),
-        this.authority,
-      )));
+    const env = initialization ?? (await (this.environment ??= this.captureEnvironment()));
     const executable = this.authority.executable('git');
     const used = await storageBytes(this.cwd);
     // POSIX sh specifies 512-byte blocks. Limit each incoming pack before it can fill the disk between polls.
@@ -104,6 +99,37 @@ export class SkillRepositoryGit {
     this.signal.throwIfAborted();
     await storageBytes(this.cwd);
     return result;
+  }
+
+  private async captureEnvironment(): Promise<NodeJS.ProcessEnv> {
+    const gitDirectory = this.gitDirectory;
+    const environment = await captureRepositoryEnvironment(
+      this.authority.workspaceRoots,
+      this.cwd,
+      this.signal,
+      this.metadata,
+      gitDirectory,
+      this.authority,
+    );
+    const networkProtocols =
+      environment.GIT_ALLOW_PROTOCOL?.split(':')
+        .filter(protocol => protocol !== 'file')
+        .join(':') ?? 'https';
+    if (!gitDirectory) return { ...environment, GIT_ALLOW_PROTOCOL: networkProtocols };
+    // Resolve the selected mirror with Git's own insteadOf rules from the frozen configuration.
+    // remote get-url is local metadata only. No transport opens until the next leased launch.
+    const bytes = await this.execute(
+      ['--git-dir=' + gitDirectory, 'remote', 'get-url', 'origin'],
+      64 * 1024,
+      environment,
+    );
+    const remote = new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/\n$/u, '');
+    const path = localMirrorPath(remote);
+    if (!path) return { ...environment, GIT_ALLOW_PROTOCOL: networkProtocols };
+    this.authority.admit(path);
+    // upload-pack also tries the bare-repository suffix when it resolves a local path.
+    this.authority.admit(path.replace(/\/+$/u, '') + '.git');
+    return environment;
   }
 
   /** The process group owns credential and transport helpers. Release its lease after cancellation and pipe closure. */
@@ -197,4 +223,25 @@ export class SkillRepositoryGit {
       });
     });
   }
+}
+
+/** Git accepts local paths and file URLs as fetch transports. Require an unambiguous absolute mirror location. */
+function localMirrorPath(remote: string): string | undefined {
+  const invalid = new Error('Local Git mirrors require an absolute repository path or local file URL.');
+  if (!remote || /[\u0000-\u001F\u007F]/u.test(remote)) throw invalid;
+  let path = remote;
+  if (remote.startsWith('file://')) {
+    // Git decodes URL escapes before interpreting the path. Reject forms whose URL and filesystem
+    // interpretations differ, including home-directory expansion and traversing beyond a linked parent.
+    if (!/^file:\/\/(?:localhost)?\//u.test(remote) || /[?#\\]/u.test(remote)) throw invalid;
+    const decoded = decodeURIComponent(remote.slice(remote.indexOf('/', 'file://'.length)));
+    if (decoded.startsWith('/~') || decoded.split('/').includes('..') || decoded.includes('\0')) throw invalid;
+    path = fileURLToPath(remote);
+  } else if (!isAbsolute(path)) {
+    // All remaining network transports are still subject to Git's explicit protocol allowlist.
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//u.test(remote) || /^[^/]+:/u.test(remote)) return undefined;
+    throw invalid;
+  }
+  if (path.split(process.platform === 'win32' ? /[\\/]/u : '/').includes('..')) throw invalid;
+  return path;
 }
