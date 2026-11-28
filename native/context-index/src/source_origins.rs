@@ -7,6 +7,10 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -71,18 +75,23 @@ fn directory_origin(path: &Path, cache: &mut HashMap<PathBuf, [u8; 32]>) -> io::
     let meta = fs::metadata(path)?;
     hash.update(meta.dev().to_le_bytes());
     hash.update(meta.ino().to_le_bytes());
-    // Birth time distinguishes recycled directory inodes on filesystems that expose it.
-    if let Ok(created) = meta.created() {
-        let time = created
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(io::Error::other)?;
-        hash.update(time.as_nanos().to_le_bytes());
-    }
+    hash_creation_time(&mut hash, meta.created())?;
     #[cfg(target_os = "linux")]
     mount_identity(&directory, &mut hash)?;
     let origin = hash.finalize().into();
     cache.insert(path.to_owned(), origin);
     Ok(origin)
+}
+
+/// Birth time distinguishes recycled directory inodes on filesystems that expose it.
+fn hash_creation_time(hash: &mut Sha256, created: io::Result<SystemTime>) -> io::Result<()> {
+    if let Ok(created) = created {
+        let time = created
+            .duration_since(UNIX_EPOCH)
+            .map_err(io::Error::other)?;
+        hash.update(time.as_nanos().to_le_bytes());
+    }
+    Ok(())
 }
 
 fn inspect_path(
