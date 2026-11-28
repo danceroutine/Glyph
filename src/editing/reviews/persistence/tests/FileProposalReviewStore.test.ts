@@ -1,9 +1,16 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { link, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
 import { EditProposal } from '#src/editing/proposals/EditProposal.js';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...fs, link: vi.fn(fs.link) };
+});
 
 describe(FileProposalReviewStore, () => {
   it('isolates mutation scopes, imports matching legacy reviews, and never resurrects a cleared checkpoint', async () => {
@@ -36,6 +43,70 @@ describe(FileProposalReviewStore, () => {
     }
   });
 
+  it('honors a concurrent clear while importing historical routes from the unscoped backup', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'glyph-review-scope-upgrade-'));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const route = 'root@file%3A%2F%2F%2Fproject%2Flib/notes.txt';
+    const snapshot = { path: route, text: 'notes', byteLength: 5, byteOrderMark: false, revision: 'old', mode: 0o644 };
+    const file = {
+      id: 'notes',
+      operation: 'UPDATE',
+      sourcePath: route,
+      targetPath: route,
+      base: snapshot,
+      currentPath: route,
+      currentRevision: 'old',
+      proposed: snapshot,
+      items: [],
+      applicability: 'READY',
+    };
+    const oldCheckpoint = {
+      schemaVersion: 3,
+      workspaceIdentity: 'previous',
+      proposals: [{ ...pendingProposal().toRecord(), files: [file] }],
+    };
+    await writeFile(join(directory, 'active-proposal-review.json'), JSON.stringify(oldCheckpoint));
+    const currentDirectory = join(directory, 'mutation-scopes', createHash('sha256').update('current').digest('hex'));
+    const currentCheckpoint = { schemaVersion: 3, workspaceIdentity: 'current', proposals: [] };
+    let migrated = false;
+    const store = new FileProposalReviewStore(directory, {
+      mutationScope: 'current',
+      previousScope: {
+        identity: 'previous',
+        restorePath: () => {
+          if (!migrated) {
+            migrated = true;
+            mkdirSync(currentDirectory, { recursive: true });
+            writeFileSync(join(currentDirectory, 'active-proposal-review.json'), JSON.stringify(currentCheckpoint), {
+              flag: 'wx',
+            });
+          }
+          return 'lib/notes.txt';
+        },
+      },
+    });
+    expect(await store.load('current')).toEqual([]);
+    expect(migrated).toBe(true);
+    expect(await readdir(currentDirectory)).toEqual(['active-proposal-review.json']);
+    expect(JSON.parse(await readFile(join(currentDirectory, 'active-proposal-review.json'), 'utf8'))).toEqual(
+      currentCheckpoint,
+    );
+  });
+
+  it('surfaces a failed publication of an imported checkpoint and keeps the saved review available for retry', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'glyph-review-import-retry-'));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const pending = pendingProposal();
+    await new FileProposalReviewStore(directory).save([pending], 'owner');
+    const store = new FileProposalReviewStore(directory, { mutationScope: 'owner' });
+    vi.mocked(link).mockRejectedValueOnce(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+    await expect(store.load('owner')).rejects.toMatchObject({
+      reason: 'PERSISTENCE',
+      cause: { cause: { code: 'ENOSPC' } },
+    });
+    await expect(store.load('owner')).resolves.toEqual([pending]);
+  });
+
   it('refuses a foreign checkpoint inside an already scoped directory', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'glyph-scoped-review-binding-'));
     try {
@@ -60,6 +131,10 @@ describe(FileProposalReviewStore, () => {
         new FileProposalReviewStore(directory, { mutationScope: 'owner' }).load('owner'),
       ).rejects.toMatchObject({ reason: 'PERSISTENCE' });
       expect(await readFile(path, 'utf8')).toBe('{truncated checkpoint');
+      await writeFile(path, JSON.stringify({ schemaVersion: 2, workspaceIdentity: 'owner', proposals: [] }));
+      await expect(
+        new FileProposalReviewStore(directory, { mutationScope: 'owner' }).load('owner'),
+      ).rejects.toMatchObject({ cause: { message: 'Unsupported proposal-review checkpoint schema.' } });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -63,7 +63,8 @@ export type GlyphHostEvent =
       readonly runs: readonly GlyphRunProjection[];
       readonly draft: {
         readonly text: string;
-        readonly attachments: readonly GlyphContextAttachment[];
+        /** The original path locates a badge in the saved text when an upgraded root has a new routing ID. */
+        readonly attachments: readonly (GlyphContextAttachment & { readonly previousPath?: string })[];
         readonly options?: GlyphTurnOptions;
       };
     }

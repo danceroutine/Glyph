@@ -1,3 +1,4 @@
+import { contentRevision } from '#src/desktop/workspace/EditorWorkspaceTextStore.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { Deferred } from '#src/shared/Deferred.js';
 import { resolveInstructionId } from '#src/instructions/resolveInstructionId.js';
@@ -132,6 +133,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         | 'peekPendingWake'
       >;
       readonly refreshCatalogs?: (signal: AbortSignal) => Promise<void>;
+      readonly restoreAttachmentPath?: (path: string) => string;
       readonly referenceResources?: (path: string) => NonNullable<GlyphInstructionSource['referenceResources']>;
       readonly instructionWatchRoots?: readonly string[];
       readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'> &
@@ -317,6 +319,36 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     return this.options.attachmentAccess;
   }
 
+  private restoredAttachment(attachment: ContextAttachment) {
+    const path = this.options.restoreAttachmentPath?.(attachment.path) ?? attachment.path;
+    const heading = 'Directory tree: ' + attachment.path + '\n';
+    const text =
+      path !== attachment.path &&
+      attachment.source?.kind === GlyphContextAttachmentKind.FOLDER &&
+      attachment.text.startsWith(heading)
+        ? 'Directory tree: ' + path + '\n' + attachment.text.slice(heading.length)
+        : attachment.text;
+    return {
+      kind:
+        Object.values(GlyphContextAttachmentKind).find(kind => kind === attachment.source?.kind) ??
+        (attachment.source?.range ? GlyphContextAttachmentKind.SELECTION : GlyphContextAttachmentKind.FILE),
+      uri:
+        attachment.source?.uri && attachment.source.uri !== attachment.path
+          ? attachment.source.uri
+          : (this.options.referenceResources?.(path).at(-1)?.uri ?? path),
+      path,
+      ...(path !== attachment.path && { previousPath: attachment.path }),
+      text,
+      contentRevision: text === attachment.text ? attachment.revision : contentRevision(text, false),
+      sourceRevision: attachment.source?.revision ?? attachment.revision,
+      sourceVersion: attachment.source?.version ?? 0,
+      ...(attachment.source?.range ? { range: attachment.source.range } : {}),
+      ...(attachment.source?.folderListing && { folderListing: attachment.source.folderListing }),
+      ...(attachment.source?.projectFile && { projectFile: attachment.source.projectFile }),
+      ...(attachment.source?.side ? { side: attachment.source.side } : {}),
+    };
+  }
+
   private restoredRuleOptions(options: ChatTurnOptions): ChatTurnOptions {
     if (!options.manualRuleIds?.length) return options;
     const ids = new Map(options.manualRuleIds.map(id => [id, this.resolveRuleReference(id) ?? id]));
@@ -464,24 +496,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
               draft: {
                 text: turn.userText,
                 ...(turn.options ? { options: this.restoredRuleOptions(turn.options) } : {}),
-                attachments: (turn.attachments ?? []).map(attachment => ({
-                  kind:
-                    Object.values(GlyphContextAttachmentKind).find(kind => kind === attachment.source?.kind) ??
-                    (attachment.source?.range ? GlyphContextAttachmentKind.SELECTION : GlyphContextAttachmentKind.FILE),
-                  uri:
-                    attachment.source?.uri && attachment.source.uri !== attachment.path
-                      ? attachment.source.uri
-                      : (this.options.referenceResources?.(attachment.path).at(-1)?.uri ?? attachment.path),
-                  path: attachment.path,
-                  text: attachment.text,
-                  contentRevision: attachment.revision,
-                  sourceRevision: attachment.source?.revision ?? attachment.revision,
-                  sourceVersion: attachment.source?.version ?? 0,
-                  ...(attachment.source?.range ? { range: attachment.source.range } : {}),
-                  ...(attachment.source?.folderListing && { folderListing: attachment.source.folderListing }),
-                  ...(attachment.source?.projectFile && { projectFile: attachment.source.projectFile }),
-                  ...(attachment.source?.side ? { side: attachment.source.side } : {}),
-                })),
+                attachments: (turn.attachments ?? []).map(attachment => this.restoredAttachment(attachment)),
               },
             });
             this.publishUsage(source);
