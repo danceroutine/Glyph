@@ -1,5 +1,5 @@
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
-import { chmod, mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -72,6 +72,49 @@ it.each(['file URL', 'absolute path', 'Git suffix'])(
     expect(await list()).toEqual(Buffer.alloc(0));
   },
 );
+
+it.each([
+  'checkout',
+  'gitfile',
+  'common',
+  'alternate',
+  'late alternate',
+  'nested object link',
+  'config include',
+] as const)('checks the %s repository layout before local transport or subsequent object reads', async layout => {
+  const base = await fixture();
+  const preview = join(base, 'preview');
+  const mirror = join(base, 'mirror');
+  await mkdir(preview);
+  execFileSync('git', ['init', '--quiet', '--template=', mirror]);
+  const gitDir = join(mirror, '.git');
+  const url = 'https://example.invalid/selected.git';
+  await writeFile(join(base, 'trusted.config'), `[url "${pathToFileURL(mirror).href}"]\ninsteadOf = ${url}\n`);
+  const transport = new SkillRepositoryGit(preview, new AbortController().signal, [], testFilesystemMetadata);
+  await transport.initialize(url);
+  const list = () => transport.run(['--git-dir=source.git', 'ls-remote', 'origin']);
+  if (layout === 'checkout' || layout === 'late alternate') {
+    expect(await list()).toEqual(Buffer.alloc(0));
+    if (layout === 'checkout') return;
+  }
+  if (layout === 'nested object link') {
+    const shard = join(gitDir, 'objects', '11');
+    await mkdir(shard);
+    await symlink('../other-object', join(shard, 'object'));
+    await expect(list()).rejects.toThrow('self-contained object');
+  } else if (layout === 'config include') {
+    await writeFile(join(gitDir, 'config.worktree'), '[include]\npath = ../other.config\n');
+    await expect(list()).rejects.toThrow('configuration includes');
+  } else if (layout === 'gitfile') {
+    await rm(gitDir, { recursive: true });
+    await writeFile(gitDir, 'gitdir: ../administrative-area\n');
+    await expect(list()).rejects.toThrow('Linked worktrees');
+  } else {
+    const marker = layout === 'common' ? 'commondir' : 'objects/info/alternates';
+    await writeFile(join(gitDir, marker), '../other-directory\n');
+    await expect(list()).rejects.toThrow('common directory or alternate object store');
+  }
+});
 
 it.each(['../mirror.git', 'file://server/mirror.git', 'file:///~/mirror.git', 'file:///one/%2E%2E/mirror.git'])(
   'requires an unambiguous absolute path before opening a local mirror at %s',
