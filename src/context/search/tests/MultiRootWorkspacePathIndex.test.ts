@@ -470,6 +470,24 @@ describe(MultiRootWorkspacePathIndex, () => {
       expect(webSearch).toHaveBeenCalledWith('value', expect.objectContaining({ fileGlob: '**/*.tsx', signal }));
     });
 
+    it('passes the source authority to both roots before qualifying content matches', async () => {
+      const api = new FixtureIndex('api', 'server.ts', 1);
+      const web = new FixtureIndex('web', 'app.ts', 1);
+      const apiSearch = vi.spyOn(api, 'searchContents');
+      const webSearch = vi.spyOn(web, 'searchContents');
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'api', index: api },
+        { name: 'web', index: web },
+      ]);
+      const sourceAuthority = { capture: vi.fn(), authorize: vi.fn() };
+
+      const result = await index.searchContents('value', { sourceAuthority, outputMode: 'content' });
+
+      expect(result).toMatchObject({ matches: [{ path: 'api/server.ts' }, { path: 'web/app.ts' }] });
+      for (const search of [apiSearch, webSearch])
+        expect(search).toHaveBeenCalledWith('value', expect.objectContaining({ sourceAuthority }));
+    });
+
     it('keeps an unqualified file glob for every folder', async () => {
       const api = new FixtureIndex('api', 'src/server.ts', 1);
       const apiSearch = vi.spyOn(api, 'searchContents');

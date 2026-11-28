@@ -363,17 +363,19 @@ describe(AgentRuleInstructionProvider, () => {
       expect.objectContaining({ path: 'rules/direct.mdc', message: 'Rule could not be read.' }),
     ]);
 
+    const projectAlias = { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, id: 'project:direct', scope: '.' };
     const withUri = new AgentRuleInstructionProvider(
       workspace,
       {
         kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
         directory: '.',
         uriForPath: path => `file:///rules/${path}`,
+        projectAlias: () => projectAlias,
       },
       async () => ({ files: ['rules/direct.mdc'], truncated: false }),
     );
     const [unreadable] = await withUri.discover();
-    expect(unreadable?.status).toBe(AgentInstructionSourceStatus.ERROR);
+    expect(unreadable).toMatchObject({ status: AgentInstructionSourceStatus.ERROR, projectAlias });
     expect(unreadable).not.toHaveProperty('uri');
   });
 
