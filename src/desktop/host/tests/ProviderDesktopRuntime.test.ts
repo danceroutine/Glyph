@@ -2201,87 +2201,106 @@ describe(ProviderDesktopRuntime, () => {
       }
     });
 
-    it('restores upgraded file and folder badges at their saved spans with their captured contents', async () => {
-      const legacy = 'root@file%3A%2F%2F%2Fproject%2Flib';
-      const current = 'root@1234';
-      const file = legacy + '/notes';
-      const folder = legacy + '/src';
-      const outline = formatFolderAttachment(folder, ['app.ts'], false);
-      const checkpoint = {
-        providerState: { provider: 'fixture', version: 1, data: [] },
-        plans: [],
-        todos: [],
-        mode: AgentModeID.AGENT,
-      };
-      const text = '@' + file + ' then @' + folder;
-      const record = chatRecord({
-        transcript: [
-          {
-            userText: text,
-            attachmentPaths: [file, folder],
-            assistantText: 'Done',
-            reasoningSummary: '',
-            createdAt: '2026-10-02T00:00:00Z',
-            options: {
-              turnId: 'restored',
-              attachmentSpans: [
-                { from: 0, to: file.length + 1 },
-                { from: text.indexOf('@' + folder), to: text.length },
+    it.each([true, false])(
+      'restores upgraded file and folder badges with saved provenance and spans (routed file URI %s)',
+      async routed => {
+        const legacy = 'root@file%3A%2F%2F%2Fproject%2Flib';
+        const current = 'root@1234';
+        const file = legacy + '/notes';
+        const folder = legacy + '/src';
+        const outline = formatFolderAttachment(folder, ['app.ts'], false);
+        const checkpoint = {
+          providerState: { provider: 'fixture', version: 1, data: [] },
+          plans: [],
+          todos: [],
+          mode: AgentModeID.AGENT,
+        };
+        const text = '@' + file + ' then @' + folder;
+        const record = chatRecord({
+          transcript: [
+            {
+              userText: text,
+              attachmentPaths: [file, folder],
+              assistantText: 'Done',
+              reasoningSummary: '',
+              createdAt: '2026-10-02T00:00:00Z',
+              options: {
+                turnId: 'restored',
+                attachmentSpans: [
+                  { from: 0, to: file.length + 1 },
+                  { from: text.indexOf('@' + folder), to: text.length },
+                ],
+              },
+              checkpoints: { before: checkpoint, after: checkpoint },
+              attachments: [
+                {
+                  path: file,
+                  text: 'prior contents',
+                  revision: 'prior',
+                  byteOrderMark: false,
+                  byteLength: 14,
+                  source: { kind: 'file', uri: file, version: 0, revision: 'prior', projectFile: true },
+                },
+                {
+                  path: folder,
+                  text: outline,
+                  revision: 'outline-revision',
+                  byteOrderMark: false,
+                  byteLength: outline.length,
+                  source: {
+                    kind: 'folder',
+                    uri: 'file:///project/lib/src',
+                    revision: 'outline-revision',
+                    version: 0,
+                    folderListing: { files: ['app.ts'], truncated: false },
+                  },
+                },
               ],
             },
-            checkpoints: { before: checkpoint, after: checkpoint },
-            attachments: [
-              { path: file, text: 'prior contents', revision: 'prior', byteOrderMark: false, byteLength: 14 },
-              {
-                path: folder,
-                text: outline,
-                revision: 'outline-revision',
-                byteOrderMark: false,
-                byteLength: outline.length,
-                source: { kind: 'folder', uri: 'file:///project/lib/src', revision: 'outline-revision', version: 0 },
+          ],
+        });
+        const harness = await fixture(async () => {}, 'owner', undefined, {
+          records: [record],
+          restoreAttachmentPath: path => path.replace(legacy, current),
+          referenceResources: path =>
+            routed ? [{ uri: 'file:///project/lib/' + path.split('/')[1], caseSensitive: true }] : [],
+        });
+        try {
+          await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'restored' });
+          const restored = harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)!;
+          const prompt = restoreGlyphPrompt(
+            restored.draft,
+            () => undefined,
+            () => 'capture',
+          );
+          expect(toGlyphPromptText(prompt.parts)).toBe('@' + current + '/notes then @' + current + '/src');
+          expect(prompt.parts).toMatchObject([
+            {
+              type: 'attachment',
+              attachment: {
+                path: current + '/notes',
+                uri: routed ? 'file:///project/lib/notes' : current + '/notes',
+                projectFile: true,
+                contentRevision: 'prior',
+                text: 'prior contents',
               },
-            ],
-          },
-        ],
-      });
-      const harness = await fixture(async () => {}, 'owner', undefined, {
-        records: [record],
-        restoreAttachmentPath: path => path.replace(legacy, current),
-        referenceResources: path => [{ uri: 'file:///project/lib/' + path.split('/')[1], caseSensitive: true }],
-      });
-      try {
-        await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'restored' });
-        const restored = harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)!;
-        const prompt = restoreGlyphPrompt(
-          restored.draft,
-          () => undefined,
-          () => 'capture',
-        );
-        expect(toGlyphPromptText(prompt.parts)).toBe('@' + current + '/notes then @' + current + '/src');
-        expect(prompt.parts).toMatchObject([
-          {
-            type: 'attachment',
-            attachment: {
-              path: current + '/notes',
-              uri: 'file:///project/lib/notes',
-              contentRevision: 'prior',
-              text: 'prior contents',
             },
-          },
-          { type: 'text', text: ' then ' },
-          {
-            type: 'attachment',
-            attachment: {
-              path: current + '/src',
-              uri: 'file:///project/lib/src',
-              text: formatFolderAttachment(current + '/src', ['app.ts'], false),
+            { type: 'text', text: ' then ' },
+            {
+              type: 'attachment',
+              attachment: {
+                path: current + '/src',
+                uri: 'file:///project/lib/src',
+                folderListing: { files: ['app.ts'], truncated: false },
+                text: formatFolderAttachment(current + '/src', ['app.ts'], false),
+              },
             },
-          },
-        ]);
-      } finally {
-        await harness.runtime.dispose();
-      }
-    });
+          ]);
+        } finally {
+          await harness.runtime.dispose();
+        }
+      },
+    );
     it('restores the draft of a checkpointed turn together with its captured attachments', async () => {
       const checkpoint = {
         providerState: { provider: 'fixture', version: 1, data: [] },
@@ -2690,6 +2709,8 @@ describe(ProviderDesktopRuntime, () => {
       const harness = await fixture(async () => {});
       try {
         const range = { start: { line: 2, column: 1 }, end: { line: 3, column: 1 } };
+        const folderListing = { files: [], truncated: false };
+        const outline = formatFolderAttachment('.', folderListing.files, folderListing.truncated);
         const capture = {
           kind: GlyphContextAttachmentKind.SELECTION,
           uri: 'file:///project/a.ts',
@@ -2712,7 +2733,21 @@ describe(ProviderDesktopRuntime, () => {
               side: 'modified',
             },
             { ...capture, uri: 'file:///project/b.ts', path: 'b.ts', sourceVersion: 4 },
-            { ...capture, uri: 'file:///project/c.ts', path: 'c.ts', kind: GlyphContextAttachmentKind.FILE },
+            {
+              ...capture,
+              uri: 'file:///project/c.ts',
+              path: 'c.ts',
+              kind: GlyphContextAttachmentKind.FILE,
+              projectFile: true,
+            },
+            {
+              ...capture,
+              uri: 'file:///project/',
+              path: '.',
+              kind: GlyphContextAttachmentKind.FOLDER,
+              text: outline,
+              folderListing,
+            },
           ],
         });
         await vi.waitFor(async () => {
@@ -2722,11 +2757,13 @@ describe(ProviderDesktopRuntime, () => {
           { uri: capture.uri, path: 'a.ts', text: 'abc', revision: 'content', range, side: 'modified' },
           { uri: 'file:///project/b.ts', path: 'b.ts', text: 'abc', revision: 'content' },
           { uri: 'file:///project/c.ts', path: 'c.ts', text: 'abc', revision: 'content' },
+          { uri: 'file:///project/', path: '.', text: outline, revision: 'content' },
         ]);
         expect(harness.saved.get(harness.chatId)?.transcript[0]?.attachments?.map(value => value.source)).toEqual([
           { kind: 'selection', uri: capture.uri, version: 7, revision: 'source', range, side: 'modified' },
           { kind: 'selection', uri: 'file:///project/b.ts', version: 4, revision: 'content' },
-          { kind: 'file', uri: 'file:///project/c.ts', version: 0, revision: 'content' },
+          { kind: 'file', uri: 'file:///project/c.ts', version: 0, revision: 'content', projectFile: true },
+          { kind: 'folder', uri: 'file:///project/', version: 0, revision: 'content', folderListing },
         ]);
       } finally {
         await harness.runtime.dispose();

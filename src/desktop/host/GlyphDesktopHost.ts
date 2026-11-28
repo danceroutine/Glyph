@@ -484,8 +484,6 @@ export class GlyphDesktopHost {
       if (connection.readOnly) resolveResource();
       signal.throwIfAborted();
       this.assertCurrentConnection(connection);
-      if (this.runtimes.get(getWorkspaceKey(connection.identity)) !== record || !connection.ready)
-        throw new Error('The workspace detached during attachment capture.');
       this.send(connection, {
         type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED,
         lookupId,
@@ -659,7 +657,7 @@ function resourceForOwner(
     throw new Error('The selected attachment does not belong to the declared workspace path.');
   const route =
     owner.roots.length === 1
-      ? local || '.'
+      ? local
       : [getGlyphWorkspaceRootId(ownerRoot, owner.roots), local].filter(part => part && part !== '.').join('/');
   return { ...resource, uri: pathToFileURL(path).href, path: route };
 }
