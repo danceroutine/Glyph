@@ -373,6 +373,11 @@ describe(GlyphWorkbenchProjection, () => {
         lookupId: 'private',
         skillId: 'canonical',
       });
+      projection.accept({
+        type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED,
+        lookupId: 'folder',
+        listing: { files: ['selected.md'], truncated: false },
+      });
       projection.accept({ type: GlyphHostEventType.RULE_REFERENCE_RESOLVED, lookupId: 'private', ruleId: 'canonical' });
       projection.accept({ type: GlyphHostEventType.COMMAND_RESULT, requestId: 'request', ok: true });
       expect(projection.state).toBe(before);
