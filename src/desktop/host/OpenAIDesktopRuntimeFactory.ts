@@ -155,6 +155,17 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       name: getGlyphWorkspaceRootId(input.roots[i]!, input.roots),
       path: selection.path,
     }));
+    // Reconstruct the previous scope from today's verified physical roots and the same declared folder URIs.
+    const previousRoots = roots.map((root, i) => ({
+      name: getGlyphWorkspaceRootId(input.roots[i]!, input.roots, 'legacy-uri'),
+      path: root.path,
+    }));
+    const renamedRoots = new Map(
+      previousRoots.flatMap((root, i) => (root.name === roots[i]!.name ? [] : [[root.name, roots[i]!.name] as const])),
+    );
+    // Single-folder workspace paths have always been local to that folder.
+    const routeAliases = roots.length === 1 ? new Map<string, string>() : renamedRoots;
+    const restorePath = (path: string) => path.replace(/^[^/]+/u, name => routeAliases.get(name) ?? name);
     const root = roots[0];
     if (!root) throw new Error('A local workspace root is required.');
     const kind = roots.length === 1 ? ProjectContextKind.FOLDER : ProjectContextKind.WORKSPACE;
@@ -660,6 +671,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       workspace,
       new FileProposalReviewStore(join(configuration.stateDirectory, 'projects', mutationStorageId), {
         mutationScope: context.mutationIdentity,
+        ...(renamedRoots.size > 0 && {
+          previousScope: {
+            identity: ProjectContextIdentity.createMutationScope(kind, authority, previousRoots),
+            restorePath,
+          },
+        }),
       }),
       logger,
       configuration.editing.maxActiveReviews,
@@ -855,6 +872,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         ? { instructionCatalog, referenceResources: (path: string) => routes.referenceResources(path) }
         : {}),
       ...(skills ? { skills } : {}),
+      ...(renamedRoots.size > 0 && { restoreAttachmentPath: restorePath }),
       refreshCatalogs: async signal => {
         await Promise.all([instructionCatalog?.refresh(signal), skills?.refresh(signal)]);
       },
