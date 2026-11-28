@@ -63,6 +63,11 @@ export function repositoryEnvironment(roots: readonly string[]): NodeJS.ProcessE
     GIT_TERMINAL_PROMPT: '0',
     GIT_LFS_SKIP_SMUDGE: '1',
     GIT_ALLOW_PROTOCOL: 'https',
+    // Trace2 normally reads user and system settings at process startup, even for a config query.
+    GIT_TRACE2: '0',
+    GIT_TRACE2_EVENT: '0',
+    GIT_TRACE2_PERF: '0',
+    GIT_ATTR_NOSYSTEM: '1',
   };
   for (const key of [
     'HOME',

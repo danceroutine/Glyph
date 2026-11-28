@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { access, constants, open, stat } from 'node:fs/promises';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { userInfo } from 'node:os';
 import { assertNetworkProxy, repositoryEnvironment } from '#src/shell/TrustedHostExecutable.js';
@@ -18,6 +18,10 @@ interface Entry {
 function entry(text: string): Entry {
   const split = text.indexOf('\n');
   return split < 0 ? { key: text } : { key: text.slice(0, split), value: text.slice(split + 1) };
+}
+
+function shellArgument(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
 }
 
 function quote(text: string): string {
@@ -43,6 +47,62 @@ const httpPaths = new Set([
   'sslkey',
 ]);
 
+// The private repository consumes these scalar settings. File and command options are handled separately.
+const httpOptions = new Set([
+  'curloptresolve',
+  'delegation',
+  'emptyauth',
+  'extraheader',
+  'followredirects',
+  'lowspeedlimit',
+  'lowspeedtime',
+  'maxrequests',
+  'minsessions',
+  'noproxy',
+  'postbuffer',
+  'proactiveauth',
+  'proxy',
+  'proxyauthmethod',
+  'proxysslcertpasswordprotected',
+  'savecookies',
+  'schannelcheckrevoke',
+  'schannelusesslcainfo',
+  'sslbackend',
+  'sslcertpasswordprotected',
+  'sslcerttype',
+  'sslkeytype',
+  'sslcipherlist',
+  'ssltry',
+  'sslverify',
+  'sslversion',
+  'useragent',
+  'version',
+]);
+
+function transportSetting(key: string, option: string): boolean {
+  if (key.startsWith('http.')) return httpPaths.has(option) || httpOptions.has(option);
+  if (key.startsWith('credential.'))
+    return ['helper', 'username', 'usehttppath', 'interactive', 'sanitizeprompt', 'protectprotocol'].includes(option);
+  if (key.startsWith('url.')) return option === 'insteadof' || option === 'pushinsteadof';
+  return [
+    'remote.origin.url',
+    'remote.origin.proxy',
+    'remote.origin.proxyauthmethod',
+    'user.name',
+    'user.email',
+    'fetch.prune',
+    'fetch.fsckobjects',
+    'transfer.fsckobjects',
+    'protocol.version',
+    'uploadpack.allowfilter',
+    'uploadpack.allowanysha1inwant',
+    'uploadpack.allowreachablesha1inwant',
+    'uploadpack.allowtipsha1inwant',
+    'uploadpack.hiderefs',
+    'transfer.hiderefs',
+  ].includes(key);
+}
+
 function httpPathValue(
   key: string,
   value: string,
@@ -62,7 +122,7 @@ async function pinCredentialHelper(
   value: string,
   directory: string,
   authority: HostExecutionAuthority,
-): Promise<string> {
+): Promise<{ command: string; store: boolean }> {
   if (value.startsWith('!') || (!isAbsolute(value) && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(value)))
     throw new Error(
       'Repository preview supports credential helper names or absolute executables without arguments. Inline shell helpers require importing a local package instead.',
@@ -73,11 +133,12 @@ async function pinCredentialHelper(
   }
   // Git installations can dispatch multicall helpers through their symlink's basename.
   // Retain that invocation while tracking and rechecking both logical and physical authority.
-  authority.admit(path);
+  const physical = authority.admit(path);
   await access(path, constants.X_OK);
   if (!(await stat(path)).isFile()) throw new Error('A credential helper must be an executable file.');
   // This is generated from one admitted executable, never from a configuration shell fragment.
-  return "!exec '" + path.replaceAll("'", "'\\''") + "'";
+  const command = '!exec ' + shellArgument(path);
+  return { command, store: [path, physical].some(file => /^git-credential-store(?:\.exe)?$/iu.test(basename(file))) };
 }
 
 /**
@@ -96,9 +157,23 @@ export async function captureRepositoryEnvironment(
   selectLocalMirror?: (path: string, environment: NodeJS.ProcessEnv) => Promise<string>,
 ): Promise<NodeJS.ProcessEnv> {
   const environment = repositoryEnvironment(authority.workspaceRoots);
+  const home = environment.HOME ?? environment.USERPROFILE ?? userInfo().homedir;
+  const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const isolated: NodeJS.ProcessEnv = {
+    ...environment,
+    HOME: home,
+    GIT_CONFIG_GLOBAL: nullDevice,
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
   const executable = authority.executable('git');
   authority.admit(cwd);
-  const readGit = (args: string[], maxBuffer: number, input?: Buffer, env = environment) =>
+  const readGit = (
+    args: string[],
+    maxBuffer: number,
+    input?: Buffer,
+    env: NodeJS.ProcessEnv = isolated,
+    allowNoMatch = false,
+  ) =>
     authority.run(
       signal,
       processSignal =>
@@ -109,8 +184,9 @@ export async function captureRepositoryEnvironment(
             executable,
             args,
             { cwd, env, signal: processSignal, timeout: 5000, maxBuffer, encoding: 'buffer' },
-            (error, bytes) => {
-              failure ??= error;
+            (error, bytes, diagnostics) => {
+              const noMatch = allowNoMatch && error?.code === 1 && !diagnostics?.length;
+              failure ??= noMatch ? null : error;
               output = bytes;
             },
           );
@@ -130,10 +206,42 @@ export async function captureRepositoryEnvironment(
   authority.admit(executionDirectory);
   for (const helper of ['git-remote-https', 'git-upload-pack'])
     authority.admit(join(executionDirectory, helper + (process.platform === 'win32' ? '.exe' : '')));
-  environment.GIT_EXEC_PATH = executionDirectory;
+  isolated.GIT_EXEC_PATH = executionDirectory;
+  const xdg = environment.XDG_CONFIG_HOME ?? join(home, '.config');
+  const global = process.env.GIT_CONFIG_GLOBAL;
+  const sourcesToInclude =
+    global === nullDevice
+      ? []
+      : global && isAbsolute(global)
+        ? [global]
+        : [join(xdg, 'git/config'), join(home, '.gitconfig')];
+  // An explicit --system query reads the installation's own file as data while startup system config stays off.
+  // Git returns status 1 for an absent or empty file. Reuse the installation's spelling for conditional includes.
+  if (/^(?:false|no|off|[+-]?0+)?$/iu.test(environment.GIT_CONFIG_NOSYSTEM ?? '')) {
+    const locations = await readGit(
+      ['config', '--system', '--null', '--no-includes', '--show-origin', '--name-only', '--get-regexp', '.'],
+      1024 * 1024,
+      undefined,
+      isolated,
+      true,
+    );
+    if (locations.length > 0) {
+      const first = new TextDecoder('utf-8', { fatal: true }).decode(locations).split('\0')[0]!;
+      if (!first.startsWith('file:')) throw new Error('Git system configuration must have a file origin.');
+      sourcesToInclude.unshift(resolve(cwd, first.slice(5)));
+    }
+  }
+  for (const path of sourcesToInclude) authority.admit(path);
+  const includes = sourcesToInclude.flatMap(path => ['-c', 'include.path=' + path]);
   const config = async (args: string[], input?: Buffer) => {
     const bytes = await readGit(
-      [...(gitDirectory && input === undefined ? ['--git-dir=' + gitDirectory] : []), 'config', '--null', ...args],
+      [
+        ...(gitDirectory && input === undefined ? ['--git-dir=' + gitDirectory] : []),
+        ...(input === undefined ? includes : []),
+        'config',
+        '--null',
+        ...args,
+      ],
       1024 * 1024,
       input,
     );
@@ -147,10 +255,18 @@ export async function captureRepositoryEnvironment(
   if (records.length % 3 !== 0) throw new Error('Git returned invalid configuration origins.');
   const sources = new Map<string, Set<string>>();
   const entries: Entry[] = [];
+  let credentialStore = false;
   let bytes = 0;
   for (let index = 0; index < records.length; index += 3) {
     const scope = records[index]!;
     const origin = records[index + 1]!;
+    const value = records[index + 2]!;
+    if (
+      scope === 'command' &&
+      origin === 'command line:' &&
+      sourcesToInclude.some(path => value === 'include.path\n' + path)
+    )
+      continue;
     if (!origin.startsWith('file:')) throw new Error('Git configuration must have a trusted file origin.');
     let values = sources.get(origin);
     if (!values) {
@@ -164,7 +280,6 @@ export async function captureRepositoryEnvironment(
       );
       sources.set(origin, values);
     }
-    const value = records[index + 2]!;
     if (!values.has(value)) throw new Error('Git configuration changed during capture. Retry the preview.');
     // Git continues to read the host-created local store. Copying its multivalues would duplicate the remote.
     if (scope === 'local') continue;
@@ -178,24 +293,25 @@ export async function captureRepositoryEnvironment(
       throw new Error(
         'Repository preview cannot run command-valued Git transport settings. Use a named credential helper or import a local package.',
       );
-    // Only the selected origin supplies missing objects for this private partial clone.
-    if (key === 'extensions.partialclone' || /^remote\..*\.(?:promisor|partialclonefilter)$/u.test(key)) continue;
     const option = key.slice(key.lastIndexOf('.') + 1);
     if (parsed.value && key.startsWith('http.') && option === 'sslcapath')
       throw new Error(
         'Git HTTP CA directories can reference additional files. Configure an sslCAInfo certificate bundle or import a local package.',
       );
-    if (parsed.value && option === 'proxy' && (key.startsWith('http.') || key.startsWith('remote.')))
-      assertNetworkProxy(parsed.value);
+    if (!transportSetting(key, option)) continue;
+    if (parsed.value && option === 'proxy') assertNetworkProxy(parsed.value);
     if (key.startsWith('http.') && httpPaths.has(option) && parsed.value) {
-      entries.push({ key: parsed.key, value: httpPathValue(option, parsed.value, environment.HOME, authority) });
+      entries.push({ key: parsed.key, value: httpPathValue(option, parsed.value, home, authority) });
       continue;
     }
     if (key.startsWith('credential.') && key.endsWith('.helper') && parsed.value) {
-      entries.push({ key: parsed.key, value: await pinCredentialHelper(parsed.value, executionDirectory, authority) });
+      const helper = await pinCredentialHelper(parsed.value, executionDirectory, authority);
+      credentialStore ||= helper.store;
+      entries.push({ key: parsed.key, value: helper.command });
       continue;
     }
-    if (!(key === 'include.path' || (key.startsWith('includeif.') && key.endsWith('.path')))) entries.push(parsed);
+    if (key === 'credential.helper' && !parsed.value) credentialStore = false;
+    entries.push(parsed);
   }
   const writeConfig = async (entriesToWrite: readonly Entry[]) => {
     const text = entriesToWrite
@@ -222,10 +338,9 @@ export async function captureRepositoryEnvironment(
     return path;
   };
   const env: NodeJS.ProcessEnv = {
-    ...environment,
+    ...isolated,
     GIT_CONFIG_GLOBAL: await writeConfig(entries),
-    GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null',
-    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_SYSTEM: nullDevice,
   };
   await authority.validate();
   if (!gitDirectory || !selectLocalMirror) return env;
@@ -234,6 +349,7 @@ export async function captureRepositoryEnvironment(
   const remote = new TextDecoder('utf-8', { fatal: true }).decode(effective).replace(/\n$/u, '');
   const mirror = localMirrorPath(remote);
   if (mirror) {
+    authority.admit(join(xdg, 'git/attributes'));
     const directory = await selectLocalMirror(mirror, env);
     const pinned = pathToFileURL(directory).href;
     localMirrorPath(pinned);
@@ -250,15 +366,32 @@ export async function captureRepositoryEnvironment(
     );
     env.GIT_ALLOW_PROTOCOL = 'file';
     await readGit([repo, 'config', '--local', '--replace-all', 'remote.origin.url', pinned], 64 * 1024, undefined, env);
-    await readGit(
-      [repo, 'config', '--local', 'remote.origin.uploadpack', 'git-upload-pack --strict'],
-      64 * 1024,
-      undefined,
-      env,
-    );
+    // Local transport removes client Git directory/index variables when it starts the server.
+    // Run its pack generator in bare mode, including for ordinary checkouts, with a private empty index.
+    const uploadPack =
+      'GIT_IMPLICIT_WORK_TREE=0 GIT_INDEX_FILE=' +
+      shellArgument(join(cwd, 'glyph-pack.index')) +
+      ' ' +
+      shellArgument(executable) +
+      ' -c core.bare=true upload-pack --strict';
+    await readGit([repo, 'config', '--local', 'remote.origin.uploadpack', uploadPack], 64 * 1024, undefined, env);
   } else if (/^(?:(?:ssh|git\+ssh|ssh\+git):\/\/|[^/]+:(?!\/\/))/iu.test(remote)) {
     env.GIT_SSH_COMMAND = await repositorySshCommand(env, process.env.SSH_AUTH_SOCK, authority);
     env.GIT_ALLOW_PROTOCOL = 'ssh';
+  } else if (/^https:\/\//iu.test(remote)) {
+    authority.admit(join(home, '.netrc'));
+    if (process.platform === 'win32') authority.admit(join(home, '_netrc'));
+    if (credentialStore) {
+      for (const path of [join(home, '.git-credentials'), join(xdg, 'git/credentials')]) {
+        const physical = authority.admit(path);
+        // Git updates the selected credential file under a lock alongside its physical target.
+        authority.admit(path + '.lock');
+        authority.admit(physical + '.lock');
+      }
+    }
+    await authority.validate();
+  } else {
+    throw new Error('Repository preview supports HTTPS, SSH and local Git mirrors.');
   }
   return env;
 }
@@ -309,7 +442,7 @@ async function repositorySshCommand(
     args.push('-o', 'IdentityAgent=none');
   }
   await authority.validate();
-  return args.map(value => "'" + value.replaceAll("'", "'\\''") + "'").join(' ');
+  return args.map(value => shellArgument(value)).join(' ');
 }
 
 /** Git accepts local paths and file URLs as fetch transports. Require an unambiguous absolute mirror location. */

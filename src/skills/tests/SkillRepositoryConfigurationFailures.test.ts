@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
@@ -17,6 +17,7 @@ const parser = vi.hoisted(() => ({
   replies: [] as (string | Error)[],
   executionDirectory: '/fixture/git-core' as string | Error,
   commands: [] as string[][],
+  environments: [] as NodeJS.ProcessEnv[],
   started: undefined as ((child: EventEmitter, signal: AbortSignal) => void) | undefined,
   sshAvailable: true,
   inputError: false,
@@ -25,10 +26,11 @@ vi.mock('node:child_process', () => ({
   execFile: (
     _path: string,
     args: string[],
-    options: { signal: AbortSignal },
+    options: { signal: AbortSignal; env: NodeJS.ProcessEnv },
     callback: (error: Error | null, output: Buffer | string) => void,
   ) => {
     parser.commands.push(args);
+    parser.environments.push({ ...options.env });
     const child = new EventEmitter();
     const stdin = new EventEmitter();
     const complete = () => {
@@ -78,6 +80,7 @@ async function fixture(contents = '[core]\neditor = trusted\n') {
   vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
   parser.replies = [];
   parser.commands = [];
+  parser.environments = [];
   parser.started = undefined;
   parser.sshAvailable = true;
   parser.inputError = false;
@@ -103,8 +106,8 @@ it('rejects malformed origins and values that changed between parser discovery a
 });
 it('bounds the flattened configuration even when repeated trusted includes expand escaped values', async () => {
   const value = '\\'.repeat(8192);
-  const f = await fixture('[custom]\nitem = "' + '\\\\'.repeat(8192) + '"\n');
-  const entry = `custom.item\n${value}\0`;
+  const f = await fixture('[http]\nextraHeader = "' + '\\\\'.repeat(8192) + '"\n');
+  const entry = `http.extraheader\n${value}\0`;
   parser.replies.push((`global\0file:${f.config}\0` + entry).repeat(100), entry);
   await expect(f.capture()).rejects.toThrow('capture budget');
 });
@@ -255,4 +258,80 @@ it('settles a parser whose input pipe closes before Git completes', async () => 
   const f = await fixture();
   parser.inputError = true;
   await expect(f.capture()).rejects.toThrow('Configuration input closed');
+});
+
+it('starts every discovery process with ambient Git configuration and trace outputs disabled', async () => {
+  const f = await fixture();
+  vi.stubEnv('GIT_CONFIG_NOSYSTEM', undefined);
+  const system = join(f.root, 'system.config');
+  await writeFile(system, '[http]\nversion=HTTP/2\n');
+  parser.replies.push(
+    'file:' + system + '\0http.version\0',
+    'command\0file:' + system + '\0http.version\nHTTP/2\0',
+    'http.version\nHTTP/2\0',
+  );
+  const env = await f.capture();
+  const controls = { GIT_TRACE2: '0', GIT_TRACE2_EVENT: '0', GIT_TRACE2_PERF: '0', GIT_CONFIG_NOSYSTEM: '1' };
+  for (const process of parser.environments)
+    expect(process).toMatchObject({ ...controls, GIT_CONFIG_GLOBAL: '/dev/null' });
+  expect(parser.commands.find(command => command.includes('--includes'))).toEqual(
+    expect.arrayContaining(['include.path=' + system, 'include.path=' + f.config]),
+  );
+  expect(env).toMatchObject(controls);
+});
+
+it('preserves system configuration lookup errors and handles installations without system settings', async () => {
+  const f = await fixture();
+  vi.stubEnv('GIT_CONFIG_NOSYSTEM', undefined);
+  parser.replies.push(Object.assign(new Error('No matching settings'), { code: 1 }), '');
+  await expect(f.capture()).resolves.toHaveProperty('GIT_CONFIG_GLOBAL');
+  parser.replies.push('standard input:\0http.version\0');
+  await expect(f.capture()).rejects.toThrow('file origin');
+  parser.replies.push(new Error('Could not inspect system configuration'));
+  await expect(f.capture()).rejects.toThrow('Could not inspect system configuration');
+  vi.stubEnv('GIT_CONFIG_NOSYSTEM', '2');
+  parser.replies.push('');
+  await expect(f.capture()).resolves.toHaveProperty('GIT_CONFIG_GLOBAL');
+});
+
+it.each(['profile', 'account'])('uses the %s home for the HTTPS client when HOME is absent', async fallback => {
+  const f = await fixture();
+  vi.stubEnv('HOME', undefined);
+  vi.stubEnv('USERPROFILE', fallback === 'profile' ? f.root : undefined);
+  if (fallback === 'account') vi.mocked(userInfo).mockReturnValueOnce({ ...userInfo(), homedir: f.root });
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+  const admitted = vi.fn(testFilesystemMetadata.assertHostPaths);
+  const metadata = { ...testFilesystemMetadata, assertHostPaths: admitted };
+  parser.replies.push('', 'https://fixture.invalid/package\n');
+  const env = await captureRepositoryEnvironment(
+    [],
+    f.root,
+    new AbortController().signal,
+    metadata,
+    'source.git',
+    undefined,
+    vi.fn(),
+  );
+  const physical = await realpath(f.root);
+  expect(await realpath(env.HOME!)).toBe(physical);
+  expect(admitted).toHaveBeenCalledWith(
+    expect.arrayContaining([join(physical, '.netrc'), join(physical, '_netrc')]),
+    [],
+  );
+});
+
+it('rejects an unsupported effective remote before launching a fetch', async () => {
+  const f = await fixture();
+  parser.replies.push('', 'ftp://fixture.invalid/package\n');
+  await expect(
+    captureRepositoryEnvironment(
+      [],
+      f.root,
+      new AbortController().signal,
+      testFilesystemMetadata,
+      'source.git',
+      undefined,
+      vi.fn(),
+    ),
+  ).rejects.toThrow('supports HTTPS, SSH and local');
 });

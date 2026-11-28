@@ -96,7 +96,7 @@ it('removes conditional directives containing a Unicode line separator and retai
   await writeFile(included, '[user]\nname = First\n');
   const settings = ['config', '--file', f.global];
   execFileSync(git, [...settings, 'includeif.' + condition + '.path', 'future.config']);
-  execFileSync(git, [...settings, 'example.' + subsection + '.value', 'preserved']);
+  execFileSync(git, [...settings, 'credential.' + subsection + '.username', 'preserved']);
   const env = await captureRepositoryEnvironment(
     [f.project],
     f.preview,
@@ -110,7 +110,7 @@ it('removes conditional directives containing a Unicode line separator and retai
   );
   expect(await readFile(env.GIT_CONFIG_GLOBAL!, 'utf8')).not.toContain('future.config');
   expect(
-    execFileSync(git, ['config', '--get', 'example.' + subsection + '.value'], {
+    execFileSync(git, ['config', '--get', 'credential.' + subsection + '.username'], {
       cwd: f.preview,
       env,
       encoding: 'utf8',
@@ -338,4 +338,86 @@ it('requires an admitted CA bundle and a network endpoint for configured proxies
   await writeFile(f.global, '');
   vi.stubEnv('http_proxy', 'socks4a://localhost/socket');
   await expect(f.capture()).rejects.toThrow('network proxy endpoints');
+});
+
+it('captures only preview settings from the XDG and home config in precedence order', async () => {
+  const f = await fixture();
+  vi.stubEnv('GIT_CONFIG_GLOBAL', undefined);
+  const xdg = join(f.home, 'xdg');
+  vi.stubEnv('XDG_CONFIG_HOME', xdg);
+  await mkdir(join(xdg, 'git'), { recursive: true });
+  await writeFile(join(xdg, 'git/config'), '[http]\nextraHeader = X-Fixture: xdg\n');
+  await writeFile(
+    join(f.home, '.gitconfig'),
+    '[http]\nextraHeader = X-Fixture: home\n[color]\nui = always\n[alias]\nstatusfixture = status\n',
+  );
+  const env = await f.capture();
+  expect(
+    execFileSync(trustedHostExecutable('git', []), ['config', '--get-all', 'http.extraHeader'], {
+      env,
+      cwd: f.preview,
+      encoding: 'utf8',
+    }),
+  ).toBe('X-Fixture: xdg\nX-Fixture: home\n');
+  expect(await readFile(env.GIT_CONFIG_GLOBAL!, 'utf8')).not.toMatch(/\[color\]|\[alias\]/u);
+});
+
+it.each([
+  '.netrc',
+  '.git-credentials',
+  '.git-credentials.lock',
+  '.config/git/credentials',
+  '.config/git/credentials.lock',
+])('leases the future HTTPS credential path %s until the current process closes', async relative => {
+  const f = await fixture();
+  const git = trustedHostExecutable('git', []);
+  execFileSync(git, ['init', '--bare', '--quiet', '--template=', 'source.git'], { cwd: f.preview });
+  execFileSync(git, ['--git-dir=source.git', 'remote', 'add', 'origin', 'https://fixture.invalid/repo'], {
+    cwd: f.preview,
+  });
+  await writeFile(f.global, '[credential]\nhelper = store\n');
+  const leases = new HostProcessLeases([]);
+  const authority = new HostExecutionAuthority(leases, testFilesystemMetadata);
+  const signal = new AbortController().signal;
+  await captureRepositoryEnvironment([], f.preview, signal, testFilesystemMetadata, 'source.git', authority, vi.fn());
+  const started = new Deferred<void>();
+  const stopped = new Deferred<void>();
+  const close = new Deferred<void>();
+  const process = authority.run(signal, current => {
+    current.addEventListener(
+      'abort',
+      () => {
+        stopped.resolve();
+      },
+      { once: true },
+    );
+    started.resolve();
+    return close.promise;
+  });
+  const rejected = expect(process).rejects.toThrow('workspace is attaching');
+  await started.promise;
+  const publish = vi.fn();
+  const attach = leases.admitWorkspace(() => [join(f.home, relative)], publish);
+  await stopped.promise;
+  expect(publish).not.toHaveBeenCalled();
+  close.resolve();
+  await Promise.all([rejected, attach]);
+  expect(publish).toHaveBeenCalledOnce();
+});
+
+it('honors a disabled global config and retains transport integrity and ref visibility controls', async () => {
+  const f = await fixture();
+  await writeFile(f.global, '[fetch]\nfsckObjects = true\n[uploadpack]\nhideRefs = refs/private\n');
+  const configured = await f.capture();
+  const settings = await readFile(configured.GIT_CONFIG_GLOBAL!, 'utf8');
+  expect(settings).toContain('fsckobjects = "true"');
+  expect(settings).toContain('hiderefs = "refs/private"');
+  vi.stubEnv('GIT_CONFIG_GLOBAL', '/dev/null');
+  const admitted = vi.fn(testFilesystemMetadata.assertHostPaths);
+  const env = await captureRepositoryEnvironment([], f.preview, new AbortController().signal, {
+    ...testFilesystemMetadata,
+    assertHostPaths: admitted,
+  });
+  expect(await readFile(env.GIT_CONFIG_GLOBAL!, 'utf8')).toBe('');
+  expect(admitted.mock.calls.flatMap(call => call[0])).not.toContain('/dev/null');
 });

@@ -321,7 +321,67 @@ it('pins a primary checkout as the transport source while a peer owns its distin
   expect((await run('remote', 'get-url', 'origin')).toString().trim()).toBe(pathToFileURL(selected).href);
   expect((await run('remote', 'get-url', '--push', 'origin')).toString().trim()).toBe(pathToFileURL(selected).href);
   expect((await run('config', '--get', 'user.name')).toString().trim()).toBe('Trusted identity');
-  expect((await run('config', '--get', 'remote.origin.uploadpack')).toString().trim()).toBe('git-upload-pack --strict');
+  const uploadPack = (await run('config', '--get', 'remote.origin.uploadpack')).toString().trim();
+  expect(uploadPack).toContain('GIT_IMPLICIT_WORK_TREE=0 GIT_INDEX_FILE=');
+  expect(uploadPack).toContain('glyph-pack.index');
+  expect(uploadPack).toMatch(/-c core\.bare=true upload-pack --strict$/u);
   await rename(selected, join(base, 'moved'));
   await expect(run('ls-remote', 'origin')).rejects.toThrow('selected Git mirror is no longer available');
+});
+
+it.each(['repository', 'XDG', 'configured', 'home-relative'])(
+  'checks the %s attribute source again on later mirror reads',
+  async source => {
+    const base = await fixture();
+    const preview = join(base, 'preview');
+    const mirror = join(base, 'mirror.git');
+    await mkdir(preview);
+    execFileSync('git', ['init', '--bare', '--quiet', '--template=', mirror]);
+    const url = 'https://fixture.invalid/repo';
+    await writeFile(join(base, 'trusted.config'), `[url "${pathToFileURL(mirror).href}"]\ninsteadOf = ${url}\n`);
+    const xdg = join(base, 'xdg');
+    vi.stubEnv('XDG_CONFIG_HOME', xdg);
+    const attr =
+      source === 'repository'
+        ? join(mirror, 'info/attributes')
+        : source === 'XDG'
+          ? join(xdg, 'git/attributes')
+          : join(base, 'attributes');
+    if (source === 'configured' || source === 'home-relative')
+      execFileSync('git', [
+        '--git-dir=' + mirror,
+        'config',
+        'core.attributesFile',
+        source === 'configured' ? attr : '~/attributes',
+      ]);
+    let roots: string[] = [];
+    const transport = new SkillRepositoryGit(
+      preview,
+      new AbortController().signal,
+      () => roots,
+      testFilesystemMetadata,
+    );
+    await transport.initialize(url);
+    expect(await transport.run(['--git-dir=source.git', 'ls-remote', 'origin'])).toEqual(Buffer.alloc(0));
+    roots = [attr];
+    await expect(transport.run(['--git-dir=source.git', 'rev-parse', '--is-bare-repository'])).rejects.toThrow(
+      'outside writable workspaces',
+    );
+  },
+);
+
+it.each(['attributesFile', 'worktree'])('requires self-contained %s settings for a local mirror', async setting => {
+  const base = await fixture();
+  const preview = join(base, 'preview');
+  const mirror = join(base, 'mirror.git');
+  await mkdir(preview);
+  execFileSync('git', ['init', '--bare', '--quiet', '--template=', mirror]);
+  execFileSync('git', ['--git-dir=' + mirror, 'config', 'core.' + setting, 'relative/path']);
+  const url = 'https://fixture.invalid/repo';
+  await writeFile(join(base, 'trusted.config'), `[url "${pathToFileURL(mirror).href}"]\ninsteadOf = ${url}\n`);
+  const transport = new SkillRepositoryGit(preview, new AbortController().signal, [], testFilesystemMetadata);
+  await transport.initialize(url);
+  await expect(transport.run(['--git-dir=source.git', 'ls-remote', 'origin'])).rejects.toThrow(
+    setting === 'worktree' ? 'explicit worktree' : 'attributes require an absolute or home-relative path',
+  );
 });

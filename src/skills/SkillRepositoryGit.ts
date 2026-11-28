@@ -6,7 +6,7 @@ import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 import { spawn } from 'node:child_process';
 import { readdir, lstat, opendir } from 'node:fs/promises';
-import { join, resolve as resolvePath } from 'node:path';
+import { isAbsolute, join, resolve as resolvePath, sep } from 'node:path';
 
 const maxStorage = 32 * 1024 * 1024;
 async function storageBytes(root: string): Promise<number> {
@@ -155,6 +155,7 @@ export class SkillRepositoryGit {
         'packed-refs',
         'shallow',
         'info/grafts',
+        'info/attributes',
         'refs',
         'objects',
         'reftable',
@@ -203,25 +204,32 @@ export class SkillRepositoryGit {
     ancestors.delete(identity);
   }
 
-  /** The server side of a local fetch also reads its repository configuration. Inspect key names
-   * without following any include before permitting upload-pack to open this mirror. */
+  /** The local upload-pack process reads its repository config and consults Git attributes when packing blobs.
+   * Inspect the effective inputs before execution and on subsequent config revisions. */
   private async checkMirrorConfiguration(path: string, env: NodeJS.ProcessEnv): Promise<void> {
     const info = await lstat(path, { bigint: true }).catch(missingMirrorEntry);
     if (!info) return;
     const revision = `${info.dev}:${info.ino}:${info.ctimeNs}:${info.mtimeNs}`;
     if (this.mirrorConfigurations.get(path) === revision) return;
-    const keys = await this.execute(
-      ['config', '--no-includes', '--file', path, '--null', '--name-only', '--list'],
+    const configuration = await this.execute(
+      ['config', '--no-includes', '--file', path, '--null', '--list'],
       1024 * 1024,
       env,
     );
-    if (
-      keys
-        .toString('utf8')
-        .split('\0')
-        .some(key => /^(?:include|includeif\..+)\.path$/iu.test(key))
-    )
-      throw new Error('Local Git mirrors with configuration includes require a local package import.');
+    for (const record of new TextDecoder('utf-8', { fatal: true }).decode(configuration).split('\0')) {
+      const key = record.split('\n', 1)[0]!;
+      if (/^(?:include|includeif\..+)\.path$/isu.test(key))
+        throw new Error('Local Git mirrors with configuration includes require a local package import.');
+      if (key === 'core.worktree')
+        throw new Error('Local Git mirrors with an explicit worktree require a local package import.');
+      if (key === 'core.attributesfile') {
+        const value = record.slice(key.length + 1);
+        const file = value.startsWith('~/') ? join(env.HOME!, value.slice(2)) : value;
+        if (!isAbsolute(file) || value.split(sep).includes('..'))
+          throw new Error('Local Git mirror attributes require an absolute or home-relative path.');
+        this.authority.admit(file);
+      }
+    }
     this.mirrorConfigurations.set(path, revision);
   }
 
