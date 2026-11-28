@@ -30,15 +30,21 @@ impl Workspace {
         }
     }
 
-    fn run(&self, script: &str) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_glyph-shell-sandbox"))
+    fn command(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_glyph-shell-sandbox"));
+        command
             .args(["--profile", "read-only", "--working-directory"])
             .arg(&self.root)
             .arg("--state-directory")
             .arg(&self.state)
             .arg("--workspace-root")
             .arg(&self.root)
-            .args(["--workspace-policy", WORKSPACE_POLICY])
+            .args(["--workspace-policy", WORKSPACE_POLICY]);
+        command
+    }
+
+    fn run(&self, script: &str) -> Output {
+        self.command()
             .args(["--", "/bin/sh", "-c", script])
             .output()
             .expect("run native sandbox helper")
@@ -84,4 +90,42 @@ fn fails_when_the_sandboxed_command_is_terminated_by_a_signal() {
     let output = workspace.run("kill -KILL $$");
 
     assert_eq!(output.status.code(), Some(1));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the Linux sandbox backend"]
+fn reads_ordinary_files_across_two_projected_workspace_roots() {
+    let workspace = Workspace::new();
+    let private = workspace.root.join("personal");
+    fs::create_dir(&private).unwrap();
+    let nested = workspace.root.join("nested");
+    fs::create_dir(&nested).unwrap();
+    fs::write(nested.join("file"), "projected fixture").unwrap();
+    std::os::unix::fs::symlink("nested/file", workspace.root.join("link")).unwrap();
+
+    let second = workspace.root.with_file_name("second");
+    let second_private = second.join("personal");
+    fs::create_dir_all(&second_private).unwrap();
+    let second_file = second.join("file");
+    fs::write(&second_file, " and second fixture").unwrap();
+
+    let output = workspace
+        .command()
+        .arg("--workspace-root")
+        .arg(&second)
+        .arg("--private-path")
+        .arg(private)
+        .arg("--private-path")
+        .arg(second_private)
+        .args(["--", "/bin/cat", "link"])
+        .arg(second_file)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"projected fixture and second fixture");
 }
