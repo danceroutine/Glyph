@@ -121,6 +121,25 @@ it('resolves user rule URIs below the dedicated user rule root', () => {
   expect(userRuleUri('/home/user/.glyph', 'rules/test.mdc')).toBe('file:///home/user/.glyph/rules/test.mdc');
 });
 
+// The source checkout keeps the same native binaries in Cargo's release directory.
+vi.mock('#src/workspace/SourcePathAliases.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('#src/workspace/SourcePathAliases.js')>();
+  return {
+    ...actual,
+    readSourcePathAliases: (executable: string, path: string, descendants?: boolean) =>
+      actual.readSourcePathAliases(releaseExecutable(executable), path, descendants),
+  };
+});
+
+vi.mock('#src/workspace/readDirectoryNamePolicies.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('#src/workspace/readDirectoryNamePolicies.js')>();
+  return {
+    ...actual,
+    readDirectoryNamePolicies: (executable: string, directories: readonly string[]) =>
+      actual.readDirectoryNamePolicies(releaseExecutable(executable), directories),
+  };
+});
+
 vi.mock('#src/desktop/workspace/EditorWorkspaceTextStore.js', async importOriginal => {
   const actual = await importOriginal<typeof import('#src/desktop/workspace/EditorWorkspaceTextStore.js')>();
   return {
@@ -2292,6 +2311,10 @@ describe(OpenAIDesktopRuntimeFactory, () => {
 
 const repositoryRoot = resolve(import.meta.dirname, '..', '..', '..', '..');
 const factoryIdentity: GlyphConnectionIdentity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
+
+function releaseExecutable(executable: string): string {
+  return join(repositoryRoot, 'target', 'release', basename(executable));
+}
 
 function useFilesystemIndex(): void {
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
