@@ -86,8 +86,8 @@ it.describe('Questions and command approvals', () => {
     await glyph.send('Write the approval proof.');
     await expect(approval(glyph).locator('pre')).toHaveText(command);
     await expect(approval(glyph)).toContainText(glyph.workspace);
-    await expect(approval(glyph).getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
-    await expect(approval(glyph).getByRole('button', { name: 'Skip', exact: true })).toBeEnabled();
+    await expect(approval(glyph).getByRole('button', { name: 'Allow once', exact: true })).toBeEnabled();
+    await expect(approval(glyph).getByRole('button', { name: 'Deny', exact: true })).toBeEnabled();
     expect(await proof(glyph)).toBeNull();
     await testInfo.attach('approval-card', {
       body: await glyph.page.screenshot({ path: testInfo.outputPath('decision-card.png') }),
@@ -117,7 +117,7 @@ it.describe('Questions and command approvals', () => {
     await expect(approval(glyph)).toBeVisible();
     expect(await proof(glyph)).toBeNull();
     provider.enqueue({ chunks: ['The command finished.'] });
-    await approval(glyph).getByRole('button', { name: 'Run', exact: true }).click();
+    await approval(glyph).getByRole('button', { name: 'Allow once', exact: true }).click();
     await finished(glyph);
     expect(await proof(glyph)).toBe('approved');
     expect(outputs(provider, 'shell')).toEqual([expect.objectContaining({ exit_code: 0 })]);
@@ -136,7 +136,7 @@ it.describe('Questions and command approvals', () => {
     await glyph.send('Write the approval proof.');
     await expect(approval(glyph)).toBeVisible();
     provider.enqueue({ chunks: ['The command was declined. I can continue without it.'] });
-    await approval(glyph).getByRole('button', { name: 'Skip', exact: true }).click();
+    await approval(glyph).getByRole('button', { name: 'Deny', exact: true }).click();
     await finished(glyph);
     expect(await proof(glyph)).toBeNull();
     expect(outputs(provider, 'shell')).toHaveLength(1);
@@ -249,7 +249,7 @@ it.describe('Questions and command approvals', () => {
       await glyph.send('Remember this command.');
       await expect(approval(glyph)).toBeVisible();
       provider.enqueue({ chunks: ['Remembered.'] });
-      await approval(glyph).getByRole('button', { name: 'Always Run', exact: true }).click();
+      await approval(glyph).getByRole('button', { name: 'Always allow this command', exact: true }).click();
       await finished(glyph);
       expect(await proof(glyph)).toBe('approved');
       await glyph.crashHost();
@@ -263,7 +263,7 @@ it.describe('Questions and command approvals', () => {
       await expect(approval(glyph)).toBeVisible();
       await expect(approval(glyph)).toContainText(join(glyph.workspace, 'nested'));
       provider.enqueue({ chunks: ['Declined in the other directory.'] });
-      await approval(glyph).getByRole('button', { name: 'Skip', exact: true }).click();
+      await approval(glyph).getByRole('button', { name: 'Deny', exact: true }).click();
       await finished(glyph);
       expect(await proof(glyph, 'nested/approval-proof.txt')).toBeNull();
     },

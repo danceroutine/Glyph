@@ -81,7 +81,7 @@ async function runCommand(glyph, provider, call, notifiesExit = false) {
   await expect(approval).toBeVisible();
   provider.enqueue({ chunks: ['Shell step complete.'] });
   if (notifiesExit) provider.enqueue({ chunks: ['Background terminal exited.'] });
-  await approval.getByRole('button', { name: 'Run', exact: true }).click();
+  await approval.getByRole('button', { name: 'Allow once', exact: true }).click();
   if (notifiesExit) await expect(glyph.assistantEntries.last()).toContainText('Background terminal exited.');
   await finished(glyph);
   return result(provider, call);
@@ -152,7 +152,7 @@ it.describe('Shell execution, input, close, and listing', () => {
     await expect(approval).toBeVisible();
     expect(await file(glyph, 'denied.txt')).toBeNull();
     provider.enqueue({ chunks: ['Declined.'] });
-    await approval.getByRole('button', { name: 'Skip', exact: true }).click();
+    await approval.getByRole('button', { name: 'Deny', exact: true }).click();
     await finished(glyph);
     expect(await file(glyph, 'denied.txt')).toBeNull();
     expect(result(provider, call).error.message).toMatch(/denied/iu);
@@ -186,7 +186,7 @@ it.describe('Shell execution, input, close, and listing', () => {
     await glyph.send('Run until I cancel.');
     await glyph.page
       .getByRole('region', { name: 'Command approval' })
-      .getByRole('button', { name: 'Run', exact: true })
+      .getByRole('button', { name: 'Allow once', exact: true })
       .click();
     await expect(cards(glyph).last().getByLabel('Command output')).toContainText('CANCEL READY');
     await glyph.sendButton.click();
