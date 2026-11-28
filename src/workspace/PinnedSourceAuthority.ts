@@ -107,7 +107,7 @@ export class NativePinnedSourceAuthority implements PinnedSourceAuthority {
       : await this.metadata.sourceOrigins(selected, operation.privatePaths, signal);
     assertCurrent();
     if (inspected.length !== selected.length) throw new Error('Incomplete instruction source inspection.');
-    const sources = new Array<PinnedSource | null>(paths.length).fill(null);
+    const sources: (PinnedSource | null)[] = paths.map(() => null);
     for (const [i, { route, index }] of admitted.entries()) {
       const origin = inspected[i];
       if (origin && !(route.assertCurrent && unavailableRoots.has(route.assertCurrent)))
