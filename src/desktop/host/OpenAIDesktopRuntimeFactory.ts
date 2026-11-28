@@ -288,19 +288,27 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               ...(signal && { signal }),
               ...(targetDirectory !== undefined && targetDirectory !== '' ? { targetDirectory } : {}),
             }),
-          request: async (request, signal, retainAccess) => {
+          request: async (request, signal, retainAccess, source) => {
             const operation = admitted.beginOperation();
             // Reuse filesystem policy and symlink checks before granting editor access.
             const path = this.requestPath(request);
             const mutation =
               request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION ||
               request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION;
+            let backed = false;
+            const retainFile = source
+              ? async (file: string, identity: string) => {
+                  await source.disclosure.retainFile(source.authority, file, identity);
+                  backed = true;
+                }
+              : undefined;
             const target =
               request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION && 'target' in request.mutation
                 ? request.mutation.target
                 : undefined;
             const validateEndpoints = async () => {
-              if (path !== undefined && path !== '') await admitted.validateAccess(path, mutation);
+              if (path !== undefined && path !== '')
+                await admitted.validateAccess(path, mutation, mutation || backed ? undefined : retainFile);
               if (target) await admitted.validateAccess(target, true);
             };
             if (request.type === GlyphEditorRequestType.EXISTS) await admitted.exists(request.path);
@@ -327,6 +335,29 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 })
               : await this.editors.request(input.identity, wire, signal);
             await validateEndpoints();
+            if (source && !backed && response.snapshot && path !== undefined && path !== '') {
+              // A new unsaved model owns its logical route before a disk file exists.
+              const check = () => {
+                input.assertTrusted();
+                operation.assertCurrent();
+              };
+              source.disclosure.revalidate(async cancellation => {
+                check();
+                await admitted.validateAccess(path);
+                const current = await this.editors.request(
+                  input.identity,
+                  {
+                    type: GlyphEditorRequestType.EXISTS,
+                    operationId: randomUUID(),
+                    path: qualified!,
+                  },
+                  cancellation,
+                );
+                if (!current.ok || !current.exists) throw new Error('The editor source is no longer available.');
+                check();
+                return check;
+              });
+            }
             operation.assertCurrent();
             retainAccess?.(operation.assertCurrent);
             return response.snapshot && path !== undefined && path !== ''
@@ -393,6 +424,19 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         uri: pathToFileURL(input.roots[index]!.canonicalPath).href,
       })),
       readDirectoryNamePolicies.bind(undefined, indexExecutable),
+    );
+    const projectSourceAuthority = new NativePinnedSourceAuthority(
+      {
+        beginSourceAccess: paths => routes.beginSourceAccess(paths),
+        sourceOrigins: (paths, reservations, signal) =>
+          filesystemMetadata.sourceOrigins(
+            paths.map(path => routes.selectedSourcePath(path)),
+            reservations,
+            signal,
+          ),
+      },
+      policy,
+      input.assertTrusted,
     );
     const workspace =
       roots.length === 1
@@ -474,19 +518,6 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         normalizesUnicode: true,
         foldsUnicode: true,
       };
-      const projectSourceAuthority = new NativePinnedSourceAuthority(
-        {
-          beginSourceAccess: paths => routes.beginSourceAccess(paths),
-          sourceOrigins: (paths, reservations, signal) =>
-            filesystemMetadata.sourceOrigins(
-              paths.map(path => routes.selectedSourcePath(path)),
-              reservations,
-              signal,
-            ),
-        },
-        policy,
-        input.assertTrusted,
-      );
       const userSourceAuthority = new NativePinnedSourceAuthority(
         filesystemMetadata,
         access.userCatalog,
@@ -870,7 +901,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           return summary.plans?.at(-1);
         }),
         new ProjectToolRuntime(
-          new ProjectAccess(workspace, index, {}, turnContexts),
+          new ProjectAccess(workspace, index, {}, turnContexts, projectSourceAuthority),
           new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
           reviews,
           logger,
@@ -971,7 +1002,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       throw error;
     }
     // Reviews can read project files and the rules and skill resources advertised in their turn.
-    const reviewProjectAccess = new ProjectAccess(workspace, index, {}, turnContexts);
+    const reviewProjectAccess = new ProjectAccess(workspace, index, {}, turnContexts, projectSourceAuthority);
     const reviewTools = turnContexts
       ? new ToolRegistry([
           ...reviewProjectAccess.tools,

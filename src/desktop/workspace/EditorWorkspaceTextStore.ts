@@ -76,7 +76,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
 
   async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
     const path = this.normalizePath(input);
-    const { retainAccess, ...limits } = options;
+    const { retainAccess, source, ...limits } = options;
     const response = await this.client.request(
       {
         type: GlyphEditorRequestType.READ_SNAPSHOT,
@@ -86,6 +86,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       },
       undefined,
       retainAccess,
+      source,
     );
     const snapshot = requireSnapshot(response, path);
     return this.remember(snapshot);
@@ -107,7 +108,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
 
   async readOptional(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot | undefined> {
     const path = this.normalizePath(input);
-    const { retainAccess, ...limits } = options;
+    const { retainAccess, source, ...limits } = options;
     const response = await this.client.request(
       {
         type: GlyphEditorRequestType.READ_SNAPSHOT,
@@ -117,6 +118,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       },
       undefined,
       retainAccess,
+      source,
     );
     if (!response.ok && response.error?.code === GlyphDesktopErrorCode.NOT_FOUND) return undefined;
     return this.remember(requireSnapshot(response, path));

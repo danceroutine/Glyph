@@ -1,4 +1,5 @@
 import * as sourceAliases from '#src/workspace/SourcePathAliases.js';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import { Deferred } from '#src/shared/Deferred.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
@@ -293,6 +294,51 @@ vi.mock('#src/providers/openai/OpenAIProviderFactory.js', async importOriginal =
 });
 
 describe(OpenAIDesktopRuntimeFactory, () => {
+  it.each(['backed', 'new', 'saved during read'])(
+    'authorizes a %s editor read at its first provider handoff',
+    async kind => {
+      const fixture = await factoryFixture();
+      const root = await fixture.folder('workspace');
+      const folder = join(root, 'feature');
+      const path = join(folder, 'source.txt');
+      await mkdir(folder);
+      if (kind === 'backed') await writeFile(path, 'Saved text');
+      let open = true;
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type === GlyphEditorRequestType.EXISTS)
+          return { operationId: request.operationId, ok: true, exists: open };
+        if (request.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Expected a text snapshot');
+        expect(request).not.toHaveProperty('source');
+        if (kind === 'saved during read') await writeFile(path, 'Just saved');
+        return editorResponse(request, request.path, 'Captured working copy');
+      });
+      await fixture.create([root]);
+      const tool = captured.providerFactories[0]![1].tools.find(tool => tool.name === 'read_project_file')!;
+      const retain = vi.fn<NonNullable<ToolExecutionContext['retainResultAccess']>>();
+      const signal = new AbortController().signal;
+      const text = await tool.execute(
+        JSON.stringify({ path: 'feature/source.txt', start_line: null, end_line: null }),
+        signal,
+        { retainResultAccess: retain },
+      );
+      expect(text).toContain('Captured working copy');
+      const authorize = retain.mock.calls[0]![1]!;
+      if (kind === 'new') {
+        (await authorize(signal))();
+        open = false;
+        await expect(authorize(signal)).rejects.toThrow('editor source is no longer available');
+      } else {
+        await writeFile(join(folder, 'saving'), 'Another edit');
+        await renameDirectory(join(folder, 'saving'), path);
+        (await authorize(signal))();
+        await renameDirectory(folder, folder + '-old');
+        await mkdir(folder);
+        await writeFile(path, 'Different source');
+        await expect(authorize(signal)).rejects.toThrow('source location changed');
+      }
+    },
+  );
+
   it('loads saved chats and reviews without project access while untrusted and reconciles after trust returns', async () => {
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-untrusted-history-')));
     const root = join(directory, 'workspace');
@@ -1164,7 +1210,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const read = { type: GlyphEditorRequestType.READ_SNAPSHOT, operationId: 'read', path: 'file.txt' } as const;
       await expect(client.request(read, signal)).resolves.toMatchObject({ snapshot: { path: 'file.txt' } });
       expect(request).toHaveBeenLastCalledWith(factoryIdentity, read, signal);
-      expect(validate).toHaveBeenLastCalledWith('file.txt', false);
+      expect(validate).toHaveBeenLastCalledWith('file.txt', false, undefined);
       const occupancy = { type: GlyphEditorRequestType.EXISTS, operationId: 'exists', path: 'file.txt' } as const;
       await client.request(occupancy);
       expect(exists).toHaveBeenCalledExactlyOnceWith('file.txt');

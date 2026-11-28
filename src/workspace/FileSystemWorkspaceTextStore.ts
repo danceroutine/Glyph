@@ -269,6 +269,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           path,
         });
       }
+      if (options.source) await options.source.disclosure.retainFile(options.source.authority, resolvedFile, identity);
       options.retainAccess?.(operation.assertCurrent);
       return {
         path,
@@ -302,15 +303,22 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   /** Enforces disk access policy without loading stale content ahead of an authoritative editor read. */
-  async validateAccess(input: string, mutation = false): Promise<void> {
+  async validateAccess(
+    input: string,
+    mutation = false,
+    retainFile?: (path: string, identity: string) => Promise<void>,
+  ): Promise<void> {
     await this.assertPhysicalAccess(resolve(this.root, this.normalizePath(input)), undefined, mutation);
+    let inspected;
     try {
-      await this.inspectReadPath(input);
+      inspected = await this.inspectReadPath(input);
     } catch (error) {
       // A live editor may own a new, unsaved file. Ancestor and exclusion checks
       // still run before a missing path is allowed through to the editor.
       if (errorCodeOf(error) !== 'ENOENT') throw error;
+      return;
     }
+    await retainFile?.(inspected.resolvedFile, inspected.identity);
   }
 
   async readOptional(

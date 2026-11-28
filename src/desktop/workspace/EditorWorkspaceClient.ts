@@ -1,5 +1,6 @@
 import type { GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
+import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
 
 /**
  * Keeps the workspace adapter independent of MessagePort details. Only the
@@ -16,6 +17,7 @@ export interface EditorWorkspaceClient {
     request: GlyphEditorRequest,
     signal?: AbortSignal,
     retainAccess?: (check: () => void) => void,
+    source?: WorkspaceReadOptions['source'],
   ): Promise<GlyphEditorResponse>;
   listPaths(
     maxFiles: number,

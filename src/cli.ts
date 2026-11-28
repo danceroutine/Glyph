@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { WorkspaceRootSelections } from './workspace/WorkspaceRootSelections.ts';
+import { NativePinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { WebToolRuntime } from './web/WebToolRuntime.ts';
 import { AuthorizedWebTransport } from './web/AuthorizedWebTransport.ts';
@@ -114,6 +115,7 @@ async function main(): Promise<void> {
     projectContext.roots.map(root => root.path),
   );
   using selections = new WorkspaceRootSelections();
+  const metadata = new NativeFilesystemMetadata(indexExecutable);
   const { workspace, selectedFiles, pathIndex } = await createProjectRuntime(
     projectContext,
     configuration.stateDirectory,
@@ -121,6 +123,7 @@ async function main(): Promise<void> {
     access,
     profile.path,
     selections,
+    metadata,
   );
   const ui = new TerminalUI(process.stdin, process.stdout, process.stderr, pathIndex);
   const shellAuthorizer = new ShellCommandAuthorizer(
@@ -154,7 +157,15 @@ async function main(): Promise<void> {
     { maxReadBytes: getEditingReadBudget(configuration.editing), autoApply: true },
   );
   const projectTools = new ProjectToolRuntime(
-    new ProjectAccess(workspace, pathIndex),
+    new ProjectAccess(
+      workspace,
+      pathIndex,
+      {},
+      undefined,
+      new NativePinnedSourceAuthority(metadata, access.project, () => {
+        shutdown.signal.throwIfAborted();
+      }),
+    ),
     new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
     proposalReviews,
     logger,
@@ -262,9 +273,9 @@ async function createProjectRuntime(
   policy: WorkspaceContentAccess,
   profilePath: string,
   selections: WorkspaceRootSelections,
+  physicalAccess: NativeFilesystemMetadata,
 ): Promise<{ workspace: WorkspaceTextStore; selectedFiles: WorkspaceTextStore; pathIndex: WorkspacePathIndex }> {
   const selected = context.roots.map(root => selections.select(root.selectedPath ?? root.path, root.path));
-  const physicalAccess = new NativeFilesystemMetadata(indexExecutable);
   const casing = await Promise.all(
     context.roots.map(root => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, root.path)),
   );
