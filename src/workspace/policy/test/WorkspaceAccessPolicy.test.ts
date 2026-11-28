@@ -52,9 +52,14 @@ describe(WorkspaceAccessPolicy, () => {
     expect(policy.isIgnoredDirectory(name, false, path, true)).toBe(false);
     const prospective = policy.isIgnoredDirectory(name, false, path);
     mkdirSync(path);
-    const aliases = existsSync(join(root, '.skill-staging'));
+    const reserved = join(root, '.skill-staging');
+    const aliases = existsSync(reserved);
     expect(prospective).toBe(aliases);
     expect(policy.isIgnoredDirectory(name, !aliases, path)).toBe(aliases);
+    mkdirSync(reserved, { recursive: true });
+    for (const caseSensitive of [false, true]) {
+      expect(policy.isIgnoredDirectory(name, caseSensitive, path)).toBe(aliases);
+    }
     expect(policy.exclusionsFor(path, !aliases, 'native').privateRoot).toBe(aliases);
     expect(
       new WorkspaceAccessPolicy({ ignoredDirectories: ['.skill-staging'] }).isIgnoredDirectory(name, false, path),

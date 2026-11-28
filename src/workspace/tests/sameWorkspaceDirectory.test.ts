@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, linkSync, mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
@@ -81,4 +81,25 @@ it('projects only absolute paths below the captured folder', () => {
   expect(relativeWorkspaceSpelling(join(root, 'next'), root)).toBeUndefined();
   expect(relativeWorkspaceSpelling(root, 'relative')).toBeUndefined();
   expect(relativeWorkspaceSpelling('relative', root)).toBeUndefined();
+});
+
+it('projects a saved spelling when both names identify the same directory entry', () => {
+  const root = mkdtempSync(join(tmpdir(), 'glyph-project-spelling-'));
+  onTestFinished(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  const target = join(root, 'workspace');
+  mkdirSync(target);
+  const saved = join(root, 'Project');
+  const reopened = join(root, 'project');
+  symlinkSync(target, saved, 'dir');
+  const note = join(saved, 'note.md');
+  if (!existsSync(reopened)) {
+    symlinkSync(target, reopened, 'dir');
+    expect(relativeWorkspaceSpelling(reopened, note)).toBeUndefined();
+    rmSync(reopened);
+    // Give both names the same symlink inode, as a case-insensitive lookup does.
+    linkSync(saved, reopened);
+  }
+  expect(relativeWorkspaceSpelling(reopened, note)).toBe('note.md');
 });
