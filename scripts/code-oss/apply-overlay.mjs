@@ -186,9 +186,19 @@ for (const [relativePath, before, after] of [
   await writeFile(path, contents.replace(before, after));
 }
 
-// Guard structural mutations after native participants and before working-copy teardown.
+// Guard editor mutations when the native workbench commits a file operation or snapshots a queued save.
 // The callback stays in the renderer; it is never part of the wire protocol.
 for (const [relativePath, before, after] of [
+  [
+    'src/vs/workbench/services/textfile/common/textfiles.ts',
+    'export interface ITextFileSaveOptions extends ISaveOptions {',
+    'export interface ITextFileSaveOptions extends ISaveOptions {\n\t/** Prepare host authorization, then check the model synchronously before its write snapshot. */\n\treadonly validateBeforeWrite?: () => Promise<() => void>;',
+  ],
+  [
+    'src/vs/workbench/services/textfile/common/textFileEditorModel.ts',
+    '\t\t\t\ttry {\n\t\t\t\t\tconst stat = await this.textFileService.write(lastResolvedFileStat.resource, resolvedTextFileEditorModel.createSnapshot(), {',
+    '\t\t\t\tif (options.validateBeforeWrite) (await options.validateBeforeWrite())();\n\t\t\t\ttry {\n\t\t\t\t\tconst stat = await this.textFileService.write(lastResolvedFileStat.resource, resolvedTextFileEditorModel.createSnapshot(), {',
+  ],
   [
     'src/vs/editor/browser/services/bulkEditService.ts',
     'export class ResourceFileEdit extends ResourceEdit implements IWorkspaceFileEdit {',

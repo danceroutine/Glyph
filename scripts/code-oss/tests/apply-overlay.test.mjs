@@ -49,6 +49,10 @@ function pristineCheckout() {
       'protected focusCompositeBar(): void {',
       'this.element.dataset.activeComposite = compositeId;',
     ].join('\n'),
+    [upstream('src/vs/workbench/services/textfile/common/textfiles.ts')]:
+      'export interface ITextFileSaveOptions extends ISaveOptions {',
+    [upstream('src/vs/workbench/services/textfile/common/textFileEditorModel.ts')]:
+      '\t\t\t\ttry {\n\t\t\t\t\tconst stat = await this.textFileService.write(lastResolvedFileStat.resource, resolvedTextFileEditorModel.createSnapshot(), {',
     [upstream('src/vs/editor/browser/services/bulkEditService.ts')]:
       'export class ResourceFileEdit extends ResourceEdit implements IWorkspaceFileEdit {',
     [upstream('src/vs/workbench/services/workingCopy/common/workingCopyFileService.ts')]: [

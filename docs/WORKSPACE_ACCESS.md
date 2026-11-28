@@ -42,8 +42,8 @@ on disconnect.
 When the host asks the workbench to edit a file, the editor RPC router holds
 the root, source and destination paths, and window authority for that operation.
 The workbench asks the original port to validate those paths again after native
-file-operation participants finish. Before saving, it also checks that the open
-model and its version still match the edit. Completing the RPC or disconnecting
+file-operation participants finish. The native save queue performs its host check when it is ready to write,
+then verifies the model and version immediately before taking the write snapshot. Completing the RPC or disconnecting
 the port retires its grant, including checks still waiting on the filesystem.
 
 ## Composing a host

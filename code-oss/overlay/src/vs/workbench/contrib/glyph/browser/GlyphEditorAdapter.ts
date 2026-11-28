@@ -849,14 +849,21 @@ export class GlyphEditorAdapter extends Disposable {
     if (current.contentRevision !== expectedRevision)
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
     if (this.textFileService.isDirty(resource)) {
-      await checkMutation();
-      this.assertWorkspaceBinding();
-      if (!this.trustService.isWorkspaceTrusted())
-        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
-      const model = this.modelService.getModel(resource);
-      if (!model || !this.isCurrentContext(model, current))
-        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-      const saved = await this.textFileService.save(resource, { skipSaveParticipants: true });
+      const assertModel = () => {
+        this.assertWorkspaceBinding();
+        if (!this.trustService.isWorkspaceTrusted())
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
+        const model = this.modelService.getModel(resource);
+        if (!model || !this.isCurrentContext(model, current))
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+      };
+      const saved = await this.textFileService.save(resource, {
+        skipSaveParticipants: true,
+        validateBeforeWrite: async () => {
+          await checkMutation();
+          return assertModel;
+        },
+      });
       if (!saved || this.textFileService.isDirty(resource))
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT, {
           reason: 'The edit changed the working copy but could not be saved. Save it before running commands.',
