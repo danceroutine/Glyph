@@ -319,6 +319,9 @@ describe('glyph command line', () => {
       });
       expect(shutdown.aborted).toBe(true);
       expect(cli.active.signal.aborted).toBe(true);
+      const [project] = cli.instances('ProjectAccess');
+      const sources = project!.args[4] as import('#src/workspace/PinnedSourceAuthority.js').PinnedSourceAuthority;
+      await expect(sources.capture(['src/main.ts'])).rejects.toBe(shutdown.reason);
       cli.shutdownOptions()?.shutdown(ShutdownSignal.SIGINT);
       return 0;
     });
