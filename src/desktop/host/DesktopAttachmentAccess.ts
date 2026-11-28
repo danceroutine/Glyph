@@ -1,7 +1,8 @@
+import { relativeWorkspaceSpelling } from '#src/workspace/sameWorkspaceDirectory.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { storedSourcePath } from '#src/workspace/SourcePathAliases.js';
-import { isAbsolute, relative, sep } from 'node:path';
+import { isAbsolute, sep } from 'node:path';
 import { isRecord } from '#src/shared/validators/isRecord.js';
 import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
@@ -146,7 +147,7 @@ export class DesktopAttachmentAccess {
     const operation = store.beginOperation();
     rootChecks?.add(operation.assertCurrent);
     const candidates = this.routes.referenceResources(path);
-    if (!candidates.some(candidate => relative(fileURLToPath(candidate.uri), selected) === ''))
+    if (!candidates.some(candidate => relativeWorkspaceSpelling(fileURLToPath(candidate.uri), selected) === ''))
       throw new Error('The selected attachment does not belong to the declared workspace path.');
     const local = single ? path : parts.join('/');
     let listing: GlyphFolderListing | undefined;
@@ -199,13 +200,13 @@ export class DesktopAttachmentAccess {
           const single = this.roots.length === 1;
           for (const resource of this.routes.referenceResources(single ? '.' : root)) {
             const anchor = fileURLToPath(resource.uri);
-            const name = relative(anchor, physical);
-            if (!name || outside(name)) continue;
+            const name = relativeWorkspaceSpelling(anchor, physical);
+            if (!name) continue;
             if (
               repository &&
               (!isAbsolute(repository) ||
-                outside(relative(anchor, repository)) ||
-                outside(relative(repository, physical)))
+                relativeWorkspaceSpelling(anchor, repository) === undefined ||
+                relativeWorkspaceSpelling(repository, physical) === undefined)
             )
               continue;
             const route = name.split(sep).join('/');
@@ -229,8 +230,4 @@ function historicalListing(attachment: GlyphContextAttachment, visible: GlyphFol
     ),
     truncated: attachment.text.endsWith('\n… Tree truncated at the search limit.'),
   };
-}
-
-function outside(path: string): boolean {
-  return path === '..' || path.startsWith('..' + sep) || isAbsolute(path);
 }

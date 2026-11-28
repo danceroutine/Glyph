@@ -149,17 +149,22 @@ describe('Native instruction discovery', () => {
     expect(diskList).not.toHaveBeenCalled();
   });
 
-  it('retains the turn-start bytes of healthy nested guidance when another source disappears during enrollment', async () => {
+  it('enrolls a healthy sibling in one native launch when 256 nested sources disappear, and checks them strictly on use', async () => {
     const fixture = await instructionFixture();
     const selected = 'active/AGENTS.md';
-    const missing = 'unrelated/AGENTS.md';
+    const missing = Array.from({ length: 256 }, (_, index) => `unrelated/${index}/AGENTS.md`);
     await fixture.write(selected, 'Original guidance');
-    await fixture.write(missing, 'Unrelated guidance');
-    const metadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
+    await Promise.all(missing.map(path => fixture.write(path, 'Unrelated guidance')));
+    const inspector = join(fixture.root, 'inspector');
+    await symlink(resolve('target/release/glyph-context-index'), join(fixture.root, 'native'));
+    await writeFile(inspector, '#!/bin/sh\nprintf "%s\\n" "$1" >> "$0.log"\nexec "${0%/*}/native" "$@"\n', {
+      mode: 0o700,
+    });
+    const metadata = new NativeFilesystemMetadata(inspector);
     const policy = new WorkspaceAccessPolicy();
     const authority = new NativePinnedSourceAuthority(metadata, policy, () => {});
     const provider = new AgentsMdInstructionProvider(
-      fixtureWorkspace(fixture.root, { accessPolicy: policy, physicalAccess: metadata }),
+      fixtureWorkspace(fixture.root, { accessPolicy: policy }),
       { authority, uriForPath: path => pathToFileURL(join(fixture.root, path)).href },
       fixture.list,
     );
@@ -167,7 +172,8 @@ describe('Native instruction discovery', () => {
       {
         discover: async signal => {
           const sources = await provider.discover(signal);
-          await rm(join(fixture.root, missing));
+          expect(sources.filter(source => source.status === AgentInstructionSourceStatus.ACTIVE)).toHaveLength(257);
+          await rename(join(fixture.root, 'unrelated'), join(fixture.root, 'moved'));
           return sources;
         },
       },
@@ -175,12 +181,13 @@ describe('Native instruction discovery', () => {
     const turns = new TurnContextCoordinator(catalog);
     const turn = await turns.beginTurn({ turnId: 'active', attachmentPaths: [] });
     expect(turn.initialEnvelope().sources).toEqual([]);
+    expect(await readFile(inspector + '.log', 'utf8')).toBe('--source-origins\n');
     await fixture.write('active/new-content', 'Edited after enrollment');
     await rename(join(fixture.root, 'active/new-content'), join(fixture.root, selected));
     await expect(turns.disclosePaths('active', ['active/example.ts'])).resolves.toMatchObject({
       sources: [{ path: selected, content: 'Original guidance' }],
     });
-    await expect(turns.disclosePaths('active', ['unrelated/example.ts'])).rejects.toThrow();
+    await expect(turns.disclosePaths('active', ['unrelated/0/example.ts'])).rejects.toThrow();
     expect(turn.snapshot().sources.map(source => source.path)).toEqual([selected]);
   });
 

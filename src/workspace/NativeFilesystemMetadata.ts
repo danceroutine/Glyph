@@ -6,6 +6,10 @@ import type { FileHandle } from 'node:fs/promises';
 import type { WorkspacePathAccess } from './WorkspacePathAccess.ts';
 import type { FilesystemMetadata } from './FilesystemMetadata.ts';
 
+const sourceOrigin = z
+  .object({ origin: z.string().regex(/^[a-f0-9]{64}$/u), identity: z.string().regex(/^\d+:\d+$/u) })
+  .strict();
+
 /**
  * Bridges host operations to the native physical identity and metadata checks.
  * Workspace path admission can bind a route to the caller's open handle. File
@@ -17,6 +21,24 @@ export class NativeFilesystemMetadata implements FilesystemMetadata, WorkspacePa
 
   /** Inspect all source routes in a single native request, using the caller's operation reservations. */
   async sourceOrigins(paths: readonly string[], privatePaths: readonly string[], signal?: AbortSignal) {
+    return z
+      .array(sourceOrigin)
+      .length(paths.length)
+      .parse(await this.inspectSources(paths, privatePaths, signal));
+  }
+
+  /** Enroll readable catalog files together, preserving the positions of unavailable siblings. */
+  async availableSourceOrigins(paths: readonly string[], privatePaths: readonly string[], signal?: AbortSignal) {
+    const output = await this.inspectSources(paths, privatePaths, signal, true);
+    return z.array(sourceOrigin.nullable()).length(paths.length).parse(output);
+  }
+
+  private async inspectSources(
+    paths: readonly string[],
+    privatePaths: readonly string[],
+    signal?: AbortSignal,
+    allowUnavailable = false,
+  ): Promise<unknown> {
     signal?.throwIfAborted();
     if (paths.length === 0) return [];
     const output = await new Promise<string>((resolve, reject) => {
@@ -30,14 +52,9 @@ export class NativeFilesystemMetadata implements FilesystemMetadata, WorkspacePa
         },
       );
       child.stdin!.on('error', reject);
-      child.stdin!.end(JSON.stringify({ paths, privatePaths }));
+      child.stdin!.end(JSON.stringify({ paths, privatePaths, ...(allowUnavailable && { allowUnavailable }) }));
     });
-    return z
-      .array(
-        z.object({ origin: z.string().regex(/^[a-f0-9]{64}$/u), identity: z.string().regex(/^\d+:\d+$/u) }).strict(),
-      )
-      .length(paths.length)
-      .parse(JSON.parse(output));
+    return JSON.parse(output);
   }
 
   async assertWorkspacePath(

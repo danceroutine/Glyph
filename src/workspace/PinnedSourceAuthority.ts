@@ -13,19 +13,28 @@ export interface PinnedSource {
 export interface PinnedSourceAuthority {
   /** Enroll the paths that contributed bytes. The reader compares each identity with the handle it read. */
   capture(paths: readonly string[], signal?: AbortSignal): Promise<readonly PinnedSource[]>;
+  /** Inspect optional catalog entries in one batch, retaining an empty slot for each unavailable file. */
+  capture(
+    paths: readonly string[],
+    signal: AbortSignal | undefined,
+    availability: 'available',
+  ): Promise<readonly (PinnedSource | null)[]>;
   /** Call the returned guard synchronously at transport handoff. Obtain fresh authorization for each disclosure. */
   authorize(pins: readonly PinnedSource[], signal?: AbortSignal): Promise<() => void>;
 }
 
 /** Native filesystem metadata for a batch of known file locations under one reservation snapshot. */
 export interface SourceOriginReader {
-  /** Recheck the contributing attached directories after native inspection and at final disclosure. */
-  beginSourceAccess?(paths: readonly string[]): () => void;
   sourceOrigins(
     paths: readonly string[],
     privatePaths: readonly string[],
     signal?: AbortSignal,
   ): Promise<readonly Omit<PinnedSource, 'path'>[]>;
+  availableSourceOrigins(
+    paths: readonly string[],
+    privatePaths: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<readonly (Omit<PinnedSource, 'path'> | null)[]>;
 }
 
 /**
@@ -39,11 +48,21 @@ export class NativePinnedSourceAuthority implements PinnedSourceAuthority {
     private readonly metadata: SourceOriginReader,
     private readonly policy: WorkspaceAccessPolicy,
     private readonly assertTrusted: () => void,
+    private readonly selectRoute: (path: string) => { path: string; assertCurrent?: () => void } = path => ({ path }),
   ) {}
 
-  async capture(paths: readonly string[], signal?: AbortSignal): Promise<readonly PinnedSource[]> {
-    const { sources } = await this.inspect(paths, signal);
-    return sources;
+  capture(paths: readonly string[], signal?: AbortSignal): Promise<readonly PinnedSource[]>;
+  capture(
+    paths: readonly string[],
+    signal: AbortSignal | undefined,
+    availability: 'available',
+  ): Promise<readonly (PinnedSource | null)[]>;
+  async capture(
+    paths: readonly string[],
+    signal?: AbortSignal,
+    availability?: 'available',
+  ): Promise<readonly (PinnedSource | null)[]> {
+    return (await this.inspect(paths, signal, availability)).sources;
   }
 
   async authorize(pins: readonly PinnedSource[], signal?: AbortSignal): Promise<() => void> {
@@ -51,24 +70,49 @@ export class NativePinnedSourceAuthority implements PinnedSourceAuthority {
       pins.map(pin => pin.path),
       signal,
     );
-    if (sources.some((source, index) => source.origin !== pins[index]!.origin))
+    if (sources.some((source, index) => source?.origin !== pins[index]!.origin))
       throw new Error('The instruction source location changed.');
     return assertCurrent;
   }
 
-  private async inspect(paths: readonly string[], signal?: AbortSignal) {
+  private async inspect(paths: readonly string[], signal?: AbortSignal, availability?: 'available') {
     const operation = this.policy.beginOperation();
-    const checkRoots = this.metadata.beginSourceAccess?.(paths);
+    // Strict capture and disclosure propagate route failures. Optional enrollment can retain the other attachments.
+    function onRoute<T>(inspect: () => T): T | null {
+      if (!availability) return inspect();
+      try {
+        return inspect();
+      } catch {
+        return null;
+      }
+    }
+    const routes = paths.map(path => onRoute(() => this.selectRoute(path)));
+    const roots = new Set(routes.flatMap(route => route?.assertCurrent ?? []));
+    const unavailableRoots = new Set<() => void>();
     const assertCurrent = () => {
       operation.assertCurrent();
-      checkRoots?.();
+      for (const check of roots) {
+        if (onRoute(check) === null) unavailableRoots.add(check);
+      }
       this.assertTrusted();
       signal?.throwIfAborted();
     };
     assertCurrent();
-    const inspected = await this.metadata.sourceOrigins(paths, operation.privatePaths, signal);
+    const admitted = routes.flatMap((route, index) =>
+      route && !(route.assertCurrent && unavailableRoots.has(route.assertCurrent)) ? [{ route, index }] : [],
+    );
+    const selected = admitted.map(({ route }) => route.path);
+    const inspected = availability
+      ? await this.metadata.availableSourceOrigins(selected, operation.privatePaths, signal)
+      : await this.metadata.sourceOrigins(selected, operation.privatePaths, signal);
     assertCurrent();
-    if (inspected.length !== paths.length) throw new Error('Incomplete instruction source inspection.');
-    return { sources: paths.map((path, i) => ({ path, ...inspected[i]! })), assertCurrent };
+    if (inspected.length !== selected.length) throw new Error('Incomplete instruction source inspection.');
+    const sources = new Array<PinnedSource | null>(paths.length).fill(null);
+    for (const [i, { route, index }] of admitted.entries()) {
+      const origin = inspected[i];
+      if (origin && !(route.assertCurrent && unavailableRoots.has(route.assertCurrent)))
+        sources[index] = { path: paths[index]!, ...origin };
+    }
+    return { sources, assertCurrent };
   }
 }

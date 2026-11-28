@@ -56,7 +56,7 @@ describe(TurnContextCoordinator, () => {
     const { coordinator, capture, authorize, denied, paths, files } = fixture();
     denied.add(paths[1]!);
     const session = await coordinator.beginTurn({ turnId: 't', attachmentPaths: [] });
-    expect(capture.mock.calls).toEqual([[paths, undefined]]);
+    expect(capture.mock.calls).toEqual([[paths, undefined, 'available']]);
     expect(session.initialEnvelope().candidates?.[0]?.id).toBe('rule');
     expect(authorize.mock.calls[0]![0].map(pin => pin.path)).toEqual([paths[0]]);
     await expect(coordinator.activateRule('t', 'rule')).rejects.toThrow('Source unavailable');
@@ -176,17 +176,17 @@ describe(TurnContextCoordinator, () => {
     );
   });
 
-  it('stops enrollment retries when the turn is cancelled during a partial capture', async () => {
+  it('discards a successful enrollment response when the turn is cancelled while it is pending', async () => {
     const { capture, coordinator, files } = fixture();
     const controller = new AbortController();
-    capture.mockRejectedValueOnce(new Error('A file is unavailable')).mockImplementationOnce(async paths => {
+    capture.mockImplementationOnce(async paths => {
       controller.abort(new Error('Turn cancelled'));
       return files.filter(file => paths.includes(file.path));
     });
     await expect(coordinator.beginTurn({ turnId: 't', attachmentPaths: [] }, controller.signal)).rejects.toThrow(
       'Turn cancelled',
     );
-    expect(capture).toHaveBeenCalledTimes(2);
+    expect(capture).toHaveBeenCalledTimes(1);
     expect(coordinator.snapshot('t')).toBeUndefined();
   });
 

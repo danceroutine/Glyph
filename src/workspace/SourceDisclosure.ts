@@ -57,37 +57,36 @@ async function captureReads(
   purpose: 'enroll' | 'disclose',
   signal?: AbortSignal,
 ) {
-  const byUri = new Map<string, CatalogRead[]>();
+  signal?.throwIfAborted();
+  const byPath = new Map<string, CatalogRead[]>();
   for (const receipt of reads) {
-    const uri = receipt.read.uri;
-    const group = byUri.get(uri);
-    if (group) group.push(receipt);
-    else byUri.set(uri, [receipt]);
-  }
-  async function capture(uris: readonly string[]): Promise<void> {
-    signal?.throwIfAborted();
+    let path;
     try {
-      const files = await authority.capture(
-        uris.map(uri => fileURLToPath(uri)),
-        signal,
-      );
-      if (files.length !== uris.length) throw new Error('Incomplete instruction source inspection.');
-      for (const [i, uri] of uris.entries()) {
-        for (const receipt of byUri.get(uri)!) receipt.file ??= files[i]!;
-      }
+      path = fileURLToPath(receipt.read.uri);
     } catch (error) {
-      signal?.throwIfAborted();
       if (purpose === 'disclose') throw error;
-      // Split only failing batches of distinct paths. Sequential retries keep one inspection
-      // per authority in flight even when many catalog entries have disappeared.
-      if (uris.length > 1) {
-        const middle = Math.floor(uris.length / 2);
-        await capture(uris.slice(0, middle));
-        await capture(uris.slice(middle));
-      }
+      continue;
     }
+    const group = byPath.get(path);
+    if (group) group.push(receipt);
+    else byPath.set(path, [receipt]);
   }
-  await capture([...byUri.keys()]);
+  const paths = [...byPath.keys()];
+  try {
+    const files =
+      purpose === 'enroll'
+        ? await authority.capture(paths, signal, 'available')
+        : await authority.capture(paths, signal);
+    if (files.length !== paths.length) throw new Error('Incomplete instruction source inspection.');
+    for (const [i, receipts] of [...byPath.values()].entries()) {
+      const file = files[i];
+      if (!file) continue;
+      for (const receipt of receipts) receipt.file ??= file;
+    }
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (purpose === 'disclose') throw error;
+  }
 }
 
 /** Recheck live trust, private paths and physical ancestry in batches immediately before releasing

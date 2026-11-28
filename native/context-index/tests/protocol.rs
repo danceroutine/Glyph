@@ -282,6 +282,39 @@ fn checks_bound_private_and_ordinary_trees_through_the_cli() {
 
 #[cfg(unix)]
 #[test]
+fn reports_individual_source_availability_only_on_request() {
+    let project = tempfile::tempdir().unwrap();
+    let root = project.path();
+    let file = root.join("available.md");
+    let private = root.join("reserved.md");
+    fs::write(&file, "source").unwrap();
+    fs::write(&private, "reserved").unwrap();
+    let request = serde_json::json!({
+        "paths": [root.join("missing"), &file, &private, root, &file],
+        "privatePaths": [&private],
+    });
+    let inspect = |request: &Value| {
+        run_with_input(&request.to_string(), |cmd| {
+            cmd.arg("--source-origins");
+        })
+    };
+    let strict = inspect(&request);
+    assert!(!strict.status.success());
+    assert!(strict.stdout.is_empty());
+
+    let mut available = request;
+    available["allowUnavailable"] = Value::Bool(true);
+    let result = inspect(&available);
+    assert!(result.status.success());
+    let origins: Vec<Value> = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(origins.len(), 5);
+    assert!(origins[0].is_null() && origins[2].is_null() && origins[3].is_null());
+    assert!(origins[1]["identity"].is_string());
+    assert_eq!(origins[1], origins[4]);
+}
+
+#[cfg(unix)]
+#[test]
 fn pins_source_locations_across_regular_saves_and_checks_current_reservations() {
     use std::os::unix::fs::symlink;
     let project = tempfile::tempdir().unwrap();
