@@ -1,9 +1,13 @@
 import { fixtureWorkspace, fixtureIndex } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { pathToFileURL } from 'node:url';
+import { NativePinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
@@ -143,6 +147,41 @@ describe('Native instruction discovery', () => {
       .toEqual(['~/.glyph/rules/existing.mdc']);
     expect(refresh).toHaveBeenCalledTimes(3);
     expect(diskList).not.toHaveBeenCalled();
+  });
+
+  it('retains the turn-start bytes of healthy nested guidance when another source disappears during enrollment', async () => {
+    const fixture = await instructionFixture();
+    const selected = 'active/AGENTS.md';
+    const missing = 'unrelated/AGENTS.md';
+    await fixture.write(selected, 'Original guidance');
+    await fixture.write(missing, 'Unrelated guidance');
+    const metadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
+    const policy = new WorkspaceAccessPolicy();
+    const authority = new NativePinnedSourceAuthority(metadata, policy, () => {});
+    const provider = new AgentsMdInstructionProvider(
+      fixtureWorkspace(fixture.root, { accessPolicy: policy, physicalAccess: metadata }),
+      { authority, uriForPath: path => pathToFileURL(join(fixture.root, path)).href },
+      fixture.list,
+    );
+    const catalog = new AgentInstructionCatalog([
+      {
+        discover: async signal => {
+          const sources = await provider.discover(signal);
+          await rm(join(fixture.root, missing));
+          return sources;
+        },
+      },
+    ]);
+    const turns = new TurnContextCoordinator(catalog);
+    const turn = await turns.beginTurn({ turnId: 'active', attachmentPaths: [] });
+    expect(turn.initialEnvelope().sources).toEqual([]);
+    await fixture.write('active/new-content', 'Edited after enrollment');
+    await rename(join(fixture.root, 'active/new-content'), join(fixture.root, selected));
+    await expect(turns.disclosePaths('active', ['active/example.ts'])).resolves.toMatchObject({
+      sources: [{ path: selected, content: 'Original guidance' }],
+    });
+    await expect(turns.disclosePaths('active', ['unrelated/example.ts'])).rejects.toThrow();
+    expect(turn.snapshot().sources.map(source => source.path)).toEqual([selected]);
   });
 
   it('discovers root and nested instruction families through the shared index and enforces its exclusions', async () => {
