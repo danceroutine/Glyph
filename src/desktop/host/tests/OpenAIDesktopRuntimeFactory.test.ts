@@ -636,7 +636,11 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await saved.dispose();
     }
     const app = join(dirname(original), 'app');
-    if (app !== original) await renameDirectory(original, app);
+    const indexedFolder = app === original ? 'src' : 'SRC';
+    if (app !== original) {
+      await renameDirectory(join(original, 'src'), join(original, indexedFolder));
+      await renameDirectory(original, app);
+    }
     test.initialize.mockRestore();
     vi.spyOn(RustWorkspacePathIndex.prototype, 'initialize').mockResolvedValue({
       root: app,
@@ -645,8 +649,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       truncated: false,
       durationMilliseconds: 0,
     });
-    vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({
-      files: ['src/original.ts', 'src/new.ts'],
+    const glob = vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({
+      files: [indexedFolder + '/original.ts', indexedFolder + '/new.ts'],
       truncated: false,
     });
     vi.spyOn(OpenAIBackend.prototype, 'initialize').mockResolvedValue();
@@ -711,6 +715,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       { path: 'output', uri: 'glyph-terminal:output', text: 'Run finished' },
     ]);
     expect(composer.snapshot.queueError).toBeUndefined();
+    expect(glob).toHaveBeenCalledWith('**/*', expect.objectContaining({ targetDirectory: indexedFolder }));
     expect(send).toHaveBeenCalledOnce();
     expect(composer.snapshot.queued).toEqual([]);
   });
