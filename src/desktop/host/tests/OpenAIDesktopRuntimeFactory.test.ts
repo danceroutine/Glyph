@@ -1,4 +1,6 @@
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+import { createHash } from 'node:crypto';
+import { getGlyphWorkspaceRootId } from '#src/desktop/protocol/connection/getGlyphWorkspaceRootId.js';
 import { Deferred } from '#src/shared/Deferred.js';
 import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { pathToFileURL } from 'node:url';
@@ -511,6 +513,153 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       vi.unstubAllEnvs();
       await rm(directory, { recursive: true, force: true });
     }
+  });
+  it('recovers a persisted review across duplicate-root route upgrades only for its original physical root set', async () => {
+    const test = await factoryFixture();
+    const left = await test.folder('first/lib');
+    const right = await test.folder('second/lib');
+    const moved = await test.folder('other/lib');
+    const stable = await test.folder('docs');
+    const roots = [left, right, stable].map(path => ({ name: basename(path), uri: 'file://' + path, path }));
+    const legacyRoots = roots.map(root => ({
+      name: root.name === 'lib' ? 'root@' + encodeURIComponent(root.uri) : root.name,
+      path: root.path,
+    }));
+    const identity = ProjectContextIdentity.create(ProjectContextKind.WORKSPACE, 'file', 'profile:workspace');
+    const scope = ProjectContextIdentity.createMutationScope(ProjectContextKind.WORKSPACE, 'file', legacyRoots);
+    const directory = join(
+      process.env.GLYPH_CONFIG_DIR!,
+      'projects',
+      identity,
+      'mutation-scopes',
+      createHash('sha256').update(scope).digest('hex'),
+    );
+    await mkdir(directory, { recursive: true });
+    const sourcePath = legacyRoots[0]!.name + '/readme.md';
+    const targetPath = legacyRoots[0]!.name + '/created/readme.md';
+    const text = 'original ' + sourcePath;
+    const snapshot = {
+      path: sourcePath,
+      text,
+      byteOrderMark: false,
+      byteLength: Buffer.byteLength(text),
+      mode: 420,
+      revision: 'captured',
+      identity: 'file-original',
+    };
+    const proposed = { ...snapshot, path: targetPath, text: text.replace('original', 'Original'), revision: 'updated' };
+    const item = {
+      id: 'item',
+      fileId: 'file',
+      kind: 'TEXT',
+      sourceStart: 0,
+      sourceEnd: 1,
+      removedText: 'o',
+      insertedText: 'O',
+      decision: 'PENDING',
+      appliedText: { state: 'applied', before: snapshot, after: proposed, revertTarget: null },
+    };
+    const file = {
+      id: 'file',
+      operation: 'RENAME',
+      sourcePath,
+      targetPath,
+      base: snapshot,
+      proposed,
+      items: [
+        {
+          ...item,
+          id: 'rename',
+          kind: 'RENAME',
+          removedText: '',
+          insertedText: '',
+          sourceEnd: 0,
+          appliedText: undefined,
+        },
+        item,
+      ],
+      currentPath: targetPath,
+      current: proposed,
+      currentRevision: proposed.revision,
+      createdDirectories: [legacyRoots[0]!.name + '/created'],
+      applicability: 'READY',
+      automatic: { itemId: 'rename', before: snapshot, state: 'applied', appliedRevision: 'captured' },
+    };
+    await writeFile(
+      join(directory, 'active-proposal-review.json'),
+      JSON.stringify({
+        schemaVersion: 3,
+        workspaceIdentity: scope,
+        proposals: [
+          {
+            schemaVersion: 1,
+            id: 'review',
+            source: 'structured',
+            createdAt: '2026-10-12T00:00:00Z',
+            files: [
+              file,
+              {
+                id: 'create',
+                operation: 'CREATE',
+                sourcePath: 'docs/glyph.md',
+                targetPath: 'docs/glyph.md',
+                base: null,
+                proposed: { ...snapshot, path: 'docs/glyph.md' },
+                current: null,
+                currentPath: 'docs/glyph.md',
+                currentRevision: null,
+                applicability: 'READY',
+                items: [],
+              },
+            ],
+            acknowledgedResultIds: [],
+          },
+        ],
+      }),
+    );
+    let records: unknown[] = [];
+    test.initialize.mockImplementation(async function (this: GlyphService) {
+      await this.proposalReviews!.initialize({ reconcileWorkspace: false });
+      records = this.proposalReviews!.activeReviews.map(review => review.toRecord());
+    });
+    await test.create([left, moved, stable]);
+    expect(records).toEqual([]);
+    await test.create([left, right, stable]);
+    const currentRoot = getGlyphWorkspaceRootId(roots[0]!, roots);
+    const currentLeft = currentRoot + '/readme.md';
+    const updatedBase = { ...snapshot, path: currentLeft };
+    const updatedTarget = { ...proposed, path: currentRoot + '/created/readme.md' };
+    expect(records).toMatchObject([
+      {
+        id: 'review',
+        files: [
+          {
+            sourcePath: currentLeft,
+            targetPath: updatedTarget.path,
+            currentPath: updatedTarget.path,
+            base: updatedBase,
+            current: updatedTarget,
+            proposed: updatedTarget,
+            createdDirectories: [currentRoot + '/created'],
+            automatic: { before: updatedBase },
+            items: [
+              { id: 'rename' },
+              { appliedText: { before: updatedBase, after: updatedTarget, revertTarget: null } },
+            ],
+          },
+          { sourcePath: 'docs/glyph.md', currentPath: 'docs/glyph.md', proposed: { path: 'docs/glyph.md' } },
+        ],
+      },
+    ]);
+    const currentRoots = roots.map(root => ({ name: getGlyphWorkspaceRootId(root, roots), path: root.path }));
+    const currentScope = ProjectContextIdentity.createMutationScope(ProjectContextKind.WORKSPACE, 'file', currentRoots);
+    const store = new FileProposalReviewStore(join(process.env.GLYPH_CONFIG_DIR!, 'projects', identity), {
+      mutationScope: currentScope,
+    });
+    expect((await store.load(currentScope))[0]?.files[0]?.sourcePath).toBe(currentLeft);
+    await store.clear();
+    await test.create([left, right, stable]);
+    expect(records).toEqual([]);
   });
   it('initializes distinct roots with duplicate display names instead of rejecting the workspace', async () => {
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-routing-')));

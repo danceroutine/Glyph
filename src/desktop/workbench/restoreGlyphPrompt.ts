@@ -13,7 +13,7 @@ type Reference = Pick<ChatReferenceSpan, 'kind' | 'sourceId' | 'label' | 'revisi
 export function restoreGlyphPrompt(
   draft: {
     readonly text: string;
-    readonly attachments: readonly GlyphContextAttachment[];
+    readonly attachments: readonly (GlyphContextAttachment & { readonly previousPath?: string })[];
     readonly options?: ChatTurnOptions;
   },
   resolveLegacy: (
@@ -23,10 +23,17 @@ export function restoreGlyphPrompt(
   createId: () => string,
 ): GlyphPromptDocument {
   const { attachmentSpans, referenceSpans = [], manualRuleIds = [], ...options } = draft.options ?? {};
-  const mentions: GlyphInlineMention<GlyphContextAttachment>[] = draft.attachments.map((capture, i) => {
-    const attachment = { ...capture, id: capture.id ?? createId() };
-    return { attachment, mention: toGlyphPromptText([{ type: 'attachment', attachment }]), span: attachmentSpans?.[i] };
-  });
+  const mentions: GlyphInlineMention<GlyphContextAttachment>[] = draft.attachments.map(
+    ({ previousPath, ...capture }, i) => {
+      const attachment = { ...capture, id: capture.id ?? createId() };
+      const saved = previousPath ? { ...attachment, path: previousPath } : attachment;
+      return {
+        attachment,
+        mention: toGlyphPromptText([{ type: 'attachment', attachment: saved }]),
+        span: attachmentSpans?.[i],
+      };
+    },
+  );
   const selected = [...new Set(manualRuleIds)].map(sourceId => ({ kind: 'rule' as const, sourceId }));
   const exact = referenceSpans.filter(ref =>
     selected.some(choice => choice.kind === ref.kind && choice.sourceId === ref.sourceId),

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { EditError } from '#src/editing/errors/EditError.js';
@@ -121,21 +121,79 @@ const checkpointSchema = z
   })
   .strict();
 
+function scopedCheckpointPath(directory: string, identity: string): string {
+  return join(
+    directory,
+    'mutation-scopes',
+    createHash('sha256').update(identity).digest('hex'),
+    'active-proposal-review.json',
+  );
+}
+
+async function readCheckpoint(path: string) {
+  try {
+    const checkpoint = checkpointSchema.safeParse(JSON.parse(await readFile(path, 'utf8')));
+    if (!checkpoint.success) throw new Error('Unsupported proposal-review checkpoint schema.');
+    return checkpoint.data;
+  } catch (error) {
+    if (errorCodeOf(error) === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+type SavedProposal = z.output<typeof editProposalSchema>;
+type Snapshot = z.output<typeof snapshotSchema>;
+
+/** Keep reviewed bytes, object identities and operation IDs while translating the stored workspace routes. */
+function restoreProposalPaths(proposal: SavedProposal, route: (path: string) => string): EditProposalRecord {
+  const snapshot = <T extends Snapshot | null>(value: T): T =>
+    value === null ? value : { ...value, path: route(value.path) };
+  return {
+    ...proposal,
+    files: proposal.files.map(file => ({
+      ...file,
+      sourcePath: route(file.sourcePath),
+      targetPath: route(file.targetPath),
+      currentPath: route(file.currentPath),
+      createdDirectories: file.createdDirectories.map(route),
+      base: snapshot(file.base),
+      proposed: snapshot(file.proposed),
+      current: snapshot(file.current),
+      ...(file.automatic && { automatic: { ...file.automatic, before: snapshot(file.automatic.before) } }),
+      items: file.items.map(item => ({
+        ...item,
+        ...(item.appliedText && {
+          appliedText: {
+            ...item.appliedText,
+            before: snapshot(item.appliedText.before),
+            after: snapshot(item.appliedText.after),
+            revertTarget: snapshot(item.appliedText.revertTarget),
+          },
+        }),
+      })),
+    })),
+  };
+}
+
 /** Filesystem-backed, atomic checkpoint storage for active proposal reviews. */
 export class FileProposalReviewStore implements ProposalReviewStore {
   private readonly path: string;
+  private readonly previousPath?: string;
   private readonly legacyPath: string | undefined;
 
   constructor(
     directory: string,
-    private readonly options: { readonly mutationScope?: string } = {},
+    private readonly options: {
+      readonly mutationScope?: string;
+      readonly previousScope?: { readonly identity: string; readonly restorePath: (path: string) => string };
+    } = {},
   ) {
     const legacy = join(directory, 'active-proposal-review.json');
     if (options.mutationScope !== undefined) {
       // A saved workspace keeps its container id when folders change. Reviews
       // instead belong to the exact roots against which their paths were planned.
-      const scope = createHash('sha256').update(options.mutationScope).digest('hex');
-      this.path = join(directory, 'mutation-scopes', scope, 'active-proposal-review.json');
+      this.path = scopedCheckpointPath(directory, options.mutationScope);
+      if (options.previousScope) this.previousPath = scopedCheckpointPath(directory, options.previousScope.identity);
       this.legacyPath = legacy;
     } else {
       this.path = legacy;
@@ -145,29 +203,35 @@ export class FileProposalReviewStore implements ProposalReviewStore {
   async load(workspaceIdentity: string): Promise<EditProposal[]> {
     try {
       this.assertScope(workspaceIdentity);
-      let text: string;
-      let importingLegacy = false;
-      try {
-        text = await readFile(this.path, 'utf8');
-      } catch (error) {
-        if (errorCodeOf(error) !== 'ENOENT' || this.legacyPath === undefined || this.legacyPath === '') throw error;
-        text = await readFile(this.legacyPath, 'utf8');
-        importingLegacy = true;
+      let checkpoint = await readCheckpoint(this.path);
+      let expected = workspaceIdentity;
+      const importing = checkpoint === undefined;
+      const previous = this.options.previousScope;
+      if (!checkpoint && this.previousPath && previous) {
+        checkpoint = await readCheckpoint(this.previousPath);
+        expected = previous.identity;
       }
-      const value: unknown = JSON.parse(text);
-      const checkpoint = checkpointSchema.safeParse(value);
-      if (!checkpoint.success) throw new Error('Unsupported proposal-review checkpoint schema.');
-      if (checkpoint.data.workspaceIdentity !== workspaceIdentity) {
-        // Preserve the old scope's checkpoint; never reinterpret its paths in
-        // the new roots or make an unrelated scope unavailable because it exists.
-        if (importingLegacy) return [];
+      if (!checkpoint && this.legacyPath) {
+        checkpoint = await readCheckpoint(this.legacyPath);
+        if (
+          !checkpoint ||
+          (checkpoint.workspaceIdentity !== workspaceIdentity && checkpoint.workspaceIdentity !== previous?.identity)
+        )
+          return [];
+        expected = checkpoint.workspaceIdentity;
+      }
+      if (!checkpoint) return [];
+      if (checkpoint.workspaceIdentity !== expected)
         throw new Error('Proposal-review checkpoint belongs to a different workspace.');
-      }
-      const proposals = checkpoint.data.proposals.map(proposalRecord => EditProposal.from(proposalRecord));
-      if (importingLegacy) await this.save(proposals, workspaceIdentity);
+      const proposals = checkpoint.proposals.map(record =>
+        EditProposal.from(
+          previous && expected === previous.identity ? restoreProposalPaths(record, previous.restorePath) : record,
+        ),
+      );
+      if (importing && !(await this.write(proposals, workspaceIdentity, true)))
+        return await this.load(workspaceIdentity);
       return proposals;
     } catch (error) {
-      if (errorCodeOf(error) === 'ENOENT') return [];
       throw new EditError(
         EditFailureReason.PERSISTENCE,
         'Could not load the active proposal reviews.',
@@ -178,32 +242,7 @@ export class FileProposalReviewStore implements ProposalReviewStore {
   }
 
   async save(proposals: readonly EditProposal[], workspaceIdentity: string): Promise<void> {
-    this.assertScope(workspaceIdentity);
-    if (proposals.length === 0 && this.options.mutationScope === undefined) return this.clear();
-    const temporary = `${this.path}.${randomUUID()}.tmp`;
-    const checkpoint: ProposalReviewCheckpoint = {
-      schemaVersion: 3,
-      workspaceIdentity,
-      proposals: proposals.map(proposal => proposal.toRecord()),
-    };
-    try {
-      await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-      await chmod(dirname(this.path), 0o700);
-      await writeFile(temporary, JSON.stringify(checkpoint, null, 2), { flag: 'wx', mode: 0o600 });
-      await chmod(temporary, 0o600);
-      await rename(temporary, this.path);
-    } catch (error) {
-      throw new EditError(
-        EditFailureReason.PERSISTENCE,
-        'Could not persist the active proposal reviews.',
-        {},
-        { cause: error },
-      );
-    } finally {
-      await unlink(temporary).catch(error => {
-        if (errorCodeOf(error) !== 'ENOENT') throw error;
-      });
-    }
+    await this.write(proposals, workspaceIdentity, false);
   }
 
   async clear(): Promise<void> {
@@ -221,6 +260,51 @@ export class FileProposalReviewStore implements ProposalReviewStore {
           { cause: error },
         );
       }
+    }
+  }
+
+  private async write(
+    proposals: readonly EditProposal[],
+    workspaceIdentity: string,
+    createOnly: boolean,
+  ): Promise<boolean> {
+    this.assertScope(workspaceIdentity);
+    if (proposals.length === 0 && this.options.mutationScope === undefined) {
+      await this.clear();
+      return true;
+    }
+    const temporary = `${this.path}.${randomUUID()}.tmp`;
+    const checkpoint: ProposalReviewCheckpoint = {
+      schemaVersion: 3,
+      workspaceIdentity,
+      proposals: proposals.map(proposal => proposal.toRecord()),
+    };
+    try {
+      await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+      await chmod(dirname(this.path), 0o700);
+      await writeFile(temporary, JSON.stringify(checkpoint, null, 2), { flag: 'wx', mode: 0o600 });
+      await chmod(temporary, 0o600);
+      if (createOnly) {
+        try {
+          // A concurrent save or clear of the current scope wins over the historical checkpoint.
+          await link(temporary, this.path);
+        } catch (error) {
+          if (errorCodeOf(error) === 'EEXIST') return false;
+          throw error;
+        }
+      } else await rename(temporary, this.path);
+      return true;
+    } catch (error) {
+      throw new EditError(
+        EditFailureReason.PERSISTENCE,
+        'Could not persist the active proposal reviews.',
+        {},
+        { cause: error },
+      );
+    } finally {
+      await unlink(temporary).catch(error => {
+        if (errorCodeOf(error) !== 'ENOENT') throw error;
+      });
     }
   }
 

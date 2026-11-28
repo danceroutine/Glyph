@@ -8,6 +8,7 @@ import type { GlyphWorkspaceRoot } from './GlyphWorkspaceRoot.ts';
 export function getGlyphWorkspaceRootId(
   root: Pick<GlyphWorkspaceRoot, 'name' | 'uri'>,
   roots: readonly Pick<GlyphWorkspaceRoot, 'name' | 'uri'>[],
+  format: 'opaque' | 'legacy-uri' = 'opaque',
 ): string {
   const unique = roots.filter(candidate => candidate.name.toLowerCase() === root.name.toLowerCase()).length === 1;
   // Spaces and Unicode were valid mutation-scope names before routing IDs were
@@ -22,6 +23,7 @@ export function getGlyphWorkspaceRootId(
     return root.name;
   let namespace = 'root@';
   while (roots.some(candidate => candidate.name.toLowerCase().startsWith(namespace))) namespace += '@';
+  if (format === 'legacy-uri') return namespace + encodeURIComponent(root.uri);
   // FNV-1a over UTF-8 is synchronous in both the renderer and utility host. The
   // digest is a routing identity, never an authorization or integrity token.
   let hash = 0x6c62272e07bb014262b821756295c58dn;
