@@ -2,7 +2,7 @@ import { relativeWorkspaceSpelling } from '#src/workspace/sameWorkspaceDirectory
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { storedSourcePath } from '#src/workspace/SourcePathAliases.js';
-import { isAbsolute, sep } from 'node:path';
+import { isAbsolute, relative, sep } from 'node:path';
 import { isRecord } from '#src/shared/validators/isRecord.js';
 import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
@@ -153,13 +153,19 @@ export class DesktopAttachmentAccess {
     let listing: GlyphFolderListing | undefined;
     if (folder) {
       const directory = local === '.' || local === '' ? undefined : local;
-      await owner.disk.inspectDirectory(directory);
+      const { root, searchRoot } = await owner.disk.inspectDirectory(directory);
+      // The index returns directory entries in their stored spelling. Only use that spelling when
+      // every changed component still names the selected entry, including below a mounted volume.
+      const stored = storedSourcePath(searchRoot);
+      if (relativeWorkspaceSpelling(searchRoot, stored) !== '')
+        throw new Error('The selected folder changed its workspace location.');
+      const indexedDirectory = relative(root, stored).split(sep).join('/');
       const result = await owner.index.glob('**/*', {
         limit: 1000,
-        ...(directory && { targetDirectory: directory }),
+        ...(indexedDirectory && { targetDirectory: indexedDirectory }),
         signal,
       });
-      const prefix = directory ? directory + '/' : '';
+      const prefix = indexedDirectory ? indexedDirectory + '/' : '';
       listing = {
         files: result.files.filter(name => name.startsWith(prefix)).map(name => name.slice(prefix.length)),
         truncated: result.truncated,
