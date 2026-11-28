@@ -5,7 +5,7 @@ import type { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 import { spawn } from 'node:child_process';
-import { readdir, lstat } from 'node:fs/promises';
+import { readdir, lstat, opendir } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,6 +39,9 @@ async function storageBytes(root: string): Promise<number> {
 /** Git transport, lazy object reads, and their helper processes share one deadline and storage budget. */
 export class SkillRepositoryGit {
   private gitDirectory?: string;
+  private localMirror?: string;
+  private readonly mirrorDirectories = new Map<string, { revision: string; children: readonly string[] }>();
+  private readonly mirrorConfigurations = new Map<string, string>();
   private environment: Promise<NodeJS.ProcessEnv> | undefined;
   private readonly authority: HostExecutionAuthority;
   constructor(
@@ -87,6 +90,7 @@ export class SkillRepositoryGit {
     const windows = process.platform === 'win32';
     // Transport sees the initialized repository and its selected remote when evaluating conditional includes.
     const env = initialization ?? (await (this.environment ??= this.captureEnvironment()));
+    if (this.localMirror && !initialization) await this.checkLocalMirror(this.localMirror, env);
     const executable = this.authority.executable('git');
     const used = await storageBytes(this.cwd);
     // POSIX sh specifies 512-byte blocks. Limit each incoming pack before it can fill the disk between polls.
@@ -126,10 +130,104 @@ export class SkillRepositoryGit {
     const remote = new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/\n$/u, '');
     const path = localMirrorPath(remote);
     if (!path) return { ...environment, GIT_ALLOW_PROTOCOL: networkProtocols };
-    this.authority.admit(path);
-    // upload-pack also tries the bare-repository suffix when it resolves a local path.
-    this.authority.admit(path.replace(/\/+$/u, '') + '.git');
+    this.localMirror = path;
     return environment;
+  }
+
+  /** Enroll the lookup paths used by upload-pack before inspecting their layout. A plain checkout
+   * owns its .git directory and a bare mirror owns its root. Gitfiles, common directories and
+   * alternate object databases can select storage outside either tree. Decline these layouts
+   * before every transport or lazy object read, even if they appeared after the initial fetch. */
+  private async checkLocalMirror(path: string, env: NodeJS.ProcessEnv): Promise<void> {
+    const base = path.replace(/\/+$/u, '') || '/';
+    const suffixed = base + '.git';
+    const candidates = [join(base, '.git'), base, join(suffixed, '.git'), suffixed];
+    this.authority.admit(base);
+    this.authority.admit(suffixed);
+    await this.authority.validate();
+    for (const candidate of candidates) {
+      const entry = await lstat(candidate).catch(missingMirrorEntry);
+      if (!entry) continue;
+      const directory = this.authority.admit(candidate);
+      await this.authority.validate();
+      if (!(await lstat(directory)).isDirectory())
+        throw new Error('Local Git mirrors require a self-contained repository. Linked worktrees are unsupported.');
+      // Git only accepts a directory when it is a repository. A normal checkout itself
+      // can also occur in this list while its .git directory is the selected repository.
+      const head = join(directory, 'HEAD');
+      if (!(await lstat(head).catch(missingMirrorEntry))) continue;
+      const markers = ['commondir', 'objects/info/alternates', 'objects/info/http-alternates'].map(name =>
+        join(directory, name),
+      );
+      for (const input of [
+        head,
+        ...markers,
+        ...['config', 'config.worktree', 'packed-refs', 'shallow', 'info/grafts', 'refs', 'objects', 'reftable'].map(
+          name => join(directory, name),
+        ),
+      ])
+        this.authority.admit(input);
+      await this.authority.validate();
+      for (const marker of markers) {
+        if (await lstat(marker).catch(missingMirrorEntry))
+          throw new Error(
+            'Local Git mirrors with a common directory or alternate object store require a local package import.',
+          );
+      }
+      for (const name of ['objects', 'refs', 'reftable'])
+        await this.checkMirrorTree(this.authority.admit(join(directory, name)), new Set());
+      for (const name of ['config', 'config.worktree'])
+        await this.checkMirrorConfiguration(this.authority.admit(join(directory, name)), env);
+    }
+  }
+
+  /** Object shards, packs and ref namespaces may themselves contain links. Inspect entries without
+   * following links. Reuse directory listings across lazy blob reads while their native metadata is unchanged. */
+  private async checkMirrorTree(path: string, ancestors: Set<string>): Promise<void> {
+    this.signal.throwIfAborted();
+    const info = await lstat(path, { bigint: true }).catch(missingMirrorEntry);
+    if (!info) return;
+    const identity = `${info.dev}:${info.ino}`;
+    if (!info.isDirectory() || ancestors.has(identity))
+      throw new Error('Local Git mirrors require ordinary object and reference directories.');
+    const revision = `${identity}:${info.ctimeNs}:${info.mtimeNs}`;
+    let listing = this.mirrorDirectories.get(path);
+    if (listing?.revision !== revision) {
+      const children: string[] = [];
+      for await (const entry of await opendir(path)) {
+        this.signal.throwIfAborted();
+        if (entry.isDirectory()) children.push(join(path, entry.name));
+        else if (!entry.isFile())
+          throw new Error('Local Git mirrors require self-contained object and reference files.');
+      }
+      listing = { revision, children };
+      this.mirrorDirectories.set(path, listing);
+    }
+    ancestors.add(identity);
+    for (const child of listing.children) await this.checkMirrorTree(child, ancestors);
+    ancestors.delete(identity);
+  }
+
+  /** The server side of a local fetch also reads its repository configuration. Inspect key names
+   * without following any include before permitting upload-pack to open this mirror. */
+  private async checkMirrorConfiguration(path: string, env: NodeJS.ProcessEnv): Promise<void> {
+    const info = await lstat(path, { bigint: true }).catch(missingMirrorEntry);
+    if (!info) return;
+    const revision = `${info.dev}:${info.ino}:${info.ctimeNs}:${info.mtimeNs}`;
+    if (this.mirrorConfigurations.get(path) === revision) return;
+    const keys = await this.execute(
+      ['config', '--no-includes', '--file', path, '--null', '--name-only', '--list'],
+      1024 * 1024,
+      env,
+    );
+    if (
+      keys
+        .toString('utf8')
+        .split('\0')
+        .some(key => /^(?:include|includeif\..+)\.path$/iu.test(key))
+    )
+      throw new Error('Local Git mirrors with configuration includes require a local package import.');
+    this.mirrorConfigurations.set(path, revision);
   }
 
   /** The process group owns credential and transport helpers. Release its lease after cancellation and pipe closure. */
@@ -223,6 +321,11 @@ export class SkillRepositoryGit {
       });
     });
   }
+}
+
+function missingMirrorEntry(error: NodeJS.ErrnoException): undefined {
+  if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return undefined;
+  throw error;
 }
 
 /** Git accepts local paths and file URLs as fetch transports. Require an unambiguous absolute mirror location. */
