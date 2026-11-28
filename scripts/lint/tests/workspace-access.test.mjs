@@ -17,6 +17,8 @@ const cases = [
   ['src/skills/AdHocIntake.ts', "import * as intake from './LocalSkillSourceAuthority.ts';", true],
   ['src/skills/Outside.ts', 'const read = skill.inspectResource;', true],
   ['src/skills/Other.ts', "selected['packageFiles']();", true],
+  ['src/skills/DirectoryViewer.ts', "const directories = selected['packageDirectories'];", true],
+  ['src/skills/SkillPackageDraft.ts', 'const directories = selected.packageDirectories();', false],
   ['src/skills/SkillScriptRunner.ts', 'selected.packageFiles();', false],
   ['src/skills/Feature.ts', "import { captureSkillPackage } from './SkillPackage.ts';", true],
   ['src/skills/Presenter.ts', "import type { SkillPackage } from './SkillPackage.ts';", false],
