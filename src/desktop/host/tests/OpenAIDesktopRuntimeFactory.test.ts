@@ -331,9 +331,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         await expect(authorize(signal)).rejects.toThrow('editor source is no longer available');
       } else {
         await writeFile(join(folder, 'saving'), 'Another edit');
-        await renameDirectory(join(folder, 'saving'), path);
+        await rename(join(folder, 'saving'), path);
         (await authorize(signal))();
-        await renameDirectory(folder, folder + '-old');
+        await rename(folder, folder + '-old');
         await mkdir(folder);
         await writeFile(path, 'Different source');
         await expect(authorize(signal)).rejects.toThrow('source location changed');
@@ -1359,7 +1359,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const read = { type: GlyphEditorRequestType.READ_SNAPSHOT, operationId: 'read', path: 'file.txt' } as const;
       await expect(client.request(read, signal)).resolves.toMatchObject({ snapshot: { path: 'file.txt' } });
       expect(request).toHaveBeenLastCalledWith(factoryIdentity, read, signal);
-      expect(validate).toHaveBeenLastCalledWith('file.txt', false, undefined);
+      expect(validate).toHaveBeenLastCalledWith('file.txt', false);
       const occupancy = { type: GlyphEditorRequestType.EXISTS, operationId: 'exists', path: 'file.txt' } as const;
       await client.request(occupancy);
       expect(exists).toHaveBeenCalledExactlyOnceWith('file.txt');
