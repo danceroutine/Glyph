@@ -62,34 +62,21 @@ pub(super) fn inherit_permissions(
     parent: &OwnedFd,
 ) -> Result<(), Failure> {
     glyph_filesystem_metadata::assert_access_metadata(parent).map_err(unsupported_metadata)?;
-    let parent_info = fstat(parent)?;
     #[cfg(target_os = "macos")]
-    let inherited_group = false;
+    let group = fstat(parent)?.st_gid;
+    // Access policy admits ordinary parents. Linux creates their children with the caller's effective group.
     #[cfg(target_os = "linux")]
-    let inherited_group = parent_info.st_mode & 0o2000 != 0;
-    #[cfg(target_os = "macos")]
-    let group = parent_info.st_gid;
-    #[cfg(target_os = "linux")]
-    let group = if inherited_group {
-        parent_info.st_gid
-    } else {
-        rustix::process::getegid().as_raw()
-    };
+    let group = rustix::process::getegid().as_raw();
     let directory = open_child(stage, slot, DIRECTORY, Mode::empty())?;
-    apply_permissions(&directory, group, inherited_group)
+    apply_permissions(&directory, group)
 }
 
-fn apply_permissions(
-    directory: &OwnedFd,
-    group: u32,
-    inherited_group: bool,
-) -> Result<(), Failure> {
+fn apply_permissions(directory: &OwnedFd, group: u32) -> Result<(), Failure> {
     let staged = fstat(directory)?;
     if staged.st_gid != group {
         rustix::fs::fchown(directory, None, Some(rustix::process::Gid::from_raw(group)))?;
     }
-    let permissions = (staged.st_mode & 0o777) | if inherited_group { 0o2000 } else { 0 };
-    fchmod(directory, Mode::from_raw_mode(permissions))?;
+    fchmod(directory, Mode::from_raw_mode(staged.st_mode & 0o777))?;
     fsync(directory)?;
     Ok(())
 }

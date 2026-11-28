@@ -111,7 +111,8 @@ mod tests {
 8 1 0:1 /repo/.skill-staging/entry /project/transaction
 9 1 0:3 / /state/nested-volume
 10 1 0:3 /sub /project/volume-alias
-11 1 0:1 /another/.cursor /project/marker";
+11 1 0:1 /another/.cursor /project/marker
+12 1 0:1 /repo/.git/objects /project/repo-objects";
         for name in ["/host", "/ordinary/store"] {
             request.content_stores.push(crate::ContentStore {
                 root: name.into(),
@@ -135,6 +136,7 @@ mod tests {
             "/project/library",
             "/project/managed",
             "/project/marker/skills",
+            "/project/repo-objects",
         ] {
             assert!(request.protected_paths.contains(&PathBuf::from(protected)));
         }

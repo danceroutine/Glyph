@@ -27,11 +27,12 @@ fn carries_directory_group_and_permissions_through_staging() {
     let temp = tempdir().unwrap();
     let root = open(temp.path(), DIRECTORY, Mode::empty()).unwrap();
     let group = fstat(&root).unwrap().st_gid;
-    apply_permissions(&root, group, true).unwrap();
-    assert_ne!(fstat(&root).unwrap().st_mode & 0o2000, 0);
+    fchmod(&root, Mode::from_raw_mode(0o750)).unwrap();
+    apply_permissions(&root, group).unwrap();
+    assert_eq!(fstat(&root).unwrap().st_mode & 0o7777, 0o750);
     // An unprivileged process can inherit a supplementary group. A prohibited group stops publication.
     let other = group + 1;
-    match apply_permissions(&root, other, false) {
+    match apply_permissions(&root, other) {
         Ok(()) => assert_eq!(fstat(&root).unwrap().st_gid, other),
         Err(error) => assert_eq!(error.code, "EACCES"),
     }
@@ -60,6 +61,30 @@ fn restores_a_directory_populated_after_the_exclusive_claim_to_its_original_pare
         fs::read(temp.path().join("skills/notes")).unwrap(),
         b"concurrent"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn rejects_setgid_destination_metadata_before_changing_the_staged_directory() {
+    let temp = tempdir().unwrap();
+    let stage = open(temp.path(), DIRECTORY, Mode::empty()).unwrap();
+    for name in ["incoming", "destination"] {
+        fs::create_dir(temp.path().join(name)).unwrap();
+    }
+    let incoming = open_child(&stage, "incoming", DIRECTORY, Mode::empty()).unwrap();
+    let parent = open_child(&stage, "destination", DIRECTORY, Mode::empty()).unwrap();
+    fchmod(&incoming, Mode::from_raw_mode(0o750)).unwrap();
+    fchmod(&parent, Mode::from_raw_mode(0o2700)).unwrap();
+
+    let error = inherit_permissions(&stage, "incoming", &parent).unwrap_err();
+    assert_eq!(error.code, "ENOTSUP");
+    assert_eq!(fstat(&incoming).unwrap().st_mode & 0o7777, 0o750);
+
+    fchmod(&parent, Mode::from_raw_mode(0o700)).unwrap();
+    inherit_permissions(&stage, "incoming", &parent).unwrap();
+    let staged = fstat(&incoming).unwrap();
+    assert_eq!(staged.st_gid, rustix::process::getegid().as_raw());
+    assert_eq!(staged.st_mode & 0o7777, 0o750);
 }
 
 #[cfg(target_os = "linux")]
