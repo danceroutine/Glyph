@@ -112,7 +112,7 @@ function addHits(hits, map, additionHits, additionMap, keyOf, combine) {
 const evidence = count => Math.max(0, count);
 
 /** @param {number} left @param {number} right */
-const sum = (left, right) => left + right;
+const sum = (left, right) => left + evidence(right);
 
 /** @param {CoverageData} baseline @param {Record<string, FileCoverageData[]>} additions */
 export function mergeOntoBaseline(baseline, additions) {
@@ -137,7 +137,7 @@ export function mergeOntoBaseline(baseline, additions) {
         addition.b,
         addition.branchMap,
         entry => `${entry.type}:${position(entry.loc.start)}:${entry.locations.length}`,
-        (left, right) => left.map((count, index) => count + right[index]),
+        (left, right) => left.map((count, index) => sum(count, right[index])),
       );
     }
   }

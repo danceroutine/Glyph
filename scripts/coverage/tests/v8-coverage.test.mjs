@@ -329,11 +329,11 @@ describe(mergeOntoBaseline, () => {
     expect(merged['/repo/a.ts'].b).toEqual({ 0: [0, 0] });
   });
 
-  it('treats impossible negative baseline counts as no evidence of execution', () => {
+  it('treats negative counters from any run as zero while retaining hits from other runs', () => {
     const baseline = {
       '/repo/a.ts': fileCoverage('/repo/a.ts', { s: { 0: -1, 1: 2, 2: 0 }, f: { 0: -3 }, b: { 0: [13, -10] } }),
     };
-    const addition = fileCoverage('/repo/a.ts', { s: { 0: 0, 1: 0, 2: 0 }, f: { 0: 0 }, b: { 0: [0, 8] } });
+    const addition = fileCoverage('/repo/a.ts', { s: { 0: -1, 1: -3, 2: 0 }, f: { 0: -5 }, b: { 0: [-20, 8] } });
 
     const merged = mergeOntoBaseline(baseline, { '/repo/a.ts': [addition] });
 
