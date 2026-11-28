@@ -15,6 +15,11 @@ const cases = [
   ['src/skills/Feature.ts', "import { captureSkillPackage } from './SkillPackage.ts';", true],
   ['src/skills/Presenter.ts', "import type { SkillPackage } from './SkillPackage.ts';", false],
   [
+    'src/skills/FileSkillDiscoveryProvider.ts',
+    "import { lstat } from 'node:fs/promises'; import { captureSkillPackage } from './SkillPackage.ts';",
+    false,
+  ],
+  [
     'src/desktop/host/GlyphDesktopHost.ts',
     "import { WindowCommandAuthority } from './WindowCommandAuthority.ts';",
     false,
