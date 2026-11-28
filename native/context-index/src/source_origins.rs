@@ -96,6 +96,22 @@ fn hash_creation_time(hash: &mut Sha256, created: io::Result<SystemTime>) -> io:
     Ok(())
 }
 
+/// Bind the open file's device and mount to its admitted route. An ancestor that disappears
+/// after canonicalization invalidates the fingerprint even while the file remains open.
+fn source_fingerprint(
+    file: &fs::File,
+    device: u64,
+    canonical: &Path,
+    directory: &Path,
+    directories: &mut HashMap<PathBuf, [u8; 32]>,
+) -> io::Result<String> {
+    let mut hash = Sha256::new_with_prefix(directory_origin(directory, directories)?);
+    hash.update(device.to_le_bytes());
+    mount_identity(file, &mut hash)?;
+    hash.update(canonical.as_os_str().as_encoded_bytes());
+    Ok(format!("{:x}", hash.finalize()))
+}
+
 fn inspect_path(
     path: &Path,
     authority: &WorkspacePaths,
@@ -118,21 +134,15 @@ fn inspect_path(
     let (dev, ino) = (meta.dev().to_string(), meta.ino().to_string());
     authority.assert_batch_path(path, Some((&dev, &ino)))?;
     let canonical = fs::canonicalize(path)?;
-    let mut hash = Sha256::new();
-    hash.update(directory_origin(
-        if inspect_directory {
-            &canonical
-        } else {
-            canonical.parent().ok_or_else(denied)?
-        },
-        directories,
-    )?);
-    hash.update(meta.dev().to_le_bytes());
-    mount_identity(&file, &mut hash)?;
-    hash.update(canonical.as_os_str().as_encoded_bytes());
+    let directory = if inspect_directory {
+        canonical.as_path()
+    } else {
+        canonical.parent().ok_or_else(denied)?
+    };
+    let origin = source_fingerprint(&file, meta.dev(), &canonical, directory, directories)?;
     Ok(SourceOrigin {
         identity: format!("{dev}:{ino}"),
-        origin: format!("{:x}", hash.finalize()),
+        origin,
     })
 }
 
