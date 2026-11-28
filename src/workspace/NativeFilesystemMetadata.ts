@@ -33,30 +33,6 @@ export class NativeFilesystemMetadata implements FilesystemMetadata, WorkspacePa
     return z.array(sourceOrigin.nullable()).length(paths.length).parse(output);
   }
 
-  private async inspectSources(
-    paths: readonly string[],
-    privatePaths: readonly string[],
-    signal?: AbortSignal,
-    allowUnavailable = false,
-  ): Promise<unknown> {
-    signal?.throwIfAborted();
-    if (paths.length === 0) return [];
-    const output = await new Promise<string>((resolve, reject) => {
-      const child = execFile(
-        this.executable,
-        ['--source-origins'],
-        { env: {}, signal, timeout: 30_000, maxBuffer: paths.length * 160 },
-        (error, stdout) => {
-          if (error) reject(new Error('The instruction source inspection failed.', { cause: error }));
-          else resolve(stdout);
-        },
-      );
-      child.stdin!.on('error', reject);
-      child.stdin!.end(JSON.stringify({ paths, privatePaths, ...(allowUnavailable && { allowUnavailable }) }));
-    });
-    return JSON.parse(output);
-  }
-
   async assertWorkspacePath(
     path: string,
     privatePaths: readonly string[],
@@ -103,5 +79,29 @@ export class NativeFilesystemMetadata implements FilesystemMetadata, WorkspacePa
       throw new Error(
         'Could not verify filesystem metadata. The object may have unsupported extended data or access controls.',
       );
+  }
+
+  private async inspectSources(
+    paths: readonly string[],
+    privatePaths: readonly string[],
+    signal?: AbortSignal,
+    allowUnavailable = false,
+  ): Promise<unknown> {
+    signal?.throwIfAborted();
+    if (paths.length === 0) return [];
+    const output = await new Promise<string>((resolve, reject) => {
+      const child = execFile(
+        this.executable,
+        ['--source-origins'],
+        { env: {}, signal, timeout: 30_000, maxBuffer: paths.length * 160 },
+        (error, stdout) => {
+          if (error) reject(new Error('The instruction source inspection failed.', { cause: error }));
+          else resolve(stdout);
+        },
+      );
+      child.stdin!.on('error', reject);
+      child.stdin!.end(JSON.stringify({ paths, privatePaths, ...(allowUnavailable && { allowUnavailable }) }));
+    });
+    return JSON.parse(output);
   }
 }
