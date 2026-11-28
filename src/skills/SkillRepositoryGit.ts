@@ -6,7 +6,7 @@ import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 import { spawn } from 'node:child_process';
 import { readdir, lstat, opendir } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const maxStorage = 32 * 1024 * 1024;
@@ -139,7 +139,7 @@ export class SkillRepositoryGit {
    * alternate object databases can select storage outside either tree. Decline these layouts
    * before every transport or lazy object read, even if they appeared after the initial fetch. */
   private async checkLocalMirror(path: string, env: NodeJS.ProcessEnv): Promise<void> {
-    const base = path.replace(/\/+$/u, '') || '/';
+    const base = resolve(path);
     const suffixed = base + '.git';
     const candidates = [join(base, '.git'), base, join(suffixed, '.git'), suffixed];
     this.authority.admit(base);
@@ -345,6 +345,6 @@ function localMirrorPath(remote: string): string | undefined {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//u.test(remote) || /^[^/]+:/u.test(remote)) return undefined;
     throw invalid;
   }
-  if (path.split(process.platform === 'win32' ? /[\\/]/u : '/').includes('..')) throw invalid;
+  if (path.replaceAll(sep, '/').split('/').includes('..')) throw invalid;
   return path;
 }
