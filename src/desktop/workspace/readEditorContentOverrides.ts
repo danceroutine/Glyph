@@ -13,6 +13,7 @@ export async function readEditorContentOverrides(
   request: (request: GlyphEditorRequest, signal?: AbortSignal) => Promise<GlyphEditorResponse>,
   rootPrefix: string,
   signal?: AbortSignal,
+  readSource?: (path: string, maxBytes: number) => Promise<string>,
 ): Promise<Readonly<Record<string, string>>> {
   const listed = await request(
     { type: GlyphEditorRequestType.LIST_WORKING_COPY_PATHS, operationId: randomUUID() },
@@ -24,28 +25,35 @@ export async function readEditorContentOverrides(
     .map(path => path.slice(rootPrefix.length));
   const allowed = await index.filterPaths(paths, signal);
   const overrides = createNullPrototypeRecord<string>();
+  const read =
+    readSource ??
+    (async (path: string, maxBytes: number) => {
+      await disk.validateAccess(path);
+      const response = await request(
+        {
+          type: GlyphEditorRequestType.READ_SNAPSHOT,
+          operationId: randomUUID(),
+          path: rootPrefix + path,
+          maxBytes,
+        },
+        signal,
+      );
+      signal?.throwIfAborted();
+      if (!response.ok && response.error?.code === GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED)
+        throw new Error(`Editor search snapshot for ${rootPrefix + path} exceeds the 512 KiB per-file limit.`);
+      if (!response.ok || !response.snapshot || response.snapshot.path !== rootPrefix + path)
+        throw new Error(response.error?.message ?? 'An editor search snapshot is unavailable.');
+      await disk.validateAccess(path);
+      return response.snapshot.text;
+    });
   let bytes = 0;
   for (const path of allowed) {
     signal?.throwIfAborted();
-    await disk.validateAccess(path);
-    const response = await request(
-      {
-        type: GlyphEditorRequestType.READ_SNAPSHOT,
-        operationId: randomUUID(),
-        path: rootPrefix + path,
-        maxBytes: 512 * 1024,
-      },
-      signal,
-    );
+    const text = await read(path, 512 * 1024);
     signal?.throwIfAborted();
-    if (!response.ok && response.error?.code === GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED)
-      throw new Error(`Editor search snapshot for ${rootPrefix + path} exceeds the 512 KiB per-file limit.`);
-    if (!response.ok || !response.snapshot || response.snapshot.path !== rootPrefix + path)
-      throw new Error(response.error?.message ?? 'An editor search snapshot is unavailable.');
-    await disk.validateAccess(path);
-    bytes += Buffer.byteLength(JSON.stringify({ [path]: response.snapshot.text }));
+    bytes += Buffer.byteLength(JSON.stringify({ [path]: text }));
     if (bytes > 768 * 1024) throw new Error('Editor search snapshots exceed the aggregate byte budget.');
-    overrides[path] = response.snapshot.text;
+    overrides[path] = text;
   }
   return overrides;
 }

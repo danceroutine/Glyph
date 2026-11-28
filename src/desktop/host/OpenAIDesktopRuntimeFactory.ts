@@ -1,5 +1,6 @@
 import { UserSkillDirectory } from '#src/skills/UserSkillDirectory.js';
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { WorkspaceRootSelections } from '#src/workspace/WorkspaceRootSelections.js';
 import { DesktopAttachmentAccess } from './DesktopAttachmentAccess.ts';
 import { readSourcePathAliases } from '#src/workspace/SourcePathAliases.js';
@@ -232,13 +233,28 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             .update(context.id + workspaceRoot.path)
             .digest('hex')}.bin`,
         ),
-        readContentOverrides: signal =>
+        readContentOverrides: (signal, source) =>
           readEditorContentOverrides(
             disk,
             index,
             (request, cancellation) => this.editors.request(input.identity, request, cancellation),
             roots.length > 1 ? `${workspaceRoot.name}/` : '',
             signal,
+            source &&
+              (async (path, maxBytes) => {
+                const disclosure = new WorkspaceDisclosure();
+                const snapshot = await workspace.read(
+                  path,
+                  {
+                    maxBytes,
+                    retainAccess: disclosure.retain,
+                    source: { authority: source.authority, disclosure },
+                  },
+                  signal,
+                );
+                source.retain(path, disclosure);
+                return snapshot.text;
+              }),
           ),
       });
       const editorStore = (admitted: FileSystemWorkspaceTextStore) =>

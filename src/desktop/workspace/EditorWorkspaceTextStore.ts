@@ -70,7 +70,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     return this.client.canonicalPath(this.normalizePath(input));
   }
 
-  async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
+  async read(input: string, options: WorkspaceReadOptions = {}, signal?: AbortSignal): Promise<WorkspaceTextSnapshot> {
     const path = this.normalizePath(input);
     const { retainAccess, source, ...limits } = options;
     const response = await this.client.request(
@@ -80,7 +80,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
         path,
         ...limits,
       },
-      undefined,
+      signal,
       retainAccess,
       source,
     );

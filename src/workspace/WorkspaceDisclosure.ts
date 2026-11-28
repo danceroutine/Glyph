@@ -22,9 +22,28 @@ export class WorkspaceDisclosure {
 
   /** Bind a file's observed identity to the physical route that supplied the snapshot. */
   async retainFile(authority: PinnedSourceAuthority, path: string, identity: string): Promise<void> {
-    const [pin] = await authority.capture([path]);
-    if (pin?.identity !== identity) throw new Error('The source changed while reading it.');
-    this.revalidate(signal => authority.authorize([pin], signal));
+    return this.retainFiles(authority, [{ path, identity }]);
+  }
+
+  /** Search may return several match lines from one descriptor. Enroll the selected files in
+   * a single authority request, then repeat that batch at first delivery and SDK retries. */
+  async retainFiles(
+    authority: PinnedSourceAuthority,
+    files: readonly { path: string; identity: string }[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const identities = new Map<string, string>();
+    for (const { path, identity } of files) {
+      if (identities.has(path) && identities.get(path) !== identity)
+        throw new Error('The source changed while reading it.');
+      identities.set(path, identity);
+    }
+    if (identities.size === 0) return;
+    const paths = [...identities.keys()];
+    const pins = await authority.capture(paths, signal);
+    if (pins.length !== paths.length || pins.some((pin, index) => pin.identity !== identities.get(paths[index]!)))
+      throw new Error('The source changed while reading it.');
+    this.revalidate(cancellation => authority.authorize(pins, cancellation));
   }
 
   get hasValidators(): boolean {
