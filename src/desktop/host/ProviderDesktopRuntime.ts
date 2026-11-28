@@ -1,3 +1,4 @@
+import { rebindFolderAttachmentText } from '#src/desktop/workbench/formatFolderContextOutline.js';
 import { contentRevision } from '#src/desktop/workspace/EditorWorkspaceTextStore.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { matchesSkillManifest } from '#src/skills/matchesSkillManifest.js';
@@ -337,12 +338,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   private restoredAttachment(attachment: ContextAttachment) {
     const path = this.options.restoreAttachmentPath?.(attachment.path) ?? attachment.path;
-    const heading = 'Directory tree: ' + attachment.path + '\n';
     const text =
-      path !== attachment.path &&
-      attachment.source?.kind === GlyphContextAttachmentKind.FOLDER &&
-      attachment.text.startsWith(heading)
-        ? 'Directory tree: ' + path + '\n' + attachment.text.slice(heading.length)
+      attachment.source?.kind === GlyphContextAttachmentKind.FOLDER
+        ? rebindFolderAttachmentText(attachment.text, attachment.path, path)
         : attachment.text;
     return {
       kind:

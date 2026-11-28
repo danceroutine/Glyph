@@ -1323,10 +1323,15 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     options: GlyphTurnOptions = {},
     targetChatId = this.selectedChatId,
   ): Promise<string | undefined> {
-    if (this.workspaceRevision)
-      attachments = attachments.map(value =>
-        URI.parse(value.uri).scheme === 'file' ? this.context.rebindAttachment(value) : value,
+    const workspaceRevision = this.workspaceRevision;
+    if (workspaceRevision) {
+      attachments = await Promise.all(
+        attachments.map(async value =>
+          URI.parse(value.uri).scheme === 'file' ? this.context.rebindAttachment(value) : value,
+        ),
       );
+      this.assertWorkspaceRevision(workspaceRevision);
+    }
     const unavailable = attachments
       .map(value => value.unavailable)
       .find(message => message !== undefined && message !== '');
@@ -1358,7 +1363,6 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     )
       throw new Error('The chat is busy. Queue the message or send it immediately.');
     this.sending = true;
-    const workspaceRevision = this.workspaceRevision;
     try {
       await this.connect();
       this.assertWorkspaceRevision(workspaceRevision);
@@ -1462,8 +1466,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             attempted = this.currentWorkspaceBinding();
             this.workspaceBinding = attempted;
             this.editor.rebindWorkspace();
-            for (const composer of this.composers.values())
-              composer.mapAttachments(value => this.context.rebindAttachment(value));
+            await Promise.all(
+              [...this.composers.values()].map(composer =>
+                composer.mapAttachments(value => this.context.rebindAttachment(value)),
+              ),
+            );
             const roots = this.workspaceRoots();
             if (roots.length === 0) {
               this.workspaceMessage =
