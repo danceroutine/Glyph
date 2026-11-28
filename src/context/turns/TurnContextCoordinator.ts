@@ -64,17 +64,38 @@ export class TurnContextCoordinator {
 
   /** Disclose newly applicable instructions after project paths enter context. */
   disclosePaths(turnId: string, paths: readonly string[], signal?: AbortSignal) {
-    return this.disclose(turnId, session => session.disclosePaths(paths), signal);
+    return this.withPathInstructions(turnId, paths, context => context, signal);
+  }
+
+  /** Admit a project result and its scoped guidance in one synchronous delivery.
+   * A failed result check leaves the instructions available to a later read or proposal. */
+  withPathInstructions<T>(
+    turnId: string,
+    paths: readonly string[],
+    deliver: (context: AgentInstructionContext | undefined) => T,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.disclose(turnId, session => session.disclosePaths(paths), deliver, signal);
   }
 
   /** Disclose rules selected by attachments introduced while steering a live turn. */
   discloseAttachments(turnId: string, paths: readonly string[], signal?: AbortSignal) {
-    return this.disclose(turnId, session => session.discloseAttachments(paths), signal);
+    return this.disclose(
+      turnId,
+      session => session.discloseAttachments(paths),
+      context => context,
+      signal,
+    );
   }
 
   /** Activate explicit manual rule selections introduced while steering. */
   activateManualRules(turnId: string, ruleIds: readonly string[], signal?: AbortSignal) {
-    return this.disclose(turnId, session => session.activateManualRules(ruleIds), signal);
+    return this.disclose(
+      turnId,
+      session => session.activateManualRules(ruleIds),
+      context => context,
+      signal,
+    );
   }
 
   /** Activate a model-selected rule by stable identity. */
@@ -82,6 +103,7 @@ export class TurnContextCoordinator {
     return this.disclose(
       turnId,
       session => session.activateRule(ruleId, AgentInstructionActivationReason.MODEL),
+      context => context,
       signal,
     );
   }
@@ -113,17 +135,19 @@ export class TurnContextCoordinator {
     this.sessions.delete(turnId);
   }
 
-  private async disclose(
+  private async disclose<T>(
     turnId: string,
     operation: (session: TurnContextSession) => AgentInstructionContext | undefined,
+    deliver: (context: AgentInstructionContext | undefined) => T,
     signal?: AbortSignal,
-  ): Promise<AgentInstructionContext | undefined> {
+  ): Promise<T> {
     const session = this.sessions.get(turnId);
-    if (!session) return undefined;
+    if (!session) return deliver(undefined);
     return this.disclosures.get(session)!.publish(
       () => session.checkpointSteering(),
       () => operation(session),
       context => (context ? session.disclosurePins(context) : []),
+      deliver,
       signal,
     );
   }

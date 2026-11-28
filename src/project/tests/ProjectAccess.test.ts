@@ -120,7 +120,9 @@ describe(ProjectAccess, () => {
       .fn()
       .mockReturnValueOnce({ schema: 'glyph.agent-instructions.v1', sources: [{ path: 'src/AGENTS.md' }] })
       .mockReturnValueOnce(undefined);
-    const access = fixtureProjectAccess('/fixture', {}, workspace, undefined, { disclosePaths });
+    const access = fixtureProjectAccess('/fixture', {}, workspace, undefined, {
+      withPathInstructions: async (turnId, paths, deliver, signal) => deliver(disclosePaths(turnId, paths, signal)),
+    });
     const input = JSON.stringify({ path: 'src/app.ts', start_line: null, end_line: null });
 
     expect(JSON.parse(await access.execute('read_project_file', input, undefined, { turnId: 'turn' }))).toMatchObject({
@@ -388,40 +390,88 @@ describe(ProjectAccess, () => {
       });
     });
 
-    it('withholds file content when its owning root changes during instruction disclosure', async () => {
-      const { root } = await fixture();
-      const workspace = fixtureWorkspace(root);
-      const read = workspace.read.bind(workspace);
-      let selected = true;
-      vi.spyOn(workspace, 'read').mockImplementation(async (path, options) => {
-        options?.retainAccess?.(() => {
-          if (!selected) throw new Error('The selected workspace folder changed.');
+    it.each(['read_project_file', 'search_project_contents'] as const)(
+      'makes nested guidance available again after %s loses its result authority',
+      async name => {
+        const { root } = await fixture();
+        await writeFile(join(root, 'src', 'AGENTS.md'), 'Use sentence case.');
+        const workspace = fixtureWorkspace(root);
+        const turns = new TurnContextCoordinator(
+          new AgentInstructionCatalog([new AgentsMdInstructionProvider(workspace)]),
+        );
+        const turn = await turns.beginTurn({ turnId: 'turn', attachmentPaths: [] });
+        const read = workspace.read.bind(workspace);
+        let current = true;
+        const assertCurrent = () => {
+          if (!current) throw new Error('The selected workspace folder changed.');
+        };
+        vi.spyOn(workspace, 'read').mockImplementation(async (path, options) => {
+          options?.retainAccess?.(assertCurrent);
+          return read(path, options);
         });
-        return read(path, options);
-      });
-      const access = new ProjectAccess(
-        workspace,
-        { glob: async () => ({ files: [], truncated: false }) },
-        {},
-        {
-          disclosePaths: async () => {
-            selected = false;
-            return undefined;
+        const access = new ProjectAccess(
+          workspace,
+          {
+            glob: async () => ({ files: [], truncated: false }),
+            searchContents: async (_pattern, options) => {
+              options.retainAccess?.(assertCurrent);
+              return {
+                outputMode: 'count',
+                counts: [{ path: 'src/app.ts', count: 1 }],
+                searchedFiles: 1,
+                skippedFiles: 0,
+                indexTruncated: false,
+                truncated: false,
+                nextOffset: null,
+              };
+            },
           },
-        },
-      );
-      const result = JSON.parse(
-        await access.execute(
-          'read_project_file',
-          JSON.stringify({ path: 'src/app.ts', start_line: null, end_line: null }),
-          undefined,
-          { turnId: 'turn' },
-        ),
-      );
-      expect(result).toEqual({
-        error: { code: 'PROJECT_ACCESS_FAILED', message: 'The selected workspace folder changed.' },
-      });
-    });
+          {},
+          {
+            withPathInstructions: (id, paths, deliver, signal) =>
+              turns.withPathInstructions(
+                id,
+                paths,
+                instructions => {
+                  expect(instructions?.sources[0]?.content).toBe('Use sentence case.');
+                  return deliver(instructions);
+                },
+                signal,
+              ),
+          },
+        );
+        const input =
+          name === 'read_project_file'
+            ? { path: 'src/app.ts', start_line: null, end_line: null }
+            : {
+                pattern: 'one',
+                pattern_kind: 'literal',
+                path: null,
+                file_glob: null,
+                file_type: null,
+                output_mode: 'count',
+                lines_before: 0,
+                lines_after: 0,
+                case_sensitive: true,
+                multiline: false,
+                limit: 10,
+                offset: 0,
+              };
+        const execute = async () =>
+          JSON.parse(await access.execute(name, JSON.stringify(input), undefined, { turnId: 'turn' })) as {
+            error?: { message: string };
+            instructionContext?: AgentInstructionContext;
+          };
+        current = false;
+        expect(await execute()).toEqual({
+          error: { code: 'PROJECT_ACCESS_FAILED', message: 'The selected workspace folder changed.' },
+        });
+        expect(turn.snapshot().sources).toEqual([]);
+        current = true;
+        expect((await execute()).instructionContext?.sources[0]?.content).toBe('Use sentence case.');
+        expect(turn.snapshot().sources[0]?.content).toBe('Use sentence case.');
+      },
+    );
 
     it('discloses scoped instructions for files returned by count searches', async () => {
       const disclosePaths = vi.fn().mockReturnValue({
@@ -444,7 +494,9 @@ describe(ProjectAccess, () => {
             nextOffset: null,
           }),
         },
-        { disclosePaths },
+        {
+          withPathInstructions: async (turnId, paths, deliver, signal) => deliver(disclosePaths(turnId, paths, signal)),
+        },
       );
 
       const result = JSON.parse(

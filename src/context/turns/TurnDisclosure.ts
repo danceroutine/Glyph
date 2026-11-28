@@ -6,12 +6,13 @@ import { authorizeSources, type SourcePin } from '#src/workspace/SourceDisclosur
 export class TurnDisclosure {
   private tail = Promise.resolve();
   constructor(private readonly assertActive: () => void) {}
-  async publish<T>(
+  async publish<T, R>(
     checkpoint: () => () => void,
     prepare: () => T,
     pins: (value: T) => readonly SourcePin[],
+    deliver: (value: T) => R,
     signal?: AbortSignal,
-  ): Promise<T> {
+  ): Promise<R> {
     const operation = this.tail.then(async () => {
       this.assertActive();
       const undo = checkpoint();
@@ -26,8 +27,9 @@ export class TurnDisclosure {
       const check = await authorizeSources(pins(value), signal);
       check();
       this.assertActive();
+      const result = deliver(value);
       commit();
-      return value;
+      return result;
     });
     this.tail = operation.then(
       () => {},
