@@ -1,8 +1,7 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { pathToFileURL } from 'node:url';
-import { basename, join } from 'node:path';
+import { tmpdir, userInfo } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { captureRepositoryEnvironment } from '#src/skills/SkillRepositoryConfiguration.js';
 import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
@@ -189,36 +188,66 @@ it('retains credential reset entries and blocks command-valued transport overrid
   }
 });
 
-it('uses trusted HTTPS-to-file mirrors and rejects SSH rewrites when the SSH client lacks authority', async () => {
-  const f = await fixture();
-  const git = trustedHostExecutable('git', []);
-  const mirror = join(f.home, 'mirror.git');
-  execFileSync(git, ['init', '--bare', '--quiet', '--template=', mirror]);
-  await writeFile(
-    f.global,
-    [
-      '[url "' + pathToFileURL(mirror).toString() + '"]',
-      'insteadOf = https://mirror.invalid/fixture',
-      '[url "ssh://127.0.0.1:1/fixture"]',
-      'insteadOf = https://ssh.invalid/fixture',
-      '[protocol "ssh"]',
-      'allow = always',
-    ].join('\n'),
-  );
-  // A host can have Git installed while SSH is unavailable or belongs to a peer workspace.
-  const metadata = {
-    ...testFilesystemMetadata,
-    assertHostPaths: async (paths: readonly string[]) => {
-      if (paths.length === 1 && ['ssh', 'ssh.exe'].includes(basename(paths[0]!).toLowerCase()))
-        throw new Error('SSH unavailable');
-    },
-  };
-  const env = await captureRepositoryEnvironment([f.project], f.preview, new AbortController().signal, metadata);
-  expect(env.GIT_ALLOW_PROTOCOL).toBe('https:file');
-  const lsRemote = (url: string) => spawnSync(git, ['ls-remote', url], { env, cwd: f.preview, encoding: 'utf8' });
-  expect(lsRemote('https://mirror.invalid/fixture').status).toBe(0);
-  expect(lsRemote('https://ssh.invalid/fixture').stderr).toContain("transport 'ssh' not allowed");
-});
+it.each(['https://fixture.invalid/package', 'ssh://git@fixture.invalid/package', 'git@fixture.invalid:package'])(
+  'admits SSH inputs only when the configured remote selects SSH at %s',
+  async remote => {
+    const f = await fixture();
+    const git = trustedHostExecutable('git', []);
+    const url = 'https://package.invalid/selected';
+    execFileSync(git, ['init', '--bare', '--quiet', '--template=', 'source.git'], { cwd: f.preview });
+    execFileSync(git, ['--git-dir=source.git', 'remote', 'add', 'origin', url], { cwd: f.preview });
+    await writeFile(f.global, `[url "${remote}"]\ninsteadOf = ${url}\n`);
+    const socket = join(f.project, 'agent');
+    vi.stubEnv('SSH_AUTH_SOCK', socket);
+    const select = vi.fn();
+    const admitted = vi.fn(testFilesystemMetadata.assertHostPaths);
+    const metadata = { ...testFilesystemMetadata, assertHostPaths: admitted };
+    const capture = (roots: string[]) =>
+      captureRepositoryEnvironment(
+        roots,
+        f.preview,
+        new AbortController().signal,
+        metadata,
+        'source.git',
+        new HostExecutionAuthority(roots, metadata),
+        select,
+      );
+    const keyDirectory = join(userInfo().homedir, '.ssh');
+    if (remote.startsWith('https:')) {
+      const env = await capture([f.project, keyDirectory]);
+      expect(env.GIT_ALLOW_PROTOCOL).toBe('https');
+      expect(env.GIT_SSH_COMMAND).toBeUndefined();
+      expect(env.SSH_AUTH_SOCK).toBeUndefined();
+    } else {
+      await expect(capture([f.project])).rejects.toThrow('outside writable workspaces');
+      await expect(capture([keyDirectory])).rejects.toThrow('outside writable workspaces');
+      const env = await capture([]);
+      expect(env.GIT_ALLOW_PROTOCOL).toBe('ssh');
+      const command = env.GIT_SSH_COMMAND!;
+      const options = execFileSync('/bin/sh', ['-c', command + ' -G fixture.invalid'], { env, encoding: 'utf8' });
+      expect(options).toContain('identityfile ' + join(keyDirectory, 'id_ed25519'));
+      expect(options).toContain('userknownhostsfile ' + join(keyDirectory, 'known_hosts'));
+      expect(options).toContain('globalknownhostsfile /etc/ssh/ssh_known_hosts');
+      expect(options).toMatch(/^identityagent SSH_AUTH_SOCK$/mu);
+      expect(env.SSH_AUTH_SOCK).toBe(join(await realpath(f.project), 'agent'));
+      expect(admitted).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          join(keyDirectory, 'id_ed25519.pub'),
+          join(keyDirectory, 'id_ed25519-cert.pub'),
+          socket,
+        ]),
+        [],
+        expect.arrayContaining([socket]),
+      );
+      vi.stubEnv('SSH_AUTH_SOCK', 'relative');
+      await expect(capture([])).rejects.toThrow('absolute socket path');
+      vi.stubEnv('SSH_AUTH_SOCK', undefined);
+      const noAgent = await capture([]);
+      expect(noAgent.GIT_SSH_COMMAND).toContain('IdentityAgent=none');
+    }
+    expect(select).not.toHaveBeenCalled();
+  },
+);
 
 it.each([
   'cookieFile',

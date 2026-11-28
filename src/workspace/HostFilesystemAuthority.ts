@@ -5,5 +5,9 @@
  * launch or private storage access.
  */
 export interface HostFilesystemAuthority {
-  assertHostPaths(paths: readonly string[], workspaceRoots: readonly string[]): Promise<void>;
+  assertHostPaths(
+    paths: readonly string[],
+    workspaceRoots: readonly string[],
+    sockets?: readonly string[],
+  ): Promise<void>;
 }

@@ -1,5 +1,5 @@
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
-import { chmod, mkdir, mkdtemp, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile, readFile, rm, symlink, realpath, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -81,6 +81,9 @@ it.each([
   'late alternate',
   'nested object link',
   'config include',
+  'not a repository',
+  'empty directory',
+  'invalid refs',
 ] as const)('checks the %s repository layout before local transport or subsequent object reads', async layout => {
   const base = await fixture();
   const preview = join(base, 'preview');
@@ -93,11 +96,23 @@ it.each([
   const transport = new SkillRepositoryGit(preview, new AbortController().signal, [], testFilesystemMetadata);
   await transport.initialize(url);
   const list = () => transport.run(['--git-dir=source.git', 'ls-remote', 'origin']);
+  await writeFile(join(gitDir, 'objects/info/packs'), '');
   if (layout === 'checkout' || layout === 'late alternate') {
     expect(await list()).toEqual(Buffer.alloc(0));
     if (layout === 'checkout') return;
   }
-  if (layout === 'nested object link') {
+  if (layout === 'not a repository') {
+    await rm(mirror, { recursive: true });
+    await writeFile(mirror, 'not a directory');
+    await expect(list()).rejects.toThrow('self-contained repository');
+  } else if (layout === 'empty directory') {
+    await rm(gitDir, { recursive: true });
+    await expect(list()).rejects.toThrow('does not contain a repository');
+  } else if (layout === 'invalid refs') {
+    await rm(join(gitDir, 'refs'), { recursive: true });
+    await writeFile(join(gitDir, 'refs'), 'not a directory');
+    await expect(list()).rejects.toThrow('ordinary object and reference directories');
+  } else if (layout === 'nested object link') {
     const shard = join(gitDir, 'objects', '11');
     await mkdir(shard);
     await symlink('../other-object', join(shard, 'object'));
@@ -116,19 +131,35 @@ it.each([
   }
 });
 
-it.each(['../mirror.git', 'file://server/mirror.git', 'file:///~/mirror.git', 'file:///one/%2E%2E/mirror.git'])(
-  'requires an unambiguous absolute path before opening a local mirror at %s',
-  async source => {
-    const root = await fixture();
-    await writeFile(
-      join(root, 'trusted.config'),
-      `[url "${source}"]\ninsteadOf = https://example.invalid/selected.git\n`,
-    );
-    const git = new SkillRepositoryGit(root, new AbortController().signal, [], testFilesystemMetadata);
-    await git.initialize('https://example.invalid/selected.git');
-    await expect(git.run(['--git-dir=source.git', 'ls-remote', 'origin'])).rejects.toThrow('absolute repository path');
-  },
-);
+it.each([
+  '/mirror/../other',
+  'file:///mirror\tother',
+  '../mirror.git',
+  'file://server/mirror.git',
+  'file:///~/mirror.git',
+  'file:///one/%2E%2E/mirror.git',
+])('requires an unambiguous absolute path before opening a local mirror at %s', async source => {
+  const root = await fixture();
+  await writeFile(
+    join(root, 'trusted.config'),
+    `[url "${source}"]\ninsteadOf = https://example.invalid/selected.git\n`,
+  );
+  const git = new SkillRepositoryGit(root, new AbortController().signal, [], testFilesystemMetadata);
+  await git.initialize('https://example.invalid/selected.git');
+  await expect(git.run(['--git-dir=source.git', 'ls-remote', 'origin'])).rejects.toThrow('absolute repository path');
+});
+
+it('propagates a filesystem inspection failure before opening an unavailable mirror', async () => {
+  const base = await fixture();
+  const url = 'https://example.invalid/oversized.git';
+  const mirror = join(base, 'x'.repeat(16384));
+  await writeFile(join(base, 'trusted.config'), `[url "${mirror}"]\ninsteadOf = ${url}\n`);
+  const transport = new SkillRepositoryGit(base, new AbortController().signal, [], testFilesystemMetadata);
+  await transport.initialize(url);
+  await expect(transport.run(['--git-dir=source.git', 'ls-remote', 'origin'])).rejects.toMatchObject({
+    code: 'ENAMETOOLONG',
+  });
+});
 
 it('rejects a repository object store over budget before starting another object fetch', async () => {
   const root = await fixture();
@@ -170,6 +201,7 @@ it.skipIf(process.platform === 'win32').each(['credential helper', 'mirror'])(
     await writeFile(helper, '#!/bin/sh\nexit 0\n');
     await chmod(helper, 0o700);
     const url = 'https://example.invalid/selected.git';
+    if (input === 'mirror') execFileSync('git', ['init', '--bare', '--quiet', '--template=', helpers]);
     const configuration =
       input === 'mirror'
         ? `[url "${pathToFileURL(helpers).href}"]\ninsteadOf = ${url}\n`
@@ -259,4 +291,37 @@ it('freezes URL-selected settings after recording the remote and before using tr
   expect((await name()).toString().trim()).toBe('Selected remote identity');
   await writeFile(included, '[user]\nname = Changed after capture\n');
   expect((await name()).toString().trim()).toBe('Selected remote identity');
+});
+
+it('pins a primary checkout as the transport source while a peer owns its distinct bare sibling', async () => {
+  const base = await fixture();
+  const preview = join(base, 'preview');
+  const checkout = join(base, 'skills');
+  const sibling = checkout + '.git';
+  await mkdir(preview);
+  execFileSync('git', ['init', '--quiet', '--template=', checkout]);
+  execFileSync('git', ['init', '--bare', '--quiet', '--template=', sibling]);
+  const url = 'https://example.invalid/primary.git';
+  await writeFile(
+    join(base, 'trusted.config'),
+    [
+      `[url "${pathToFileURL(checkout).href}"]`,
+      `insteadOf = ${url}`,
+      `[url "${pathToFileURL(sibling).href}"]`,
+      `pushInsteadOf = ${url}`,
+      '[user]',
+      'name = Trusted identity',
+    ].join('\n'),
+  );
+  const transport = new SkillRepositoryGit(preview, new AbortController().signal, [sibling], testFilesystemMetadata);
+  await transport.initialize(url);
+  const run = (...args: string[]) => transport.run(['--git-dir=source.git', ...args]);
+  expect(await run('ls-remote', 'origin')).toEqual(Buffer.alloc(0));
+  const selected = await realpath(join(checkout, '.git'));
+  expect((await run('remote', 'get-url', 'origin')).toString().trim()).toBe(pathToFileURL(selected).href);
+  expect((await run('remote', 'get-url', '--push', 'origin')).toString().trim()).toBe(pathToFileURL(selected).href);
+  expect((await run('config', '--get', 'user.name')).toString().trim()).toBe('Trusted identity');
+  expect((await run('config', '--get', 'remote.origin.uploadpack')).toString().trim()).toBe('git-upload-pack --strict');
+  await rename(selected, join(base, 'moved'));
+  await expect(run('ls-remote', 'origin')).rejects.toThrow('selected Git mirror is no longer available');
 });

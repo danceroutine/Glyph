@@ -1,4 +1,8 @@
 import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
+import { SkillRepositoryGit } from '#src/skills/SkillRepositoryGit.js';
+import { pathToFileURL } from 'node:url';
+import { createServer } from 'node:net';
+import { once } from 'node:events';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { SkillPackageSourceReader } from '../SkillPackageSource.ts';
 import { testSkillSource, testPackageIndex } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
@@ -8,7 +12,7 @@ import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutation
 import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { execFileSync } from 'node:child_process';
-import { realpath, chmod, lstat, mkdir, mkdtemp, rm, writeFile, symlink, rename } from 'node:fs/promises';
+import { realpath, chmod, lstat, mkdir, mkdtemp, rm, writeFile, symlink, rename, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -311,4 +315,70 @@ it('retains empty template branches through local import, exact native publicati
   await mkdir(join(installed, 'templates/skeleton/empty/new'));
   await expect(manager.apply(removal.id)).rejects.toThrow('changed after preview');
   expect((await lstat(join(installed, 'templates/skeleton/empty/new'))).isDirectory()).toBe(true);
+});
+
+it.each(['initial inspection', 'later object read'])('checks mirror file link counts at %s', async timing => {
+  const { root: base } = await fixture();
+  const preview = join(base, 'preview');
+  const mirror = join(base, 'mirror');
+  const alias = join(base, 'copy');
+  await mkdir(preview);
+  execFileSync('git', ['init', '--bare', '--quiet', '--template=', mirror]);
+  const url = 'https://example.invalid/primary.git';
+  await writeFile(process.env.GIT_CONFIG_GLOBAL!, `[url "${pathToFileURL(mirror).href}"]\ninsteadOf = ${url}\n`);
+  const obj = join(mirror, 'objects/info/packs');
+  await writeFile(obj, '', { mode: 0o600 });
+  const transport = new SkillRepositoryGit(
+    preview,
+    new AbortController().signal,
+    [],
+    new NativeFilesystemMetadata(resolve('target/release/glyph-context-index')),
+  );
+  await transport.initialize(url);
+  const list = () => transport.run(['--git-dir=source.git', 'ls-remote', 'origin']);
+  if (timing === 'later object read') expect(await list()).toEqual(Buffer.alloc(0));
+  // A second name in another directory leaves the cached object-directory listing unchanged.
+  await link(obj, alias);
+  const read =
+    timing === 'initial inspection' ? list() : transport.run(['--git-dir=source.git', 'cat-file', '--batch-check']);
+  await expect(read).rejects.toThrow('host filesystem authority');
+});
+
+it('leases a Unix authentication agent for SSH processes and allows HTTPS when a peer owns its directory', async () => {
+  const { root } = await fixture();
+  const sockets = await mkdtemp('/tmp/glyph-agent-');
+  const path = join(sockets, 'agent');
+  const agent = createServer();
+  const listening = once(agent, 'listening');
+  agent.listen(path);
+  await listening;
+  onTestFinished(async () => {
+    const closed = once(agent, 'close');
+    agent.close();
+    await closed;
+    await rm(sockets, { recursive: true, force: true });
+  });
+  vi.stubEnv('SSH_AUTH_SOCK', path);
+  const url = 'https://example.invalid/package';
+  let roots: string[] = [];
+  const store = async (directory: string) => {
+    const cwd = join(root, directory);
+    await mkdir(cwd);
+    const transport = new SkillRepositoryGit(
+      cwd,
+      new AbortController().signal,
+      () => roots,
+      new NativeFilesystemMetadata(resolve('target/release/glyph-context-index')),
+    );
+    await transport.initialize(url);
+    return () => transport.run(['--git-dir=source.git', 'rev-parse', '--is-bare-repository']);
+  };
+  await writeFile(process.env.GIT_CONFIG_GLOBAL!, `[url "ssh://fixture.invalid/package"]\ninsteadOf = ${url}\n`);
+  const ssh = await store('ssh');
+  expect((await ssh()).toString().trim()).toBe('true');
+  roots = [sockets];
+  await expect(ssh()).rejects.toThrow('outside writable workspaces');
+  await writeFile(process.env.GIT_CONFIG_GLOBAL!, '');
+  const https = await store('https');
+  expect((await https()).toString().trim()).toBe('true');
 });

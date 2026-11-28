@@ -89,10 +89,14 @@ export class NativeFilesystemMetadata
     );
   }
 
-  async assertHostPaths(paths: readonly string[], workspaceRoots: readonly string[]): Promise<void> {
+  async assertHostPaths(
+    paths: readonly string[],
+    workspaceRoots: readonly string[],
+    sockets?: readonly string[],
+  ): Promise<void> {
     await this.sendPathRequest(
       '--assert-host-paths',
-      { paths, workspaceRoots },
+      { paths, workspaceRoots, ...(sockets?.length && { sockets }) },
       'Could not establish host filesystem authority outside every workspace.',
     );
   }
