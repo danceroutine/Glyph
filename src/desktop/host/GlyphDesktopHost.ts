@@ -1,6 +1,7 @@
 import { WindowCommandAuthority } from './WindowCommandAuthority.ts';
 import { randomUUID } from 'node:crypto';
-import { join, relative, sep } from 'node:path';
+import { join, sep } from 'node:path';
+import { relativeWorkspaceSpelling } from '#src/workspace/sameWorkspaceDirectory.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getGlyphWorkspaceRootId } from '#src/desktop/protocol/connection/getGlyphWorkspaceRootId.js';
 import type { GlyphAttachmentResource } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
@@ -674,7 +675,10 @@ function resourceForOwner(
   if (local.split('/').includes('..') || local.includes('\\')) throw new Error('Invalid attachment workspace path.');
   const selected = fileURLToPath(resource.uri);
   const path = join(physical, local);
-  if (relative(join(peerRoot.canonicalPath, local), selected) !== '' && relative(path, selected) !== '')
+  if (
+    relativeWorkspaceSpelling(join(peerRoot.canonicalPath, local), selected) !== '' &&
+    relativeWorkspaceSpelling(path, selected) !== ''
+  )
     throw new Error('The selected attachment does not belong to the declared workspace path.');
   const route =
     owner.roots.length === 1
