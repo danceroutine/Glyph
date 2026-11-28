@@ -3,6 +3,9 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { importBundle } from '#scripts/code-oss/tests/support/bundle.mjs';
 
+// The fixture host keeps its grant live while the workbench checks the document and workspace.
+const checkMutation = async () => {};
+
 /** Real adapter, URI and lifecycle code; only injected workbench services are simulated. */
 /**
  * @typedef {{
@@ -39,6 +42,7 @@ async function adapterModule() {
           builder.onResolve({ filter: /^#vs\// }, args => {
             if (
               args.path.startsWith('#vs/base/') ||
+              args.path === '#vs/platform/glyph/workspace/FilesystemNamePolicy.js' ||
               args.path === '#vs/platform/files/common/files.js' ||
               args.path === '#vs/workbench/services/textfile/common/textfiles.js'
             )
@@ -50,7 +54,7 @@ async function adapterModule() {
             contents: `
         const service = () => {};
         export { service as IModelService,
-          service as IWorkspaceTrustManagementService, service as IBulkEditService,
+          service as IWorkspaceTrustManagementService, service as IWorkingCopyService, service as IPathService, service as IBulkEditService,
           service as ITextModelService, service as IWorkspaceContextService, service as IUriIdentityService,
           service as IUserDataProfileService, service as IInstantiationService };
         export const Progress = { None: {} };
@@ -325,18 +329,21 @@ describe('Editor workspace binding', () => {
         const before = await adapter.read('file.ts');
         expect(before.text).toBe(`${prefix}hello\n    \nend`);
         expect(before.byteOrderMark).toBe(false);
-        const response = await adapter.handle({
-          type: 'apply_text_mutation',
-          mutation: {
-            operationId: 'trim',
-            path: 'file.ts',
-            text: `${prefix}HELLO\n    \nend`,
-            byteOrderMark: false,
-            undoGroupId: 'trim',
-            expectedContentRevision: before.contentRevision,
-            expectedToken: before.token,
+        const response = await adapter.handle(
+          {
+            type: 'apply_text_mutation',
+            mutation: {
+              operationId: 'trim',
+              path: 'file.ts',
+              text: `${prefix}HELLO\n    \nend`,
+              byteOrderMark: false,
+              undoGroupId: 'trim',
+              expectedContentRevision: before.contentRevision,
+              expectedToken: before.token,
+            },
           },
-        });
+          checkMutation,
+        );
         expect(model.getValue()).toBe(`${prefix}HELLO\n\nend`);
         expect(response).toMatchObject({
           ok: true,
@@ -406,18 +413,21 @@ describe('Editor workspace binding', () => {
     );
     try {
       const before = await adapter.read('file.ts');
-      const response = await adapter.handle({
-        type: 'apply_text_mutation',
-        mutation: {
-          operationId: 'astral',
-          path: 'file.ts',
-          text: 'café 🌳\n',
-          byteOrderMark: false,
-          undoGroupId: 'astral',
-          expectedContentRevision: before.contentRevision,
-          expectedToken: before.token,
+      const response = await adapter.handle(
+        {
+          type: 'apply_text_mutation',
+          mutation: {
+            operationId: 'astral',
+            path: 'file.ts',
+            text: 'café 🌳\n',
+            byteOrderMark: false,
+            undoGroupId: 'astral',
+            expectedContentRevision: before.contentRevision,
+            expectedToken: before.token,
+          },
         },
-      });
+        checkMutation,
+      );
       expect(response).toMatchObject({ ok: true, snapshot: { text: 'café 🌳\n' }, receipt: { state: 'applied' } });
       expect(model.getValue()).toBe('café 🌳\n');
     } finally {
@@ -714,18 +724,21 @@ describe('Editor workspace binding', () => {
       folders = folders.slice(0, 1);
       for (const listener of listeners) listener({ added: [], removed: [{ name: 'B' }], changed: [] });
       const read = await adapter.handle({ type: 'read_snapshot', operationId: 'read', path: 'A/file.ts' });
-      const mutation = await adapter.handle({
-        type: 'apply_text_mutation',
-        mutation: {
-          operationId: 'edit',
-          path: 'A/file.ts',
-          text: 'changed',
-          byteOrderMark: false,
-          undoGroupId: 'edit',
-          expectedContentRevision: before.contentRevision,
-          expectedToken: before.token,
+      const mutation = await adapter.handle(
+        {
+          type: 'apply_text_mutation',
+          mutation: {
+            operationId: 'edit',
+            path: 'A/file.ts',
+            text: 'changed',
+            byteOrderMark: false,
+            undoGroupId: 'edit',
+            expectedContentRevision: before.contentRevision,
+            expectedToken: before.token,
+          },
         },
-      });
+        checkMutation,
+      );
       expect.soft(read.ok).toBe(false);
       expect.soft(read.error?.code).toBe('WORKSPACE_CHANGED');
       expect.soft(reference.mock.calls.map(([uri]) => uri.path)).toEqual(['/workspace/A/file.ts']);
@@ -756,11 +769,17 @@ async function pendingEdit({
   const finish = Promise.withResolvers();
   let dirty = true;
   let diskText = initial;
-  const save = vi.fn(async (/** @type {URIValue} */ resource) => {
-    diskText = text;
-    dirty = false;
-    return resource;
-  });
+  const save = vi.fn(
+    async (
+      /** @type {URIValue} */ resource,
+      /** @type {{ validateBeforeWrite: () => Promise<() => void> }} */ options,
+    ) => {
+      (await options.validateBeforeWrite())();
+      diskText = text;
+      dirty = false;
+      return resource;
+    },
+  );
   let folders = [{ name: 'A', uri: URI.file('/workspace/A') }];
   let workspaceId = 'workspace';
   let profileId = 'profile';
@@ -849,7 +868,7 @@ async function pendingEdit({
         };
       },
     },
-    { getModels: () => [model] },
+    { getModels: () => [model], getModel: resource => (resource.toString() === model.uri.toString() ? model : null) },
     { isDirty: () => dirty, save },
     { isWorkspaceTrusted: () => true },
     {},
@@ -914,19 +933,22 @@ async function pendingEdit({
       for (const listener of folderListeners) listener({});
     },
     apply: (shouldSave = false) =>
-      adapter.handle({
-        type: 'apply_text_mutation',
-        mutation: {
-          operationId: 'edit',
-          save: shouldSave,
-          path: 'file.ts',
-          text: replacement,
-          byteOrderMark: false,
-          undoGroupId: 'edit',
-          expectedContentRevision: before.contentRevision,
-          expectedToken: before.token,
+      adapter.handle(
+        {
+          type: 'apply_text_mutation',
+          mutation: {
+            operationId: 'edit',
+            save: shouldSave,
+            path: 'file.ts',
+            text: replacement,
+            byteOrderMark: false,
+            undoGroupId: 'edit',
+            expectedContentRevision: before.contentRevision,
+            expectedToken: before.token,
+          },
         },
-      }),
+        checkMutation,
+      ),
   };
 }
 
@@ -963,17 +985,20 @@ it.each(['trust revoked', 'destination occupied'])(
       { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
     );
     try {
-      const result = await adapter.handle({
-        type: 'apply_file_mutation',
-        mutation: {
-          kind: 'create',
-          path: 'file.ts',
-          text: 'new',
-          byteOrderMark: false,
-          operationId: 'create',
-          undoGroupId: 'create',
+      const result = await adapter.handle(
+        {
+          type: 'apply_file_mutation',
+          mutation: {
+            kind: 'create',
+            path: 'file.ts',
+            text: 'new',
+            byteOrderMark: false,
+            operationId: 'create',
+            undoGroupId: 'create',
+          },
         },
-      });
+        checkMutation,
+      );
       expect(apply).toHaveBeenCalledOnce();
       expect(written).toBe(false);
       expect(result).toMatchObject({
@@ -999,6 +1024,7 @@ it('saves an applied text edit before reporting success even with Auto Save off'
     expect(fixture.diskText()).toBe('replacement');
     expect(fixture.save).toHaveBeenCalledWith(expect.objectContaining({ path: '/workspace/A/file.ts' }), {
       skipSaveParticipants: true,
+      validateBeforeWrite: expect.any(Function),
     });
     expect((await fixture.apply(true)).ok).toBe(true);
     expect(fixture.launch).toHaveBeenCalledTimes(1);

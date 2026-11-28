@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { DeterministicDesktopRuntimeFactory } from '#src/desktop/host/DeterministicDesktopRuntime.js';
+import type { GlyphDesktopWorkspaceRuntimeFactory } from '#src/desktop/host/GlyphDesktopWorkspaceRuntimeFactory.js';
 import { GlyphContextAttachmentKind } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { GlyphResponseDeltaKind } from '#src/desktop/protocol/events/GlyphResponseDelta.js';
@@ -84,7 +85,22 @@ const identity = { profileId: 'profile', windowId: 'window', workspaceId: 'works
 
 async function createRuntime(emit: (event: GlyphHostEvent) => void) {
   passingProbe();
-  return new DeterministicDesktopRuntimeFactory().create({ identity, roots, emit });
+  const backing = {
+    create: async () => ({
+      snapshot: async () => ({ accounts: [], models: [], chats: [], runs: [], proposals: [] }),
+      handle: async () => {},
+      connectionLost: async () => {},
+      dispose: async () => {},
+      attachmentAccess: { admit: async () => {}, resolve: async () => undefined },
+    }),
+  };
+  return new DeterministicDesktopRuntimeFactory(backing).create({
+    identity,
+    trusted: true,
+    assertTrusted: () => {},
+    roots,
+    emit,
+  });
 }
 
 describe(DeterministicDesktopRuntimeFactory, () => {
@@ -92,7 +108,13 @@ describe(DeterministicDesktopRuntimeFactory, () => {
     it('requires a local workspace root', async () => {
       passingProbe();
       await expect(
-        new DeterministicDesktopRuntimeFactory().create({ identity, roots: [], emit: vi.fn() }),
+        new DeterministicDesktopRuntimeFactory().create({
+          identity,
+          trusted: true,
+          assertTrusted: () => {},
+          roots: [],
+          emit: vi.fn(),
+        }),
       ).rejects.toThrow('The native Glyph runtime requires a local workspace root.');
       expect(native.execFile).not.toHaveBeenCalled();
     });
@@ -100,8 +122,8 @@ describe(DeterministicDesktopRuntimeFactory, () => {
     it('probes the packaged native dependencies once per factory', async () => {
       passingProbe();
       const factory = new DeterministicDesktopRuntimeFactory();
-      await factory.create({ identity, roots, emit: vi.fn() });
-      await factory.create({ identity, roots, emit: vi.fn() });
+      await factory.create({ identity, trusted: true, assertTrusted: () => {}, roots, emit: vi.fn() });
+      await factory.create({ identity, trusted: true, assertTrusted: () => {}, roots, emit: vi.fn() });
       expect(native.close).toHaveBeenCalledOnce();
       expect(native.execFile).toHaveBeenCalledOnce();
       expect(native.execFile).toHaveBeenCalledWith(
@@ -114,6 +136,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
         workspaceRoots: ['/project'],
         stateDirectory: expect.stringContaining('glyph-desktop-probe-'),
         protectedPaths: [repositoryRoot],
+        accessPolicy: expect.objectContaining({
+          privatePaths: expect.arrayContaining([expect.stringContaining('glyph-desktop-probe-')]),
+        }),
       });
       expect(native.launch).toHaveBeenCalledExactlyOnceWith('true', '/project', {
         sandboxProfile: ShellSandboxProfile.READ_ONLY,
@@ -129,7 +154,13 @@ describe(DeterministicDesktopRuntimeFactory, () => {
       onTestFinished(() => {
         Object.defineProperty(process, 'platform', platform);
       });
-      await new DeterministicDesktopRuntimeFactory().create({ identity, roots, emit: vi.fn() });
+      await new DeterministicDesktopRuntimeFactory().create({
+        identity,
+        trusted: true,
+        assertTrusted: () => {},
+        roots,
+        emit: vi.fn(),
+      });
       const windowsRoot = join(repositoryRoot, 'native', `win32-${process.arch}`);
       expect(native.execFile).toHaveBeenCalledWith(
         join(windowsRoot, 'glyph-context-index.exe'),
@@ -144,9 +175,15 @@ describe(DeterministicDesktopRuntimeFactory, () => {
     it('rejects an invalid SQLite probe result after closing the database', async () => {
       passingProbe();
       native.probeResult.mockReturnValue({});
-      await expect(new DeterministicDesktopRuntimeFactory().create({ identity, roots, emit: vi.fn() })).rejects.toThrow(
-        'The packaged SQLite probe returned an invalid result.',
-      );
+      await expect(
+        new DeterministicDesktopRuntimeFactory().create({
+          identity,
+          trusted: true,
+          assertTrusted: () => {},
+          roots,
+          emit: vi.fn(),
+        }),
+      ).rejects.toThrow('The packaged SQLite probe returned an invalid result.');
       expect(native.close).toHaveBeenCalledOnce();
       expect(native.execFile).not.toHaveBeenCalled();
     });
@@ -160,8 +197,12 @@ describe(DeterministicDesktopRuntimeFactory, () => {
         return { stdin: null };
       });
       const factory = new DeterministicDesktopRuntimeFactory();
-      await expect(factory.create({ identity, roots, emit: vi.fn() })).rejects.toThrow('missing context index');
-      await expect(factory.create({ identity, roots, emit: vi.fn() })).rejects.toThrow('missing context index');
+      await expect(
+        factory.create({ identity, trusted: true, assertTrusted: () => {}, roots, emit: vi.fn() }),
+      ).rejects.toThrow('missing context index');
+      await expect(
+        factory.create({ identity, trusted: true, assertTrusted: () => {}, roots, emit: vi.fn() }),
+      ).rejects.toThrow('missing context index');
       expect(native.execFile).toHaveBeenCalledOnce();
       expect(native.launch).not.toHaveBeenCalled();
     });
@@ -173,9 +214,15 @@ describe(DeterministicDesktopRuntimeFactory, () => {
     ])('reports a sandbox probe that exits with $label', async ({ code, signal, label }) => {
       passingProbe();
       native.launch.mockImplementation(() => sandboxChild({ code, signal, stderr: ' denied\n' }));
-      await expect(new DeterministicDesktopRuntimeFactory().create({ identity, roots, emit: vi.fn() })).rejects.toThrow(
-        `The packaged shell sandbox probe failed (${label}): denied`,
-      );
+      await expect(
+        new DeterministicDesktopRuntimeFactory().create({
+          identity,
+          trusted: true,
+          assertTrusted: () => {},
+          roots,
+          emit: vi.fn(),
+        }),
+      ).rejects.toThrow(`The packaged shell sandbox probe failed (${label}): denied`);
       const [{ stateDirectory }] = native.launcher.mock.calls[0] as [{ stateDirectory: string }];
       expect(existsSync(stateDirectory)).toBe(false);
     });
@@ -189,9 +236,15 @@ describe(DeterministicDesktopRuntimeFactory, () => {
         });
         return child;
       });
-      await expect(new DeterministicDesktopRuntimeFactory().create({ identity, roots, emit: vi.fn() })).rejects.toThrow(
-        'spawn EACCES',
-      );
+      await expect(
+        new DeterministicDesktopRuntimeFactory().create({
+          identity,
+          trusted: true,
+          assertTrusted: () => {},
+          roots,
+          emit: vi.fn(),
+        }),
+      ).rejects.toThrow('spawn EACCES');
     });
 
     it('accepts a sandbox probe without standard streams', async () => {
@@ -204,8 +257,141 @@ describe(DeterministicDesktopRuntimeFactory, () => {
         return child;
       });
       await expect(
-        new DeterministicDesktopRuntimeFactory().create({ identity, roots, emit: vi.fn() }),
+        new DeterministicDesktopRuntimeFactory().create({
+          identity,
+          trusted: true,
+          assertTrusted: () => {},
+          roots,
+          emit: vi.fn(),
+        }),
       ).resolves.toBeDefined();
+    });
+
+    it('retries failed workspace initialization and keeps backing workspace events out of the fixture stream', async () => {
+      passingProbe();
+      const backing = {
+        snapshot: async () => ({ accounts: [], models: [], chats: [], runs: [], proposals: [] }),
+        handle: async () => {},
+        connectionLost: async () => {},
+        dispose: vi.fn(async () => {}),
+      };
+      const create = vi
+        .fn<GlyphDesktopWorkspaceRuntimeFactory['create']>()
+        .mockRejectedValueOnce(new Error('Workspace still opening'))
+        .mockImplementation(async ({ emit }) => {
+          emit({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: [] });
+          return backing;
+        });
+      const emit = vi.fn();
+      const runtime = await new DeterministicDesktopRuntimeFactory({ create }).create({
+        identity,
+        trusted: true,
+        assertTrusted: () => {},
+        roots,
+        emit,
+      });
+      const resource = { uri: 'file:///project', path: '.', folder: true };
+      const signal = new AbortController().signal;
+      await expect(runtime.attachmentAccess!.resolve(resource, signal)).rejects.toThrow('Workspace still opening');
+      await expect(runtime.attachmentAccess!.resolve(resource, signal)).rejects.toThrow(
+        'Attachment access is unavailable',
+      );
+      expect(create).toHaveBeenCalledTimes(2);
+      expect(emit).not.toHaveBeenCalled();
+      await runtime.dispose();
+      expect(backing.dispose).toHaveBeenCalledOnce();
+    });
+
+    it('withholds a captured file when the fixture host has no backing workspace', async () => {
+      passingProbe();
+      const emit = vi.fn();
+      const runtime = await new DeterministicDesktopRuntimeFactory().create({
+        identity,
+        trusted: true,
+        assertTrusted: () => {},
+        roots,
+        emit,
+      });
+      await expect(
+        runtime.handle(
+          {
+            type: GlyphWorkbenchCommandType.SEND,
+            chatId: 'chat',
+            runId: 'run',
+            text: 'Review',
+            attachments: [
+              {
+                kind: GlyphContextAttachmentKind.FILE,
+                uri: 'file:///project/notes',
+                path: 'notes',
+                text: 'notes',
+                contentRevision: 'v1',
+              },
+            ],
+          },
+          { signal: new AbortController().signal, emit },
+        ),
+      ).rejects.toThrow('Attachment access is unavailable');
+      expect((await runtime.snapshot()).runs).toEqual([]);
+      expect(emit).not.toHaveBeenCalled();
+      await runtime.dispose();
+    });
+
+    it('opens real attachment access on demand and rejects a capture before streaming', async () => {
+      passingProbe();
+      const workspace = {
+        attachmentAccess: {
+          resolve: vi.fn(async () => ({ files: ['notes.md'], truncated: false })),
+          admit: vi.fn(async () => {
+            throw new Error('private source');
+          }),
+        },
+        snapshot: async () => ({ accounts: [], models: [], chats: [], runs: [], proposals: [] }),
+        handle: async () => {},
+        connectionLost: async () => {},
+        dispose: vi.fn(async () => {}),
+      };
+      const create = vi.fn(async () => workspace);
+      const emit = vi.fn();
+      const runtime = await new DeterministicDesktopRuntimeFactory({ create }).create({
+        identity,
+        trusted: true,
+        assertTrusted: () => {},
+        roots,
+        emit,
+      });
+      expect(create).not.toHaveBeenCalled();
+      const signal = new AbortController().signal;
+      const file = { uri: 'file:///project', path: '.', folder: true };
+      await expect(runtime.attachmentAccess?.resolve(file, signal)).resolves.toEqual({
+        files: ['notes.md'],
+        truncated: false,
+      });
+      expect(workspace.attachmentAccess.resolve).toHaveBeenCalledWith(file, signal);
+      await expect(
+        runtime.handle(
+          {
+            type: GlyphWorkbenchCommandType.SEND,
+            chatId: 'chat',
+            runId: 'run',
+            text: 'selection',
+            attachments: [
+              {
+                kind: GlyphContextAttachmentKind.FILE,
+                uri: 'file:///project/.env',
+                path: '.env',
+                text: 'private',
+                contentRevision: 'v1',
+              },
+            ],
+          },
+          { signal, emit },
+        ),
+      ).rejects.toThrow('private source');
+      expect(create).toHaveBeenCalledOnce();
+      expect(emit).not.toHaveBeenCalled();
+      await runtime.dispose();
+      expect(workspace.dispose).toHaveBeenCalledOnce();
     });
 
     it('creates runtimes that expose the fixture catalog and their runs', async () => {

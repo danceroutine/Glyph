@@ -1,3 +1,5 @@
+import { env } from '#vs/base/common/process.js';
+import { extUri } from '#vs/base/common/resources.js';
 import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { GlyphEditorAdapter } from '#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js';
 import { URI } from '#vs/base/common/uri.js';
@@ -148,7 +150,10 @@ function editorServices() {
       getModels: () => models,
       getModel: vi.fn((resource: URI) => find(resource) ?? null),
     },
+    workingCopyService: { dirtyWorkingCopies: [] as { resource: URI }[] },
+    pathService: { userHome: () => URI.file('/home/test') },
     textFileService: {
+      untitled: { isUntitledWithAssociatedResource: (resource: URI) => resource.path.startsWith('/') },
       isDirty: vi.fn((resource: URI) => dirty.has(resource.path)),
       files: {
         resolve: vi.fn(async (resource: URI) => {
@@ -158,19 +163,26 @@ function editorServices() {
           return model;
         }),
       },
-      save: vi.fn(async (resource: URI): Promise<URI | undefined> => {
-        disk.set(resource.path, find(resource)!.text);
-        dirty.delete(resource.path);
-        return resource;
-      }),
+      save: vi.fn(
+        async (
+          resource: URI,
+          options?: { validateBeforeWrite?: () => Promise<() => void> },
+        ): Promise<URI | undefined> => {
+          if (options?.validateBeforeWrite) (await options.validateBeforeWrite())();
+          disk.set(resource.path, find(resource)!.text);
+          dirty.delete(resource.path);
+          return resource;
+        },
+      ),
     },
     trustService: { isWorkspaceTrusted: vi.fn(() => state.trusted) },
     fileService: {
+      realpath: vi.fn(async (resource: URI): Promise<URI | undefined> => resource),
       exists: vi.fn(async (resource: URI) => disk.has(resource.path)),
       stat: vi.fn(async (resource: URI): Promise<{ size?: number }> => ({ size: disk.get(resource.path)?.length })),
       readFile: vi.fn(async (resource: URI) => ({ value: VSBuffer.fromString(disk.get(resource.path) ?? '') })),
     },
-    uriIdentityService: { asCanonicalUri: (resource: URI) => resource },
+    uriIdentityService: { extUri, asCanonicalUri: (resource: URI) => resource },
     userDataProfileService: {
       get currentProfile() {
         return { id: state.profile };
@@ -196,6 +208,8 @@ function createAdapter(services: EditorServices) {
     services.uriIdentityService as never,
     services.userDataProfileService as never,
     services.instantiationService as never,
+    services.workingCopyService as never,
+    services.pathService as never,
   );
   onTestFinished(() => {
     adapter.dispose();
@@ -237,11 +251,11 @@ function fileMutation(
 }
 
 function applyText(adapter: GlyphEditorAdapter, mutation: GlyphTextMutation) {
-  return adapter.handle({ type: GlyphEditorRequestType.APPLY_TEXT_MUTATION, mutation });
+  return adapter.handle({ type: GlyphEditorRequestType.APPLY_TEXT_MUTATION, mutation }, async () => {});
 }
 
 function applyFile(adapter: GlyphEditorAdapter, mutation: GlyphFileMutation) {
-  return adapter.handle({ type: GlyphEditorRequestType.APPLY_FILE_MUTATION, mutation });
+  return adapter.handle({ type: GlyphEditorRequestType.APPLY_FILE_MUTATION, mutation }, async () => {});
 }
 
 function readSnapshot(adapter: GlyphEditorAdapter, path: string) {
@@ -322,6 +336,24 @@ describe(GlyphEditorAdapter, () => {
   });
 
   describe(GlyphEditorAdapter.prototype.handle, () => {
+    it('reads only already open dirty catalog models without opening or retaining unopened files', async () => {
+      const services = editorServices();
+      const adapter = createAdapter(services);
+      const read = () =>
+        adapter.handle({
+          type: GlyphEditorRequestType.READ_OPEN_SNAPSHOT,
+          operationId: 'catalog',
+          path: 'AGENTS.md',
+          maxBytes: 64,
+        });
+      services.disk.set('/workspace/AGENTS.md', 'Disk');
+      expect(await read()).toEqual({ operationId: 'catalog', ok: true });
+      services.open('AGENTS.md', 'Unsaved');
+      expect(await read()).toEqual({ operationId: 'catalog', ok: true });
+      services.dirty.add('/workspace/AGENTS.md');
+      expect(await read()).toMatchObject({ ok: true, snapshot: { text: 'Unsaved', dirty: true } });
+      expect(services.textModelService.createModelReference).not.toHaveBeenCalled();
+    });
     it('refuses editor requests in an untrusted workspace', async () => {
       const services = editorServices();
       services.open('a.ts', 'text');
@@ -340,7 +372,7 @@ describe(GlyphEditorAdapter, () => {
       expect(response).toMatchObject({ ok: true, workingCopies: [{ path: 'a.ts', text: 'alpha', dirty: false }] });
       expect(
         await adapter.handle({ type: GlyphEditorRequestType.LIST_WORKING_COPY_PATHS, operationId: 'paths' }),
-      ).toMatchObject({ ok: true, workingCopyPaths: ['a.ts'] });
+      ).toMatchObject({ ok: true, workingCopyPaths: [] });
     });
 
     it('prefixes working copy paths with their root in a multi-root workspace', async () => {
@@ -350,6 +382,7 @@ describe(GlyphEditorAdapter, () => {
         { name: 'two', uri: URI.file('/two') },
       ];
       services.models.push(textModel(URI.file('/two/b.ts'), 'beta'));
+      services.dirty.add('/two/b.ts');
       const adapter = createAdapter(services);
       expect(
         await adapter.handle({ type: GlyphEditorRequestType.LIST_WORKING_COPY_PATHS, operationId: 'paths' }),
@@ -359,7 +392,10 @@ describe(GlyphEditorAdapter, () => {
 
     it('refuses to list more than 2000 working copies', async () => {
       const services = editorServices();
-      for (let index = 0; index <= 2000; index++) services.open(`file-${index}.ts`, '');
+      for (let index = 0; index <= 2000; index++) {
+        services.open(`file-${index}.ts`, '');
+        services.dirty.add(`/workspace/file-${index}.ts`);
+      }
       const adapter = createAdapter(services);
       expect(
         await adapter.handle({ type: GlyphEditorRequestType.LIST_WORKING_COPY_PATHS, operationId: 'paths' }),
@@ -1005,6 +1041,30 @@ describe(GlyphEditorAdapter, () => {
       );
     });
 
+    it('checks the host grant again after native edit participants finish', async () => {
+      const services = editorServices();
+      services.open('a.ts', 'text');
+      const adapter = createAdapter(services);
+      const before = await adapter.read('a.ts');
+      const request = {
+        type: GlyphEditorRequestType.APPLY_FILE_MUTATION,
+        mutation: fileMutation(before, GlyphFileMutationKind.RENAME, { target: 'b.ts' }),
+      } as const;
+      expect((await adapter.handle(request)).ok).toBe(false);
+      const scope = new AbortController();
+      const check = vi.fn(async () => {
+        scope.signal.throwIfAborted();
+      });
+      services.bulkEditService.apply.mockImplementation(async edits => {
+        scope.abort(new Error('Workspace root changed'));
+        await (edits[0] as ResourceFileEdit & { validate(): Promise<void> }).validate();
+        return { isApplied: true };
+      });
+      expect((await adapter.handle(request, check)).ok).toBe(false);
+      expect(check).toHaveBeenCalledTimes(2);
+      expect(services.disk.has('/workspace/b.ts')).toBe(false);
+    });
+
     it('renames a file with unsaved changes', async () => {
       const services = editorServices();
       services.open('a.ts', 'text');
@@ -1353,7 +1413,7 @@ describe(GlyphEditorAdapter, () => {
       const adapter = createAdapter(services);
       const before = await adapter.read('a.ts');
       services.state.trusted = false;
-      await expect(adapter.apply(textMutation(before, 'changed'))).rejects.toMatchObject({
+      await expect(adapter.apply(textMutation(before, 'changed'), async () => {})).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
       });
       expect(services.bulkEditService.apply).not.toHaveBeenCalled();
@@ -1372,6 +1432,64 @@ describe(GlyphEditorAdapter, () => {
         failure(GlyphDesktopErrorCode.STALE_DOCUMENT),
       );
       expect(services.bulkEditService.apply).not.toHaveBeenCalled();
+    });
+
+    it('keeps the working copy untouched if trust changes during the host check for a text edit', async () => {
+      const services = editorServices();
+      services.open('a.ts', 'text');
+      const adapter = createAdapter(services);
+      const before = await adapter.read('a.ts');
+      const check = async () => {
+        services.state.trusted = false;
+      };
+
+      await expect(adapter.apply(textMutation(before, 'changed'), check)).rejects.toMatchObject({
+        code: GlyphDesktopErrorCode.STALE_DOCUMENT,
+      });
+      expect(services.bulkEditService.apply).not.toHaveBeenCalled();
+    });
+
+    it.each(['typed', 'reopened', 'closed'] as const)(
+      'preserves a working copy that was %s while the host checked its save',
+      async change => {
+        const services = editorServices();
+        const model = services.open('a.ts', 'text');
+        const adapter = createAdapter(services);
+        const before = await adapter.read('a.ts');
+        await applyText(adapter, textMutation(before, 'changed'));
+        const check = async () => {
+          if (change === 'typed') model.write('user draft');
+          else {
+            services.models.splice(0);
+            if (change === 'reopened') {
+              const replacement = textModel(model.uri, 'independent working copy');
+              services.models.push(replacement);
+              replacement.version = model.version;
+            }
+          }
+        };
+        await expect(adapter.apply(textMutation(before, 'changed', { save: true }), check)).rejects.toMatchObject({
+          code: GlyphDesktopErrorCode.STALE_DOCUMENT,
+        });
+        expect(services.disk.get('/workspace/a.ts')).toBe('text');
+      },
+    );
+
+    it('keeps an applied edit unsaved if trust changes during the host check for its save', async () => {
+      const services = editorServices();
+      services.open('a.ts', 'text');
+      const adapter = createAdapter(services);
+      const before = await adapter.read('a.ts');
+      await applyText(adapter, textMutation(before, 'changed'));
+      const check = async () => {
+        services.state.trusted = false;
+      };
+
+      await expect(adapter.apply(textMutation(before, 'changed', { save: true }), check)).rejects.toMatchObject({
+        code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
+      });
+      expect(services.disk.get('/workspace/a.ts')).toBe('text');
+      expect(services.textFileService.isDirty(URI.file('/workspace/a.ts'))).toBe(true);
     });
 
     it('applies an EOL-only conversion', async () => {
@@ -1465,6 +1583,7 @@ describe(GlyphEditorAdapter, () => {
       });
       expect(services.textFileService.save).toHaveBeenCalledWith(expect.objectContaining({ path: '/workspace/a.ts' }), {
         skipSaveParticipants: true,
+        validateBeforeWrite: expect.any(Function),
       });
       expect(services.disk.get('/workspace/a.ts')).toBe('changed');
     });
@@ -1551,4 +1670,182 @@ describe(GlyphEditorAdapter, () => {
       );
     });
   });
+});
+
+it('reads consistent dirty catalog snapshots from logical and physical buffers and rejects conflicting edits', async () => {
+  const services = editorServices();
+  const adapter = createAdapter(services);
+  const path = 'AGENTS.md';
+  const logical = URI.file('/workspace/AGENTS.md');
+  const physical = URI.file('/actual/AGENTS.md');
+  services.fileService.realpath.mockResolvedValue(physical);
+  const command = {
+    type: GlyphEditorRequestType.READ_OPEN_SNAPSHOT as const,
+    operationId: 'source',
+    path,
+    physicalUri: physical.toString(),
+  };
+  const first = textModel(physical, 'physical edit');
+  services.models.push(first);
+  services.dirty.add(physical.path);
+  expect((await adapter.handle(command)).snapshot?.text).toBe('physical edit');
+  services.models.push(textModel(logical, 'other edit'));
+  services.dirty.add(logical.path);
+  expect((await adapter.handle(command)).ok).toBe(false);
+  services.fileService.realpath.mockResolvedValue(undefined);
+  expect((await adapter.handle(command)).ok).toBe(false);
+  services.dirty.clear();
+  expect(await adapter.handle(command)).toEqual({ operationId: 'source', ok: true });
+});
+
+it('accepts dirty text only from the matching filesystem spelling', async () => {
+  const services = editorServices();
+  const adapter = createAdapter(services);
+  const real = textModel(URI.file('/workspace/api.mdc'), 'lower');
+  services.models.push(real);
+  services.dirty.add('/workspace/API.mdc');
+  services.modelService.getModel.mockReturnValue(real);
+  const request = { type: GlyphEditorRequestType.READ_OPEN_SNAPSHOT as const, operationId: 'case', path: 'API.mdc' };
+  expect((await adapter.handle({ ...request, caseSensitive: true })).snapshot).toBeUndefined();
+  expect((await adapter.handle({ ...request, caseSensitive: false })).snapshot?.text).toBe('lower');
+  services.modelService.getModel.mockReturnValue(null);
+  expect((await adapter.handle({ ...request, caseSensitive: false })).snapshot).toBeUndefined();
+});
+
+it('checks exact rules and complete skill packages across configured, physical, attached and associated-untitled routes', async () => {
+  const services = editorServices();
+  const original = env['GLYPH_USER_DIRECTORY'];
+  delete env['GLYPH_USER_DIRECTORY'];
+  onTestFinished(() => {
+    if (original === undefined) delete env['GLYPH_USER_DIRECTORY'];
+    else env['GLYPH_USER_DIRECTORY'] = original;
+  });
+  services.workspace.folders.unshift(
+    { name: 'remote', uri: URI.parse('remote:/workspace') },
+    { name: 'another', uri: URI.file('/other') },
+  );
+  const adapter = createAdapter(services);
+  const copies = services.workingCopyService.dirtyWorkingCopies;
+  services.fileService.realpath.mockImplementation(async resource => {
+    if (resource.path === '/home/test/.glyph') return URI.file('/volume/profile');
+    if (resource.path === '/workspace') return URI.file('/volume');
+    return undefined;
+  });
+  const check = (kind: 'rule' | 'skill', name: string, caseSensitive = true) =>
+    adapter.handle({
+      operationId: 'check',
+      type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES,
+      kind,
+      name,
+      caseSensitive,
+    });
+  expect((await check('rule', 'one.mdc')).workingCopiesClean).toBe(true);
+  for (const value of ['', '.', '..', 'test/one.mdc', 'one.txt']) expect((await check('rule', value)).ok).toBe(false);
+  for (const path of [
+    '/home/test/.glyph/rules/one.mdc',
+    '/volume/profile/rules/one.mdc',
+    '/workspace/profile/rules/one.mdc',
+  ]) {
+    copies.splice(0, copies.length, { resource: URI.file(path).with({ scheme: 'untitled' }) });
+    expect((await check('rule', 'one.mdc')).workingCopiesClean).toBe(false);
+    expect((await check('rule', 'ONE.MDC')).workingCopiesClean).toBe(true);
+    expect((await check('rule', 'ONE.MDC', false)).workingCopiesClean).toBe(false);
+  }
+  const mounted = {
+    operationId: 'mounted',
+    type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES as const,
+    kind: 'skill' as const,
+    name: 'pkg',
+    caseSensitive: true,
+    sourceUris: ['file:///volume/mounted/package'],
+  };
+  for (const path of ['/volume/mounted/package/notes', '/workspace/mounted/package/notes']) {
+    copies.splice(0, copies.length, { resource: URI.file(path) });
+    expect((await adapter.handle(mounted)).workingCopiesClean).toBe(false);
+  }
+  copies.splice(0, copies.length, { resource: URI.file('/workspace/profile/skills/pkg/a/b') });
+  expect((await check('skill', 'pkg')).workingCopiesClean).toBe(false);
+  expect((await check('skill', 'other')).workingCopiesClean).toBe(true);
+  copies.splice(
+    0,
+    copies.length,
+    { resource: URI.parse('untitled:Untitled-1') },
+    { resource: URI.parse('memfs:/workspace/note') },
+  );
+  expect((await check('skill', 'pkg')).workingCopiesClean).toBe(true);
+  copies.push({ resource: URI.file('/workspace/other') });
+  env['GLYPH_USER_DIRECTORY'] = '/configured';
+  copies.push({ resource: URI.file('/configured/rules/x.mdc') });
+  expect((await check('rule', 'x.mdc')).workingCopiesClean).toBe(false);
+  delete env['GLYPH_USER_DIRECTORY'];
+  services.fileService.realpath.mockResolvedValueOnce(undefined);
+  expect((await check('skill', 'pkg')).ok).toBe(false);
+  services.fileService.realpath.mockResolvedValueOnce(URI.file('/volume/profile')).mockResolvedValueOnce(undefined);
+  expect((await check('skill', 'pkg')).ok).toBe(false);
+});
+
+it('matches dirty rule and package names using the native profile policy, including associated untitled files and attached aliases', async () => {
+  const services = editorServices();
+  const original = env['GLYPH_USER_DIRECTORY'];
+  env['GLYPH_USER_DIRECTORY'] = '/volume/profile';
+  onTestFinished(() => {
+    if (original === undefined) delete env['GLYPH_USER_DIRECTORY'];
+    else env['GLYPH_USER_DIRECTORY'] = original;
+  });
+  services.workspace.folders = [{ name: 'alias', uri: URI.file('/ß') }];
+  services.fileService.realpath.mockImplementation(async uri => (uri.path === '/ß' ? URI.file('/volume') : uri));
+  const adapter = createAdapter(services);
+  const policy = { caseSensitive: false, normalizesUnicode: true, foldsUnicode: true };
+  const sensitive = { caseSensitive: true, normalizesUnicode: false, foldsUnicode: false };
+  for (const [kind, name, path] of [
+    ['rule', 'café.mdc', '/volume/profile/rules/cafe\u0301.mdc'],
+    ['rule', 'ss.mdc', '/SS/profile/rules/ß.mdc'],
+    ['skill', 'ss', '/SS/profile/skills/ß/references/guide.md'],
+  ] as const) {
+    services.workingCopyService.dirtyWorkingCopies.splice(0, Infinity, {
+      resource: URI.file(path).with({ scheme: 'untitled' }),
+    });
+    const command = {
+      type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES as const,
+      operationId: 'working-copies',
+      kind,
+      name,
+      caseSensitive: false,
+    };
+    expect((await adapter.handle({ ...command, namePolicy: policy })).workingCopiesClean).toBe(false);
+    expect((await adapter.handle({ ...command, namePolicy: sensitive })).workingCopiesClean).toBe(true);
+  }
+});
+
+it('discovers an existing dirty instruction buffer through a filesystem alias and checks its resolved route', async () => {
+  const services = editorServices();
+  const adapter = createAdapter(services);
+  const model = services.open('cafe\u0301-ß.mdc', 'Edited guidance');
+  services.dirty.add(model.uri.path);
+  const path = 'café-SS.mdc';
+  const physical = URI.file('/workspace/' + path);
+  const command = {
+    type: GlyphEditorRequestType.READ_OPEN_SNAPSHOT as const,
+    operationId: 'source',
+    path,
+    physicalUri: physical.toString(),
+    namePolicy: { caseSensitive: false, normalizesUnicode: true, foldsUnicode: true },
+  };
+  const response = await adapter.handle(command);
+  expect(response.snapshot?.text).toBe('Edited guidance');
+  expect(response.snapshot?.uri).toBe(model.uri.toString());
+  expect(
+    (
+      await adapter.handle({
+        ...command,
+        namePolicy: { caseSensitive: true, normalizesUnicode: false, foldsUnicode: false },
+      })
+    ).snapshot,
+  ).toBeUndefined();
+  services.fileService.realpath.mockImplementation(async uri =>
+    uri.path === model.uri.path ? URI.file('/elsewhere') : uri,
+  );
+  expect((await adapter.handle(command)).ok).toBe(false);
+  services.fileService.realpath.mockResolvedValue(undefined);
+  expect((await adapter.handle(command)).ok).toBe(false);
 });

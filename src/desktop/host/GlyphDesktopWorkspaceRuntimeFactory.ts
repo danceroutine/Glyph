@@ -1,3 +1,4 @@
+import type { SourcePathAliases } from '#src/workspace/SourcePathAliases.js';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphWorkspaceRoot } from '#src/desktop/protocol/connection/GlyphWorkspaceRoot.js';
 import type { GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
@@ -5,10 +6,13 @@ import type { GlyphDesktopWorkspaceRuntime } from './GlyphDesktopWorkspaceRuntim
 
 /** Creates one runtime per mutation-owning workspace rather than per renderer. */
 export interface GlyphDesktopWorkspaceRuntimeFactory {
+  readonly sourcePathAliases?: SourcePathAliases;
   create(input: {
     readonly identity: GlyphConnectionIdentity;
     readonly roots: readonly GlyphWorkspaceRoot[];
     readonly trusted: boolean;
+    /** Recheck the owning connection, attached roots and live trust before releasing model context. */
+    readonly assertTrusted: () => void;
     readonly emit: (event: GlyphHostEvent) => void;
   }): Promise<GlyphDesktopWorkspaceRuntime>;
 }

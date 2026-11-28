@@ -8,12 +8,13 @@ import {
   type ResolvedRustWorkspacePathIndexOptions,
   type RustWorkspacePathIndexConfiguration,
 } from './RustWorkspacePathIndexOptions.ts';
-import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
 import {
   workspaceContentSearchOptionsSchema,
   type WorkspaceContentSearchOptions,
 } from './WorkspaceContentSearchOptions.ts';
-import type { WorkspaceContentSearchResult } from './WorkspaceContentSearchResult.ts';
+import type { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+import { searchTextSource, type WorkspaceContentSearchResult } from './WorkspaceContentSearchResult.ts';
 import type { WorkspacePathGlobResult } from './WorkspacePathGlobResult.ts';
 import type { WorkspacePathIndex } from './WorkspacePathIndex.ts';
 import { WorkspacePathIndexError } from './WorkspacePathIndexError.ts';
@@ -25,10 +26,13 @@ const PROTOCOL_VERSION = 1;
 const MAXIMUM_ERROR_OUTPUT = 8_192;
 
 enum PathIndexMethod {
+  FILESYSTEM_CASE_SENSITIVE = 'filesystemCaseSensitive',
+  FILESYSTEM_NAME_POLICY = 'filesystemNamePolicy',
   INITIALIZE = 'initialize',
   SEARCH = 'search',
   GLOB = 'glob',
   FILTER_PATHS = 'filterPaths',
+  ASSERT_REPLACEABLE_METADATA = 'assertReplaceableMetadata',
   CONTENT_SEARCH = 'contentSearch',
   CANCEL = 'cancel',
   REFRESH = 'refresh',
@@ -90,6 +94,10 @@ const contentSearchResultSchema = z.discriminatedUnion('outputMode', [
             endColumn: z.number().int().positive(),
             lineText: z.string(),
             matchedText: z.string(),
+            sourceIdentity: z
+              .string()
+              .regex(/^\d+:\d+$/u)
+              .optional(),
             linesBefore: z.array(z.object({ number: z.number().int().positive(), content: z.string() }).strict()),
             linesAfter: z.array(z.object({ number: z.number().int().positive(), content: z.string() }).strict()),
           })
@@ -136,7 +144,12 @@ type ProcessFactory = (binaryPath: string) => SidecarProcess;
 
 /** Persistent JSONL transport for the native cached workspace path index. */
 export class RustWorkspacePathIndex implements WorkspacePathIndex {
-  private readonly options: ResolvedRustWorkspacePathIndexOptions;
+  private readonly options: ResolvedRustWorkspacePathIndexOptions & {
+    excludeRoot?: true;
+    privatePaths?: readonly string[];
+  };
+  private readonly access: WorkspaceRootAccess;
+  private policyRevision: number;
   private readonly processFactory: ProcessFactory;
   private process: SidecarProcess | undefined;
   private readonly pending = new Map<number, PendingRequest>();
@@ -150,12 +163,23 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   private readonly readContentOverrides: RustWorkspacePathIndexConfiguration['readContentOverrides'];
 
   constructor(options: RustWorkspacePathIndexConfiguration, processFactory: ProcessFactory = startProcess) {
-    const { accessPolicy = new WorkspaceAccessPolicy(), readContentOverrides, ...rawOptions } = options;
+    const { access, readContentOverrides, ...rawOptions } = options;
     this.readContentOverrides = readContentOverrides;
-    const parsed = rustWorkspacePathIndexOptionsSchema.parse(rawOptions);
+    this.access = access;
+    const operation = access.beginOperation();
+    this.policyRevision = operation.revision;
+    const parsed = rustWorkspacePathIndexOptionsSchema.parse({
+      ...rawOptions,
+      root: access.root,
+      caseSensitive: access.caseSensitive,
+    });
     this.options = {
       ...parsed,
-      ...accessPolicy.toJSON(),
+      ...access.policy.toJSON(),
+      ignoredDirectories: [...access.policy.configuredIgnoredDirectories],
+      ...(operation.privatePaths.length > 0 ? { privatePaths: operation.privatePaths } : {}),
+      excludedPaths: operation.excludedPaths,
+      ...(operation.privateRoot ? { excludeRoot: true } : {}),
       binaryPath: resolve(parsed.binaryPath),
       root: resolve(parsed.root),
       cachePath: parsed.cachePath === null ? null : resolve(parsed.cachePath),
@@ -163,29 +187,66 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     this.processFactory = processFactory;
   }
 
+  /** Query filesystem metadata before projecting exclusions or constructing an editor-backed store. */
+  static async filesystemCaseSensitive(
+    binaryPath: string,
+    root: string,
+    processFactory: ProcessFactory = startProcess,
+  ): Promise<boolean> {
+    const probe = new RustWorkspacePathIndex(
+      { binaryPath, access: WorkspaceRootAccess.forMetadataProbe(root) },
+      processFactory,
+    );
+    try {
+      return z.boolean().parse(await probe.request(PathIndexMethod.FILESYSTEM_CASE_SENSITIVE, root));
+    } finally {
+      await probe.dispose();
+    }
+  }
+
+  static async filesystemNamePolicy(binaryPath: string, root: string, processFactory: ProcessFactory = startProcess) {
+    const probe = new RustWorkspacePathIndex(
+      { binaryPath, access: WorkspaceRootAccess.forMetadataProbe(root) },
+      processFactory,
+    );
+    try {
+      return z
+        .object({ caseSensitive: z.boolean(), normalizesUnicode: z.boolean(), foldsUnicode: z.boolean() })
+        .parse(await probe.request(PathIndexMethod.FILESYSTEM_NAME_POLICY, root));
+    } finally {
+      await probe.dispose();
+    }
+  }
+
+  /** Retain this root's selection and reservations until the caller delivers a merged or paginated result. */
+  beginResultAccess(): () => void {
+    return this.access.beginOperation().assertCurrent;
+  }
+
   async initialize(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
+    const check = this.beginResultAccess();
+    this.synchronizePolicy();
     if (this.initialized) return this.initialized;
     if (!this.initializing) {
       const { binaryPath: _, ...configuration } = this.options;
-      this.initializing = this.request(PathIndexMethod.INITIALIZE, configuration)
-        .then(value => {
-          const result = indexStateSchema.parse(value);
-          this.initialized = result;
-          return result;
-        })
-        .finally(() => {
-          this.initializing = undefined;
-        });
+      const operation = this.requestState(PathIndexMethod.INITIALIZE, configuration).finally(() => {
+        if (this.initializing === operation) this.initializing = undefined;
+      });
+      this.initializing = operation;
     }
-    return withAbortSignal(this.initializing, signal);
+    const result = await withAbortSignal(this.initializing, signal);
+    check();
+    return result;
   }
 
   async search(
     query: string,
     options: { generation: number; limit?: number; signal?: AbortSignal },
   ): Promise<FileSearchResult> {
+    const operation = this.access.beginOperation();
+    this.synchronizePolicy();
     if (!this.initialized) await this.initialize(options.signal);
-    return searchResultSchema.parse(
+    const result = searchResultSchema.parse(
       await this.request(
         PathIndexMethod.SEARCH,
         {
@@ -196,55 +257,132 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
         options.signal,
       ),
     );
+    operation.assertCurrent();
+    return result;
   }
 
   async glob(
     pattern: string,
-    options: { targetDirectory?: string; limit: number; signal?: AbortSignal },
+    options: {
+      targetDirectory?: string;
+      rootFilesOnly?: boolean;
+      limit: number;
+      signal?: AbortSignal;
+      retainAccess?: (check: () => void) => void;
+    },
   ): Promise<WorkspacePathGlobResult> {
+    const operation = this.access.beginOperation();
+    this.synchronizePolicy();
     if (!this.initialized) await this.initialize(options.signal);
-    return globResultSchema.parse(
+    const result = globResultSchema.parse(
       await this.request(
         PathIndexMethod.GLOB,
         {
           pattern,
           targetDirectory: options.targetDirectory,
+          rootFilesOnly: options.rootFilesOnly,
           limit: options.limit,
         },
         options.signal,
       ),
     );
+    operation.assertCurrent();
+    options.retainAccess?.(operation.assertCurrent);
+    return result;
   }
 
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
-    const { signal, ...serializableOptions } = options;
+    const { signal, retainAccess, sourceAuthority, ...serializableOptions } = options;
     const resolvedOptions = workspaceContentSearchOptionsSchema.parse(serializableOptions);
+    const operation = this.access.beginOperation();
+    this.synchronizePolicy();
     if (!this.initialized) await this.initialize(signal);
-    const overrides = await this.readContentOverrides?.(signal);
+    const editorSources = new Map<string, WorkspaceDisclosure>();
+    const capture = resolvedOptions.outputMode === 'content' && sourceAuthority;
+    const overrides = capture
+      ? await this.readContentOverrides?.(signal, {
+          authority: capture,
+          retain: (path, disclosure) => {
+            editorSources.set(path, disclosure);
+          },
+        })
+      : await this.readContentOverrides?.(signal);
+    operation.assertCurrent();
     signal?.throwIfAborted();
-    const params = { pattern, ...resolvedOptions, ...(overrides ? { overrides } : {}) };
+    const params = {
+      pattern,
+      ...resolvedOptions,
+      ...(overrides ? { overrides } : {}),
+      ...(capture && { includeSourceIdentity: true }),
+    };
     if (Buffer.byteLength(JSON.stringify(params)) > 900 * 1024)
       throw new Error('Editor search snapshots exceed the native request budget. Narrow the open working set.');
-    return contentSearchResultSchema.parse(await this.request(PathIndexMethod.CONTENT_SEARCH, params, signal));
+    const result = contentSearchResultSchema.parse(await this.request(PathIndexMethod.CONTENT_SEARCH, params, signal));
+    operation.assertCurrent();
+    retainAccess?.(operation.assertCurrent);
+    if (result.outputMode !== 'content') return result;
+    const matches = result.matches.map(({ sourceIdentity, ...match }) => {
+      if (!capture) return match;
+      if (overrides && Object.hasOwn(overrides, match.path)) {
+        const editor = editorSources.get(match.path);
+        if (!editor?.hasSources) throw new Error('The editor search source is unavailable.');
+        return { ...match, [searchTextSource]: editor };
+      }
+      if (!sourceIdentity) throw new Error('The search worker did not identify the matching file.');
+      return {
+        ...match,
+        [searchTextSource]: { path: resolve(this.options.root, match.path), identity: sourceIdentity },
+      };
+    });
+    return { ...result, matches };
+  }
+
+  /** Ensures mode-only replacement can preserve access controls on the file in this directory. */
+  async assertReplaceableMetadata(name: string): Promise<void> {
+    const check = this.beginResultAccess();
+    await this.initialize();
+    z.null().parse(await this.request(PathIndexMethod.ASSERT_REPLACEABLE_METADATA, name));
+    check();
   }
 
   /** Metadata-only intersection with the catalog, including ignore and sensitive-file exclusions. */
   async filterPaths(paths: readonly string[], signal?: AbortSignal): Promise<readonly string[]> {
+    const operation = this.access.beginOperation();
+    this.synchronizePolicy();
     if (!this.initialized) await this.initialize(signal);
-    return z.array(z.string()).parse(await this.request(PathIndexMethod.FILTER_PATHS, paths, signal));
+    const result = z.array(z.string()).parse(await this.request(PathIndexMethod.FILTER_PATHS, paths, signal));
+    operation.assertCurrent();
+    return result;
   }
 
   async refresh(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
+    this.synchronizePolicy();
     if (!this.initialized) return this.initialize(signal);
-    const result = indexStateSchema.parse(await this.request(PathIndexMethod.REFRESH, {}, signal));
-    this.initialized = result;
-    return result;
+    return this.requestState(PathIndexMethod.REFRESH, {}, signal);
   }
 
   dispose(): Promise<void> {
     if (this.disposed) return Promise.resolve();
     this.disposing ??= this.shutdown();
     return this.disposing;
+  }
+
+  private async requestState(
+    method: PathIndexMethod.INITIALIZE | PathIndexMethod.REFRESH,
+    params: unknown,
+    signal?: AbortSignal,
+  ): Promise<WorkspacePathIndexState> {
+    const check = this.beginResultAccess();
+    const revision = this.policyRevision;
+    const response = this.request(method, params, signal);
+    const worker = this.process;
+    const result = indexStateSchema.parse(await response);
+    // A decoded reply can resume after another caller rotates the worker or its policy.
+    if (worker !== this.process || revision !== this.access.policy.revision)
+      throw new Error('Workspace index changed while loading state. Retry the request.');
+    check();
+    this.initialized = result;
+    return result;
   }
 
   private async shutdown(): Promise<void> {
@@ -268,12 +406,29 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     }
   }
 
+  /** Rotate a cached worker before accepting work under newly admitted host-private paths. */
+  private synchronizePolicy(): void {
+    if (this.policyRevision === this.access.policy.revision) return;
+    this.fail(new Error('Workspace private paths changed. Retry the request.'));
+    this.initializing = undefined;
+    this.policyRevision = this.access.policy.revision;
+    const operation = this.access.beginOperation();
+    this.options.excludedPaths = operation.excludedPaths;
+    this.options.privatePaths = operation.privatePaths;
+    if (operation.privateRoot) this.options.excludeRoot = true;
+    else delete this.options.excludeRoot;
+  }
+
   private request(method: PathIndexMethod, params: unknown, signal?: AbortSignal): Promise<unknown> {
     if (this.disposed) return Promise.reject(new Error('The workspace path index has been disposed.'));
     if (this.disposing && method !== PathIndexMethod.SHUTDOWN) {
       return Promise.reject(new Error('The workspace path index is shutting down.'));
     }
     if (signal?.aborted === true) return Promise.reject(toAbortError(signal));
+    if (method !== PathIndexMethod.SHUTDOWN && this.policyRevision !== this.access.policy.revision) {
+      this.synchronizePolicy();
+      return Promise.reject(new Error('Workspace private paths changed. Retry the request.'));
+    }
     const process = this.ensureProcess();
     const id = this.nextRequestId++;
     return new Promise((resolveRequest, rejectRequest) => {
@@ -284,7 +439,16 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
       };
       signal?.addEventListener('abort', onAbort, { once: true });
       const removeAbortListener = (): void => signal?.removeEventListener('abort', onAbort);
-      this.pending.set(id, { resolve: resolveRequest, reject: rejectRequest, removeAbortListener });
+      this.pending.set(id, {
+        resolve: value => {
+          if (method !== PathIndexMethod.SHUTDOWN && this.policyRevision !== this.access.policy.revision) {
+            this.synchronizePolicy();
+            rejectRequest(new Error('Workspace private paths changed. Retry the request.'));
+          } else resolveRequest(value);
+        },
+        reject: rejectRequest,
+        removeAbortListener,
+      });
       process.stdin.write(`${JSON.stringify({ version: PROTOCOL_VERSION, id, method, params })}\n`, error => {
         if (!error) return;
         const pending = this.pending.get(id);

@@ -17,14 +17,14 @@ const attachment = {
 };
 
 describe(GlyphComposerState, () => {
-  it('rebinds draft, queued, and recoverable captures without changing text or caret positions', () => {
+  it('rebinds draft, queued, and recoverable captures without changing text or caret positions', async () => {
     const composer = new GlyphComposerState();
     composer.insertAttachments([attachment]);
     composer.enqueueDraft();
     composer.insertAttachments([attachment]);
     composer.restoreDraft({ parts: [{ type: 'attachment', attachment }], from: 1, to: 1 });
     composer.pauseQueue();
-    composer.mapAttachments(value => ({ ...value, path: 'project/a.ts', unavailable: 'Folder removed' }));
+    await composer.mapAttachments(value => ({ ...value, path: 'project/a.ts', unavailable: 'Folder removed' }));
     const check = (document: typeof composer.snapshot.document) => {
       expect(document.from).toBe(1);
       expect(document.to).toBe(1);
@@ -47,6 +47,34 @@ describe(GlyphComposerState, () => {
       const span = options?.attachmentSpans?.[0];
       expect(span?.from).toBe('🌱 @a.ts (2-3) then '.length);
       expect(text.trim().slice(span!.from, span!.to)).toBe('@a.ts (2-3)');
+    });
+  });
+  it('sends manual rule badges as stable rule ids instead of captured attachments', async () => {
+    const composer = new GlyphComposerState();
+    composer.setDocument({
+      parts: [
+        { type: 'text', text: 'Use ' },
+        {
+          type: 'attachment',
+          attachment: {
+            kind: GlyphContextAttachmentKind.RULE,
+            uri: 'glyph-rule:rule-id',
+            path: 'Review discipline',
+            text: '',
+            contentRevision: 'revision',
+            ruleId: 'rule-id',
+          },
+        },
+      ],
+      from: 5,
+      to: 5,
+    });
+
+    await composer.submit(async (text, attachments, options) => {
+      expect(text).toBe('Use /Review discipline');
+      expect(attachments).toEqual([]);
+      expect(options).toMatchObject({ manualRuleIds: ['rule-id'] });
+      expect(options?.attachmentSpans).toBeUndefined();
     });
   });
   it('restores annotations and mode after a rejected send and keeps edits and deletion scoped to the draft', async () => {
@@ -333,11 +361,29 @@ describe(GlyphComposerState, () => {
   });
 
   describe(GlyphComposerState.prototype.mapAttachments, () => {
-    it('leaves text parts untouched while mapping captures', () => {
+    it('keeps draft edits and rebinds a capture moved into the queue while a revision is pending', async () => {
+      const composer = new GlyphComposerState();
+      composer.insertAttachments([attachment]);
+      let release!: () => void;
+      const paused = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      const rebinding = composer.mapAttachments(async value => {
+        await paused;
+        return { ...value, path: 'project/' + value.path };
+      });
+      composer.enqueueDraft();
+      composer.setDraft('new draft');
+      release();
+      await rebinding;
+      expect(composer.snapshot.draft).toBe('new draft');
+      expect(composer.snapshot.queued[0]?.text).toContain('@project/a.ts');
+    });
+    it('leaves text parts untouched while mapping captures', async () => {
       const composer = new GlyphComposerState();
       composer.setDraft('look at ');
       composer.insertAttachments([attachment]);
-      composer.mapAttachments(value => ({ ...value, path: 'renamed.ts' }));
+      await composer.mapAttachments(value => ({ ...value, path: 'renamed.ts' }));
       expect(composer.snapshot.draft).toBe('look at @renamed.ts (2-3)');
       expect(composer.snapshot.document.parts[0]).toEqual({ type: 'text', text: 'look at ' });
     });

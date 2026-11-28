@@ -4,6 +4,8 @@ Glyph applies agent edits through revision-guarded workspace operations and reta
 
 **Note**: Structural create, rename, and delete operations use a separate renderer path, `GlyphEditorAdapter.applyFile()`.
 
+The [agent instructions walkthrough](AGENT_INSTRUCTIONS.md) explains how scoped repository guidance and rules are disclosed before a proposal reaches staging.
+
 The three sequences expand successive parts of the same call chain. Calls shown sequentially are awaited even where they cross a process boundary.
 
 The first sequence follows proposal compilation and the per-hunk application loop. `ProjectToolRuntime`, `EditProposalService`, `ProposalReviewManager`, and `EditorWorkspaceTextStore` live in the utility host. `FileProposalReviewStore` owns the JSON checkpoint on disk.

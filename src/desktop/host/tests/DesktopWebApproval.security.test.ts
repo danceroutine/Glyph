@@ -1,3 +1,4 @@
+import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { mkdir, mkdtemp, realpath, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -66,10 +67,16 @@ describe('security: production desktop web consent', () => {
     await mkdir(changedRoot);
     vi.stubEnv('GLYPH_CONFIG_DIR', state);
     vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
+    vi.spyOn(RustWorkspacePathIndex, 'filesystemNamePolicy').mockResolvedValue({
+      caseSensitive: true,
+      foldsUnicode: false,
+      normalizesUnicode: false,
+    });
+    vi.spyOn(RustWorkspacePathIndex, 'filesystemCaseSensitive').mockResolvedValue(true);
     vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
     const exchange = vi.fn(async () => new Response('fixture page', { headers: { 'content-type': 'text/plain' } }));
     vi.stubGlobal('fetch', exchange);
-    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, join(directory, 'user'));
     const runtimes: ProviderDesktopRuntime[] = [];
     onTestFinished(async () => {
       for (const runtime of runtimes) await runtime.dispose();
@@ -85,6 +92,7 @@ describe('security: production desktop web consent', () => {
           identity: { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' },
           roots: [{ name: 'workspace', canonicalPath: path, uri: `file://${path}` }],
           trusted: true,
+          assertTrusted: () => {},
           emit: () => {},
         }),
       );

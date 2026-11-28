@@ -1,3 +1,6 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
+import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import { AgentMode, type AgentModeID } from '#src/chat/AgentMode.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
@@ -25,6 +28,7 @@ interface AgentRuntimeConfiguration {
 
 /** Provider-independent turn lifecycle, tool loop, cancellation, and state transaction. */
 export class AgentRuntime<TTurn> implements ChatProvider {
+  readonly reportsTurnAdmission = true;
   private readonly historyRetention = new AgentHistoryRetention();
   private state: ChatProviderState;
   private busy = false;
@@ -35,6 +39,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     private readonly configuration: AgentRuntimeConfiguration,
     tools: ToolSource,
     initialState?: ChatProviderState,
+    private readonly turnContexts?: TurnContextCoordinator,
   ) {
     const registry = tools instanceof ToolRegistry ? tools : new ToolRegistry(tools.tools);
     this.executor = new ToolExecutor(registry);
@@ -68,6 +73,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     inputRequest: ChatRequestInput,
     options: {
       signal: AbortSignal;
+      onTurnAdmitted?: () => void;
       onText: (delta: string) => void;
       /** Drain accepted instructions at a safe boundary; close acceptance when a final step has none. */
       takeSteering?: (finishing: boolean) => readonly ChatRequest[];
@@ -79,6 +85,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     },
   ): Promise<TurnResult> {
     const request = toChatRequest(inputRequest);
+    const pendingToolSources = new Set<(signal: AbortSignal) => Promise<() => void>>();
+    const toolAccess = new WorkspaceDisclosure();
+    const disclosures = new Set<WorkspaceDisclosure>([toolAccess]);
+    if (request.disclosure) disclosures.add(request.disclosure);
     const turnId = request.turnId ?? randomUUID();
     const metadata = chatTurnOptionsSchema.parse({
       ...(request.mode !== undefined ? { mode: request.mode } : {}),
@@ -86,6 +96,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       ...(request.agentReviewId !== undefined && request.agentReviewId !== ''
         ? { agentReviewId: request.agentReviewId }
         : {}),
+      ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
     });
     const modelRequest = modelInput(request);
     if (this.busy) throw new ProviderError('A response is already in progress.');
@@ -118,11 +129,13 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     const setMode = (next: AgentModeID): void => {
       mode = next;
     };
+    let boundaryInstructions: AgentInstructionContext | undefined;
     const context = (round: number): AgentTurnContext => ({
       signal,
       turnId,
       round,
       mode: AgentMode.resolve(mode),
+      ...(boundaryInstructions ? { instructionContext: boundaryInstructions } : {}),
       onText: options.onText,
       ...(options.onReasoningSummary ? { onReasoningSummary: options.onReasoningSummary } : {}),
       trace,
@@ -142,6 +155,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       },
     });
     let turn: TTurn | undefined;
+    let admittedContext = false;
     let hasToolCheckpoint = false;
     try {
       const recovery = this.adapter.recoverInterruptedToolCalls(this.state);
@@ -151,31 +165,77 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         await options.onStateCheckpoint?.(structuredClone(this.state));
         trace('tool.interrupted_recovered', { recoveredCallCount: recovery.recoveredCallCount });
       }
+      const turnContext = await this.turnContexts?.beginTurn(
+        {
+          turnId,
+          attachmentPaths: attachmentPaths(request),
+          manualRuleIds: request.manualRuleIds ?? [],
+        },
+        signal,
+      );
+      admittedContext = turnContext !== undefined;
+      boundaryInstructions = turnContext?.initialEnvelope();
+      (await request.disclosure?.authorize(signal))?.();
+      options.onTurnAdmitted?.();
       turn = await this.adapter.beginTurn(this.state, modelRequest, context(0));
+      boundaryInstructions = undefined;
       let totalUsage: Usage | null = null;
       let usageIncomplete = false;
       let round = 0;
+      let pendingWorkspaceInput = request.disclosure?.hasSources ?? false;
+      const checkpointSteering = async (current: TTurn) => {
+        // Until a provider has received these bytes, recovery must keep the last delivered input.
+        if (pendingWorkspaceInput) return;
+        this.state = this.persistentState(this.adapter.snapshot(current));
+        hasToolCheckpoint = true;
+        await options.onStateCheckpoint?.(structuredClone(this.state));
+      };
       for (;;) {
         signal.throwIfAborted();
         for (const steering of options.takeSteering?.(false) ?? []) {
+          if (steering.disclosure) {
+            (await steering.disclosure.authorize(signal))();
+            disclosures.add(steering.disclosure);
+            pendingWorkspaceInput ||= steering.disclosure.hasSources;
+          }
+          boundaryInstructions = await this.steeringInstructions(turnId, steering, signal);
           turn = await this.adapter.steerTurn(turn, modelInput(steering), context(round));
-          this.state = this.persistentState(this.adapter.snapshot(turn));
-          hasToolCheckpoint = true;
-          await options.onStateCheckpoint?.(structuredClone(this.state));
+          await checkpointSteering(turn);
         }
         round += 1;
-        const step = await this.adapter.streamStep(turn, context(round));
+        const send = await this.adapter.prepareStep(turn, context(round));
+        const authorize = async () => {
+          const checks = await Promise.all([
+            this.turnContexts?.authorizeDisclosure?.(turnId, signal),
+            ...[...pendingToolSources].map(validate => validate(signal)),
+            ...[...disclosures].filter(value => value.hasSources).map(value => value.authorize(signal)),
+          ]);
+          return () => {
+            signal.throwIfAborted();
+            for (const check of checks) check?.();
+          };
+        };
+        const assertCurrent = await authorize();
+        assertCurrent();
+        const step = await send(assertCurrent, authorize);
+        pendingToolSources.clear();
+        pendingWorkspaceInput = false;
         turn = step.turn;
         usageIncomplete ||= step.usage === null;
         totalUsage = addUsage(totalUsage, step.usage);
         if (step.toolCalls.length === 0) {
           const steering = options.takeSteering?.(true) ?? [];
           if (steering.length > 0) {
-            for (const instruction of steering)
+            for (const instruction of steering) {
+              if (instruction.disclosure) {
+                (await instruction.disclosure.authorize(signal))();
+                disclosures.add(instruction.disclosure);
+                pendingWorkspaceInput ||= instruction.disclosure.hasSources;
+              }
+              boundaryInstructions = await this.steeringInstructions(turnId, instruction, signal);
               turn = await this.adapter.steerTurn(turn, modelInput(instruction), context(round));
-            this.state = this.persistentState(this.adapter.snapshot(turn));
-            hasToolCheckpoint = true;
-            await options.onStateCheckpoint?.(structuredClone(this.state));
+            }
+            await checkpointSteering(turn);
             continue;
           }
           if (!step.hasVisibleOutput) {
@@ -185,9 +245,12 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           }
           this.state = this.persistentState(this.adapter.snapshot(turn));
           trace('history.committed', { state: this.state }, round);
+          const turnContextSnapshot = this.turnContexts?.completeTurn(turnId);
+          admittedContext = false;
           return {
             responseId: step.responseId,
             usage: totalUsage && usageIncomplete ? { ...totalUsage, incomplete: true } : totalUsage,
+            ...(turnContextSnapshot ? { context: turnContextSnapshot } : {}),
           };
         }
         this.state = this.persistentState(this.adapter.snapshot(turn));
@@ -197,6 +260,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
 
         const roundMode = mode;
         const toolRound = round;
+        const workspaceResults = new Set<string>();
         const interruptions: unknown[] = signal.aborted ? [signal.reason] : [];
         const results = signal.aborted
           ? step.toolCalls.map(call => ({
@@ -217,6 +281,11 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                     turnId,
                     mode: roundMode,
                     onModeChanged: setMode,
+                    retainResultAccess: (check, beforeFirstDelivery) => {
+                      if (beforeFirstDelivery) pendingToolSources.add(beforeFirstDelivery);
+                      workspaceResults.add(call.id);
+                      toolAccess.retain(check);
+                    },
                   },
                   onActivity: reportToolActivity,
                   trace: (kind, data) => {
@@ -228,8 +297,25 @@ export class AgentRuntime<TTurn> implements ChatProvider {
               }),
             );
         if (signal.aborted) interruptions.push(signal.reason);
-        turn = this.adapter.appendToolResults(turn, results);
-        this.state = this.persistentState(this.adapter.snapshot(turn));
+        // Preserve the outcome of every tool, including unrelated writes. A read which has not
+        // reached the model can be performed again after recovery under the new turn's authority.
+        const live = this.adapter.appendToolResults(turn, results);
+        pendingWorkspaceInput = workspaceResults.size > 0;
+        const checkpoint = pendingWorkspaceInput
+          ? this.adapter.appendToolResults(
+              turn,
+              results.map(result =>
+                workspaceResults.has(result.call.id)
+                  ? {
+                      ...result,
+                      output: JSON.stringify({ status: 'Read completed. Read again for current workspace contents.' }),
+                    }
+                  : result,
+              ),
+            )
+          : live;
+        turn = live;
+        this.state = this.persistentState(this.adapter.snapshot(checkpoint));
         await options.onStateCheckpoint?.(structuredClone(this.state));
         trace('tool.outcomes_checkpointed', { callIds: results.map(result => result.call.id) }, round);
         if (interruptions.length > 0) throw interruptions[0];
@@ -249,8 +335,27 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       trace('turn.failed', errorDetails(reportedError));
       throw reportedError;
     } finally {
+      if (admittedContext) this.turnContexts?.discardTurn(turnId);
       this.busy = false;
     }
+  }
+
+  private async steeringInstructions(
+    turnId: string,
+    request: ChatRequest,
+    signal: AbortSignal,
+  ): Promise<AgentInstructionContext | undefined> {
+    const contexts = [
+      await this.turnContexts?.discloseAttachments(turnId, attachmentPaths(request), signal),
+      await this.turnContexts?.activateManualRules(turnId, request.manualRuleIds ?? [], signal),
+    ].filter((value): value is AgentInstructionContext => value !== undefined);
+    if (contexts.length === 0) return undefined;
+    return {
+      schema: 'glyph.agent-instructions.v1',
+      sources: contexts.flatMap(context => context.sources),
+      activations: contexts.flatMap(context => context.activations ?? []),
+      candidates: contexts.flatMap(context => context.candidates ?? []),
+    };
   }
 
   /** Every state entering durable storage passes through the same host policy. */
@@ -305,13 +410,14 @@ function redactedHeaders(headers: Headers): Record<string, string> {
 }
 
 /** Steering uses the same validation and source-content framing as an initial prompt. */
-function modelInput(request: ChatRequest): ChatRequest {
+function modelInput({ disclosure: _disclosure, ...request }: ChatRequest): ChatRequest {
   const metadata = chatTurnOptionsSchema.parse({
     ...(request.mode !== undefined ? { mode: request.mode } : {}),
     ...(request.annotations ? { annotations: request.annotations } : {}),
     ...(request.agentReviewId !== undefined && request.agentReviewId !== ''
       ? { agentReviewId: request.agentReviewId }
       : {}),
+    ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
   });
   return {
     ...request,
@@ -324,6 +430,15 @@ function modelInput(request: ChatRequest): ChatRequest {
       .filter(Boolean)
       .join('\n\n'),
   };
+}
+
+function attachmentPaths(request: ChatRequest): readonly string[] {
+  return [
+    ...new Set([
+      ...request.attachments.map(attachment => attachment.path),
+      ...(request.disclosure?.additionalPaths ?? []),
+    ]),
+  ];
 }
 
 export { toolInterruptionOutput as toolInterruptionOutput__TESTING_ONLY, errorDetails as errorDetails__TESTING_ONLY };

@@ -1,7 +1,8 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { constants } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 
 const filesystem = vi.hoisted(() => ({
   lstat: vi.fn(),
@@ -45,7 +46,7 @@ describe('workspace reads bind inspected paths to opened descriptors', () => {
         const fixture = readFixture();
         fixture.handle.stat.mockResolvedValue({
           ...fixture.info,
-          ...(field === 'inode' ? { ino: 99 } : { dev: 99 }),
+          ...(field === 'inode' ? { ino: 9_007_199_254_740_992n } : { dev: 99n }),
         });
         await expect(fixture.store.read('file.txt', options)).rejects.toMatchObject({
           reason: EditFailureReason.STALE,
@@ -78,14 +79,16 @@ describe('workspace reads bind inspected paths to opened descriptors', () => {
 
     it(`uses the validated descriptor for ${mode} reads and preserves BOM, literal U+FEFF, and opened metadata`, async () => {
       const fixture = readFixture(Buffer.from('\uFEFF\uFEFFbody\r\n'));
-      fixture.handle.stat.mockResolvedValue({ ...fixture.info, mode: 0o100600 });
+      fixture.handle.stat.mockResolvedValue({ ...fixture.info, mode: 0o100600n });
       await expect(fixture.store.read('file.txt', options)).resolves.toMatchObject({
         text: '\uFEFFbody\r\n',
         byteOrderMark: true,
-        identity: '7:11',
+        identity: '7:9007199254740993',
         mode: 0o600,
       });
       expect(filesystem.open).toHaveBeenCalledTimes(1);
+      expect(filesystem.lstat).toHaveBeenCalledWith(resolve(fixture.store.root, 'file.txt'), { bigint: true });
+      expect(fixture.handle.stat).toHaveBeenCalledWith({ bigint: true });
       expect(filesystem.readFile).not.toHaveBeenCalled();
       expect(fixture.handle.close).toHaveBeenCalledTimes(1);
     });
@@ -102,7 +105,7 @@ describe('workspace reads bind inspected paths to opened descriptors', () => {
 
   it('bounds allocation if the validated file grows beyond its reported size', async () => {
     const fixture = readFixture(Buffer.from('growing content'));
-    fixture.handle.stat.mockResolvedValue({ ...fixture.info, size: 2 });
+    fixture.handle.stat.mockResolvedValue({ ...fixture.info, size: 2n });
     await expect(fixture.store.read('file.txt', { maxBytes: 4 })).rejects.toMatchObject({
       maxBytes: 4,
       actualBytes: 5,
@@ -116,17 +119,22 @@ describe('workspace reads bind inspected paths to opened descriptors', () => {
 
 /** Inert filesystem calls model races without replacing files or opening any real special resource. */
 function readFixture(bytes = Buffer.from('body')) {
-  const info = {
-    dev: 7,
-    ino: 11,
-    mode: 0o100644,
-    size: bytes.length,
-    isSymbolicLink: () => false,
-    isFile: () => true,
+  const stats = (options?: { bigint?: boolean }) => {
+    const integer = options?.bigint ? BigInt : Number;
+    return {
+      dev: integer(7),
+      nlink: integer(1),
+      ino: integer(9_007_199_254_740_993n),
+      mode: integer(0o100644),
+      size: integer(bytes.length),
+      isSymbolicLink: () => false,
+      isFile: () => true,
+    };
   };
+  const info = stats({ bigint: true });
   let offset = 0;
   const handle = {
-    stat: vi.fn(async () => info),
+    stat: vi.fn(async (options?: { bigint?: boolean }) => stats(options)),
     close: vi.fn(async () => {}),
     readFile: vi.fn(async () => bytes),
     read: vi.fn(async (buffer: Buffer) => {
@@ -135,9 +143,9 @@ function readFixture(bytes = Buffer.from('body')) {
       return { bytesRead, buffer };
     }),
   };
-  filesystem.lstat.mockResolvedValue(info);
+  filesystem.lstat.mockImplementation(async (_path: string, options?: { bigint?: boolean }) => stats(options));
   filesystem.realpath.mockImplementation(async (path: string) => path);
   filesystem.readFile.mockResolvedValue(bytes);
   filesystem.open.mockResolvedValue(handle);
-  return { store: new FileSystemWorkspaceTextStore('/fixture'), handle, info };
+  return { store: fixtureWorkspace('/fixture'), handle, info };
 }

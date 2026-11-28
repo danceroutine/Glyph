@@ -1,11 +1,34 @@
+import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
+import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
+import { restoreGlyphPrompt } from '#src/desktop/workbench/restoreGlyphPrompt.js';
+import { formatFolderAttachment } from '#src/desktop/workbench/formatFolderContextOutline.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { NativePinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import type { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+import { createHash } from 'node:crypto';
+import { getGlyphWorkspaceRootId } from '#src/desktop/protocol/connection/getGlyphWorkspaceRootId.js';
+import { Deferred } from '#src/shared/Deferred.js';
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
+import { pathToFileURL } from 'node:url';
+import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
-import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+  readFile,
+  realpath,
+  rename as renameDirectory,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { GlyphService } from '#src/application/GlyphService.js';
-import { OpenAIDesktopRuntimeFactory } from '#src/desktop/host/OpenAIDesktopRuntimeFactory.js';
-import { listInstructionFilesAcrossRoots } from '#src/instructions/listInstructionFilesAcrossRoots.js';
+import { OpenAIDesktopRuntimeFactory, userRuleUri } from '#src/desktop/host/OpenAIDesktopRuntimeFactory.js';
 import { EditorRpcRouter } from '#src/desktop/workspace/EditorRpcRouter.js';
 import { contentRevision } from '#src/desktop/workspace/EditorWorkspaceTextStore.js';
 import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
@@ -55,6 +78,7 @@ import { GoalStatus } from '#src/goals/GoalStatus.js';
 const captured = vi.hoisted(() => ({
   editorClients: [] as EditorWorkspaceClient[],
   indexOptions: [] as RustWorkspacePathIndexConfiguration[],
+  indexes: [] as RustWorkspacePathIndex[],
   modeSwitches: [] as ConstructorParameters<typeof ModeSwitchToolRuntime>[0][],
   plans: [] as ConstructorParameters<typeof PlanToolRuntime>[0][],
   todos: [] as ConstructorParameters<typeof TodoToolRuntime>[0][],
@@ -65,31 +89,27 @@ const captured = vi.hoisted(() => ({
   providerFactories: [] as ConstructorParameters<typeof OpenAIProviderFactory>[],
 }));
 
-describe(listInstructionFilesAcrossRoots, () => {
-  it('qualifies multiple roots and reports that later roots were excluded by the limit', async () => {
-    const first = { list: vi.fn(async () => ({ files: ['AGENTS.md'], truncated: false })) };
-    const second = { list: vi.fn(async () => ({ files: ['nested/AGENTS.md'], truncated: false })) };
+it('resolves user rule URIs below the dedicated user rule root', () => {
+  expect(userRuleUri('/home/user/.glyph', 'rules/test.mdc')).toBe('file:///home/user/.glyph/rules/test.mdc');
+});
 
-    await expect(
-      listInstructionFilesAcrossRoots(
-        [
-          { name: 'one', disk: first },
-          { name: 'two', disk: second },
-        ],
-        1,
-        '**/AGENTS.md',
-      ),
-    ).resolves.toEqual({ files: ['one/AGENTS.md'], truncated: true });
-    expect(second.list).not.toHaveBeenCalled();
-  });
+// The source checkout keeps the same native binaries in Cargo's release directory.
+vi.mock('#src/workspace/SourcePathAliases.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('#src/workspace/SourcePathAliases.js')>();
+  return {
+    ...actual,
+    readSourcePathAliases: (executable: string, path: string, descendants?: boolean) =>
+      actual.readSourcePathAliases(releaseExecutable(executable), path, descendants),
+  };
+});
 
-  it('preserves single-root paths and provider truncation', async () => {
-    const disk = { list: vi.fn(async () => ({ files: ['AGENTS.md'], truncated: true })) };
-    await expect(listInstructionFilesAcrossRoots([{ name: 'one', disk }], 2, '**/AGENTS.md')).resolves.toEqual({
-      files: ['AGENTS.md'],
-      truncated: true,
-    });
-  });
+vi.mock('#src/workspace/readDirectoryNamePolicies.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('#src/workspace/readDirectoryNamePolicies.js')>();
+  return {
+    ...actual,
+    readDirectoryNamePolicies: (executable: string, directories: readonly string[]) =>
+      actual.readDirectoryNamePolicies(releaseExecutable(executable), directories),
+  };
 });
 
 vi.mock('#src/desktop/workspace/EditorWorkspaceTextStore.js', async importOriginal => {
@@ -113,6 +133,17 @@ vi.mock('#src/context/search/RustWorkspacePathIndex.js', async importOriginal =>
       constructor(...arguments_: ConstructorParameters<typeof actual.RustWorkspacePathIndex>) {
         super(...arguments_);
         captured.indexOptions.push(arguments_[0]);
+        captured.indexes.push(this);
+      }
+      static override async filesystemNamePolicy(binary: string, root: string) {
+        return {
+          caseSensitive: await this.filesystemCaseSensitive(binary, root),
+          foldsUnicode: false,
+          normalizesUnicode: false,
+        };
+      }
+      static override async filesystemCaseSensitive(_binary: string, root: string) {
+        return fixtureWorkspace(root).caseSensitive;
       }
     },
   };
@@ -222,7 +253,71 @@ vi.mock('#src/providers/openai/OpenAIProviderFactory.js', async importOriginal =
   };
 });
 
+const readNativeOrigins = NativeFilesystemMetadata.prototype.sourceOrigins;
+const readAvailableNativeOrigins = NativeFilesystemMetadata.prototype.availableSourceOrigins;
+let isolatedUserDirectory: string;
+beforeEach(async () => {
+  const originReader = new NativeFilesystemMetadata(join(repositoryRoot, 'target/release/glyph-context-index'));
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'sourceOrigins').mockImplementation(
+    readNativeOrigins.bind(originReader),
+  );
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'availableSourceOrigins').mockImplementation(
+    readAvailableNativeOrigins.bind(originReader),
+  );
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'assertWorkspacePath').mockResolvedValue(undefined);
+  isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
+  onTestFinished(async () => {
+    await rm(isolatedUserDirectory, { recursive: true, force: true });
+  });
+});
+
 describe(OpenAIDesktopRuntimeFactory, () => {
+  it.each(['backed', 'new', 'saved during read'])(
+    'authorizes a %s editor read at its first provider handoff',
+    async kind => {
+      const fixture = await factoryFixture();
+      const root = await fixture.folder('workspace');
+      const folder = join(root, 'feature');
+      const path = join(folder, 'source.txt');
+      await mkdir(folder);
+      if (kind === 'backed') await writeFile(path, 'Saved text');
+      let open = true;
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type === GlyphEditorRequestType.EXISTS)
+          return { operationId: request.operationId, ok: true, exists: open };
+        if (request.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Expected a text snapshot');
+        expect(request).not.toHaveProperty('source');
+        if (kind === 'saved during read') await writeFile(path, 'Just saved');
+        return editorResponse(request, request.path, 'Captured working copy');
+      });
+      await fixture.create([root]);
+      const tool = captured.providerFactories[0]![1].tools.find(tool => tool.name === 'read_project_file')!;
+      const retain = vi.fn<NonNullable<ToolExecutionContext['retainResultAccess']>>();
+      const signal = new AbortController().signal;
+      const text = await tool.execute(
+        JSON.stringify({ path: 'feature/source.txt', start_line: null, end_line: null }),
+        signal,
+        { retainResultAccess: retain },
+      );
+      expect(text).toContain('Captured working copy');
+      const authorize = retain.mock.calls[0]![1]!;
+      if (kind === 'new') {
+        (await authorize(signal))();
+        open = false;
+        await expect(authorize(signal)).rejects.toThrow('editor source is no longer available');
+      } else {
+        await writeFile(join(folder, 'saving'), 'Another edit');
+        await renameDirectory(join(folder, 'saving'), path);
+        (await authorize(signal))();
+        await renameDirectory(folder, folder + '-old');
+        await mkdir(folder);
+        await writeFile(path, 'Different source');
+        await expect(authorize(signal)).rejects.toThrow('source location changed');
+      }
+    },
+  );
+
   it('loads saved chats and reviews without project access while untrusted and reconciles after trust returns', async () => {
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-untrusted-history-')));
     const root = join(directory, 'workspace');
@@ -239,6 +334,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       truncated: false,
       durationMilliseconds: 0,
     });
+    const instructionGlobs = vi
+      .spyOn(RustWorkspacePathIndex.prototype, 'glob')
+      .mockResolvedValue({ files: [], truncated: false });
     const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
     const roots = [{ name: 'workspace', path: root }];
     const context = {
@@ -249,7 +347,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       authority: 'file',
       roots,
     };
-    const disk = new FileSystemWorkspaceTextStore(root);
+    const disk = fixtureWorkspace(root);
     const base = await disk.read('file.txt');
     const proposal = await new EditProposalService(
       disk,
@@ -331,23 +429,27 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       };
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editor);
+    const factory = new OpenAIDesktopRuntimeFactory(editor, undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       for (trusted of [true, false, true]) {
         requests.mockClear();
         indexing.mockClear();
+        instructionGlobs.mockClear();
         const input = {
           identity,
           roots: [{ name: 'workspace', canonicalPath: root, uri: `file://${root}` }],
           trusted,
+          assertTrusted: () => {},
           emit: () => {},
         };
         runtime = await factory.create(input);
         expect((await runtime.snapshot()).chats.map(chat => chat.id)).toEqual(['saved-chat']);
         expect((await runtime.snapshot()).proposals.map(value => value.id)).toEqual([proposal.id]);
+        if (!trusted) await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
         expect(requests).toHaveBeenCalledTimes(trusted ? 1 : 0);
         expect(indexing).toHaveBeenCalledTimes(trusted ? 1 : 0);
+        expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 10 : 0);
         await runtime.dispose();
         runtime = undefined;
       }
@@ -373,7 +475,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await this.proposalReviews?.initialize();
       recoveredIds = this.proposalReviews!.activeReviews.map(review => review.id);
     });
-    const workspace = new FileSystemWorkspaceTextStore(root);
+    const workspace = fixtureWorkspace(root);
     const service = new EditProposalService(
       workspace,
       new JsDiffTextDiffer(),
@@ -423,12 +525,13 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       },
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editors);
+    const factory = new OpenAIDesktopRuntimeFactory(editors, undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       runtime = await factory.create({
         identity: { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' },
         roots: [{ name, canonicalPath: root, uri: `file://${root}` }],
+        assertTrusted: () => {},
         trusted: true,
         emit: () => {},
       });
@@ -441,6 +544,320 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+  it('restores and queues single-folder captures from a saved chat after reopening with more folders', async () => {
+    const test = await factoryFixture();
+    const other = await test.folder('other');
+    const capturedName = workspaceCaseSensitivity(dirname(other)) ? 'app' : 'App';
+    const original = await test.folder(capturedName, { 'notes.md': 'new editor contents' });
+    await mkdir(join(original, 'src'));
+    await writeFile(join(original, 'src', 'original.ts'), '');
+    await writeFile(join(original, 'src', 'new.ts'), '');
+    const roots = [{ name: capturedName, path: original }];
+    const context = {
+      id: ProjectContextIdentity.create(ProjectContextKind.WORKSPACE, 'file', 'profile:workspace'),
+      mutationIdentity: ProjectContextIdentity.createMutationScope(ProjectContextKind.FOLDER, 'file', roots),
+      kind: ProjectContextKind.FOLDER,
+      name: capturedName,
+      authority: 'file',
+      roots,
+    };
+    const state = { provider: 'fixture', version: 1, data: [] };
+    const checkpoint = { providerState: state, mode: AgentModeID.AGENT, plans: [], todos: [] };
+    const savedText = '@notes.md then @src @output';
+    const source = (
+      kind: 'file' | 'folder' | 'terminal',
+      path: string,
+      text: string,
+      uri = pathToFileURL(join(original, path)).href,
+    ) => {
+      const revision = contentRevision(text, false);
+      return {
+        path,
+        text,
+        revision,
+        byteOrderMark: false,
+        byteLength: Buffer.byteLength(text),
+        source: { kind, uri, version: 1, revision },
+      };
+    };
+    const outline = formatFolderAttachment('src', ['original.ts'], false);
+    const captures = [
+      source('file', 'notes.md', 'captured editor text'),
+      source('folder', 'src', outline),
+      source('terminal', 'output', 'Run finished', 'glyph-terminal:output'),
+    ];
+    const createdAt = '2026-10-14T00:00:00Z';
+    const saved = new SqliteChatSessionStore(process.env.GLYPH_CONFIG_DIR!);
+    await saved.initialize(context);
+    try {
+      await saved.save({
+        schemaVersion: 3,
+        id: 'saved-chat',
+        title: 'Saved',
+        titleOrigin: 'human',
+        projectContextId: context.id,
+        accountProvider: 'openai',
+        accountId: 'fixture',
+        modelSlug: 'model',
+        modelName: 'Model',
+        createdAt,
+        updatedAt: createdAt,
+        providerState: state,
+        transcript: [
+          {
+            userText: savedText,
+            attachmentPaths: captures.map(capture => capture.path),
+            assistantText: 'done',
+            reasoningSummary: '',
+            createdAt,
+            attachments: captures,
+            checkpoints: { before: checkpoint, after: checkpoint },
+            options: {
+              turnId: 'old',
+              attachmentSpans: [
+                { from: 0, to: 9 },
+                { from: 15, to: 19 },
+                { from: 20, to: 27 },
+              ],
+            },
+          },
+        ],
+      });
+    } finally {
+      await saved.dispose();
+    }
+    const app = join(dirname(original), 'app');
+    const indexedFolder = app === original ? 'src' : 'SRC';
+    if (app !== original) {
+      await renameDirectory(join(original, 'src'), join(original, indexedFolder));
+      await renameDirectory(original, app);
+    }
+    test.initialize.mockRestore();
+    vi.spyOn(RustWorkspacePathIndex.prototype, 'initialize').mockResolvedValue({
+      root: app,
+      fileCount: 3,
+      fromCache: false,
+      truncated: false,
+      durationMilliseconds: 0,
+    });
+    const glob = vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({
+      files: [indexedFolder + '/original.ts', indexedFolder + '/new.ts'],
+      truncated: false,
+    });
+    vi.spyOn(OpenAIBackend.prototype, 'initialize').mockResolvedValue();
+    vi.spyOn(GlyphService.prototype, 'accounts', 'get').mockReturnValue([
+      {
+        id: 'fixture',
+        provider: 'openai',
+        label: 'Fixture',
+        connected: true,
+        inferenceAccess: true,
+      },
+    ]);
+    vi.spyOn(OpenAIBackend.prototype, 'createProvider').mockReturnValue({
+      model: 'model',
+      exportState: () => state,
+      restoreState: vi.fn(),
+      reset: vi.fn(),
+      recordContext: vi.fn(),
+      send: vi.fn(),
+    });
+    const events: GlyphHostEvent[] = [];
+    const runtime = await test.create([app, other], event => {
+      events.push(event);
+    });
+    await runtime.handle({ type: GlyphWorkbenchCommandType.RESTORE_CHECKPOINT, chatId: 'saved-chat', turnId: 'old' });
+    const restored = events.find(event => event.type === GlyphHostEventType.CHAT_RESTORED)!;
+    const composer = new GlyphComposerState();
+    composer.restoreDraft(
+      restoreGlyphPrompt(
+        restored.draft,
+        () => undefined,
+        () => 'capture',
+      ),
+    );
+    composer.enqueueDraft();
+    const send = vi.fn<Parameters<GlyphComposerState['sendQueued']>[1]>(async (_text, attachments) => {
+      await runtime.attachmentAccess.admit(attachments, new AbortController().signal);
+    });
+    await composer.sendQueued(composer.snapshot.queued[0]!.id, send);
+    const [text, attachments, options] = send.mock.calls[0]!;
+    expect(text).toBe('@app/notes.md then @app/src @output');
+    expect(options?.attachmentSpans?.map(span => text.slice(span.from, span.to))).toEqual([
+      '@app/notes.md',
+      '@app/src',
+      '@output',
+    ]);
+    const updatedOutline = formatFolderAttachment('app/src', ['original.ts'], false);
+    expect(attachments).toMatchObject([
+      {
+        path: 'app/notes.md',
+        uri: captures[0]!.source.uri,
+        text: 'captured editor text',
+        contentRevision: captures[0]!.revision,
+      },
+      {
+        path: 'app/src',
+        uri: captures[1]!.source.uri,
+        text: updatedOutline,
+        contentRevision: contentRevision(updatedOutline, false),
+        sourceRevision: captures[1]!.revision,
+      },
+      { path: 'output', uri: 'glyph-terminal:output', text: 'Run finished' },
+    ]);
+    expect(composer.snapshot.queueError).toBeUndefined();
+    expect(glob).toHaveBeenCalledWith('**/*', expect.objectContaining({ targetDirectory: indexedFolder }));
+    expect(send).toHaveBeenCalledOnce();
+    expect(composer.snapshot.queued).toEqual([]);
+  });
+
+  it('recovers a persisted review across duplicate-root route upgrades only for its original physical root set', async () => {
+    const test = await factoryFixture();
+    const left = await test.folder('first/lib');
+    const right = await test.folder('second/lib');
+    const moved = await test.folder('other/lib');
+    const stable = await test.folder('docs');
+    const roots = [left, right, stable].map(path => ({ name: basename(path), uri: 'file://' + path, path }));
+    const legacyRoots = roots.map(root => ({
+      name: root.name === 'lib' ? 'root@' + encodeURIComponent(root.uri) : root.name,
+      path: root.path,
+    }));
+    const identity = ProjectContextIdentity.create(ProjectContextKind.WORKSPACE, 'file', 'profile:workspace');
+    const scope = ProjectContextIdentity.createMutationScope(ProjectContextKind.WORKSPACE, 'file', legacyRoots);
+    const directory = join(
+      process.env.GLYPH_CONFIG_DIR!,
+      'projects',
+      identity,
+      'mutation-scopes',
+      createHash('sha256').update(scope).digest('hex'),
+    );
+    await mkdir(directory, { recursive: true });
+    const sourcePath = legacyRoots[0]!.name + '/readme.md';
+    const targetPath = legacyRoots[0]!.name + '/created/readme.md';
+    const text = 'original ' + sourcePath;
+    const snapshot = {
+      path: sourcePath,
+      text,
+      byteOrderMark: false,
+      byteLength: Buffer.byteLength(text),
+      mode: 420,
+      revision: 'captured',
+      identity: 'file-original',
+    };
+    const proposed = { ...snapshot, path: targetPath, text: text.replace('original', 'Original'), revision: 'updated' };
+    const item = {
+      id: 'item',
+      fileId: 'file',
+      kind: 'TEXT',
+      sourceStart: 0,
+      sourceEnd: 1,
+      removedText: 'o',
+      insertedText: 'O',
+      decision: 'PENDING',
+      appliedText: { state: 'applied', before: snapshot, after: proposed, revertTarget: null },
+    };
+    const file = {
+      id: 'file',
+      operation: 'RENAME',
+      sourcePath,
+      targetPath,
+      base: snapshot,
+      proposed,
+      items: [
+        {
+          ...item,
+          id: 'rename',
+          kind: 'RENAME',
+          removedText: '',
+          insertedText: '',
+          sourceEnd: 0,
+          appliedText: undefined,
+        },
+        item,
+      ],
+      currentPath: targetPath,
+      current: proposed,
+      currentRevision: proposed.revision,
+      createdDirectories: [legacyRoots[0]!.name + '/created'],
+      applicability: 'READY',
+      automatic: { itemId: 'rename', before: snapshot, state: 'applied', appliedRevision: 'captured' },
+    };
+    await writeFile(
+      join(directory, 'active-proposal-review.json'),
+      JSON.stringify({
+        schemaVersion: 3,
+        workspaceIdentity: scope,
+        proposals: [
+          {
+            schemaVersion: 1,
+            id: 'review',
+            source: 'structured',
+            createdAt: '2026-10-12T00:00:00Z',
+            files: [
+              file,
+              {
+                id: 'create',
+                operation: 'CREATE',
+                sourcePath: 'docs/glyph.md',
+                targetPath: 'docs/glyph.md',
+                base: null,
+                proposed: { ...snapshot, path: 'docs/glyph.md' },
+                current: null,
+                currentPath: 'docs/glyph.md',
+                currentRevision: null,
+                applicability: 'READY',
+                items: [],
+              },
+            ],
+            acknowledgedResultIds: [],
+          },
+        ],
+      }),
+    );
+    let records: unknown[] = [];
+    test.initialize.mockImplementation(async function (this: GlyphService) {
+      await this.proposalReviews!.initialize({ reconcileWorkspace: false });
+      records = this.proposalReviews!.activeReviews.map(review => review.toRecord());
+    });
+    await test.create([left, moved, stable]);
+    expect(records).toEqual([]);
+    await test.create([left, right, stable]);
+    const currentRoot = getGlyphWorkspaceRootId(roots[0]!, roots);
+    const currentLeft = currentRoot + '/readme.md';
+    const updatedBase = { ...snapshot, path: currentLeft };
+    const updatedTarget = { ...proposed, path: currentRoot + '/created/readme.md' };
+    expect(records).toMatchObject([
+      {
+        id: 'review',
+        files: [
+          {
+            sourcePath: currentLeft,
+            targetPath: updatedTarget.path,
+            currentPath: updatedTarget.path,
+            base: updatedBase,
+            current: updatedTarget,
+            proposed: updatedTarget,
+            createdDirectories: [currentRoot + '/created'],
+            automatic: { before: updatedBase },
+            items: [
+              { id: 'rename' },
+              { appliedText: { before: updatedBase, after: updatedTarget, revertTarget: null } },
+            ],
+          },
+          { sourcePath: 'docs/glyph.md', currentPath: 'docs/glyph.md', proposed: { path: 'docs/glyph.md' } },
+        ],
+      },
+    ]);
+    const currentRoots = roots.map(root => ({ name: getGlyphWorkspaceRootId(root, roots), path: root.path }));
+    const currentScope = ProjectContextIdentity.createMutationScope(ProjectContextKind.WORKSPACE, 'file', currentRoots);
+    const store = new FileProposalReviewStore(join(process.env.GLYPH_CONFIG_DIR!, 'projects', identity), {
+      mutationScope: currentScope,
+    });
+    expect((await store.load(currentScope))[0]?.files[0]?.sourcePath).toBe(currentLeft);
+    await store.clear();
+    await test.create([left, right, stable]);
+    expect(records).toEqual([]);
+  });
   it('initializes distinct roots with duplicate display names instead of rejecting the workspace', async () => {
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-routing-')));
     const roots = ['one', 'two'].map(value => ({
@@ -452,12 +869,13 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     vi.stubEnv('GLYPH_CONFIG_DIR', join(directory, 'state'));
     vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
     vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
-    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       runtime = await factory.create({
         identity: { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' },
         roots,
+        assertTrusted: () => {},
         trusted: true,
         emit: () => {},
       });
@@ -488,7 +906,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         durationMilliseconds: 0,
       });
       const store = new SqliteChatSessionStore(state);
-      const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+      const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, isolatedUserDirectory);
       let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
       try {
         for (const identity of [
@@ -532,6 +950,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         await store.dispose();
         for (const count of [2, 1, 2]) {
           runtime = await factory.create({
+            assertTrusted: () => {},
             trusted: true,
             identity: { profileId: 'profile', workspaceId: 'saved-workspace', windowId: 'window' },
             roots: roots
@@ -613,10 +1032,11 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       };
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editor);
+    const factory = new OpenAIDesktopRuntimeFactory(editor, undefined, isolatedUserDirectory);
     const runtimes: Awaited<ReturnType<typeof factory.create>>[] = [];
     const open = async (names: string[]) => {
       const runtime = await factory.create({
+        assertTrusted: () => {},
         trusted: true,
         identity: { profileId: 'profile', workspaceId: 'saved-workspace', windowId: 'window' },
         roots: names.map(name => ({ name, canonicalPath: join(project, name), uri: `file://${project}/${name}` })),
@@ -626,7 +1046,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       return runtime;
     };
     try {
-      const workspace = new FileSystemWorkspaceTextStore(project);
+      const workspace = fixtureWorkspace(project);
       const service = new EditProposalService(
         workspace,
         new JsDiffTextDiffer(),
@@ -711,12 +1131,13 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       };
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editor);
+    const factory = new OpenAIDesktopRuntimeFactory(editor, undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       runtime = await factory.create({
         identity: { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' },
         roots: [{ name: 'workspace', canonicalPath: root, uri: `file://${root}` }],
+        assertTrusted: () => {},
         trusted: true,
         emit: () => {},
       });
@@ -742,6 +1163,32 @@ describe(OpenAIDesktopRuntimeFactory, () => {
   });
 
   describe(OpenAIDesktopRuntimeFactory.prototype.create, () => {
+    it('shares a lazy user-rule index across workspaces and disposes it with the factory', async () => {
+      const fixture = await factoryFixture();
+      const first = await fixture.create([await fixture.folder('one')]);
+      await fixture.create([await fixture.folder('two')]);
+      expect(captured.indexOptions).toHaveLength(3);
+      expect(captured.indexOptions[1]).toMatchObject({
+        access: { root: join(isolatedUserDirectory, 'rules') },
+        respectGitIgnore: false,
+      });
+      const userIndex = captured.indexes[1]!;
+      const stop = vi.spyOn(userIndex, 'dispose');
+      await first.dispose();
+      expect(stop).not.toHaveBeenCalled();
+      await fixture.factory.dispose();
+      expect(stop).toHaveBeenCalledOnce();
+    });
+
+    it('still releases accounts when the shared user-rule index fails to stop', async () => {
+      const fixture = await factoryFixture();
+      await fixture.create([await fixture.folder('workspace')]);
+      vi.spyOn(captured.indexes[1]!, 'dispose').mockRejectedValueOnce(new Error('Index shutdown failed'));
+      const accounts = vi.spyOn(OpenAIAccountService.prototype, 'dispose');
+      await expect(fixture.factory.dispose()).rejects.toThrow('Index shutdown failed');
+      expect(accounts).toHaveBeenCalledOnce();
+    });
+
     it('retries account initialization after a failed attempt', async () => {
       const fixture = await factoryFixture();
       const root = await fixture.folder('workspace');
@@ -776,7 +1223,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     it('excludes packaged artifacts from a workspace root that contains them', async () => {
       const fixture = await factoryFixture();
       await fixture.create([dirname(repositoryRoot)]);
-      expect(captured.indexOptions[0]?.excludedPaths).toEqual([basename(repositoryRoot)]);
+      expect(captured.indexOptions[0]?.access.beginOperation().excludedPaths).toEqual([basename(repositoryRoot)]);
     });
 
     it('routes single-root editor requests through filesystem policy before the editor', async () => {
@@ -811,7 +1258,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       } as const;
       await expect(client.request(text)).resolves.toMatchObject({ snapshot: { path: 'file.txt' } });
-      expect(request).toHaveBeenLastCalledWith(factoryIdentity, text, undefined);
+      expect(request).toHaveBeenLastCalledWith(factoryIdentity, text, undefined, expect.any(Function));
+      await expect(request.mock.lastCall![3]!()).resolves.toBeUndefined();
       const rename = fileMutation({
         kind: GlyphFileMutationKind.RENAME,
         path: 'file.txt',
@@ -821,7 +1269,11 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       });
       await expect(client.request(rename)).resolves.toMatchObject({ snapshot: { path: 'renamed.txt' } });
       expect(validate).toHaveBeenLastCalledWith('renamed.txt');
-      expect(request).toHaveBeenLastCalledWith(factoryIdentity, rename, undefined);
+      expect(request).toHaveBeenLastCalledWith(factoryIdentity, rename, undefined, expect.any(Function));
+      const checkRename = request.mock.lastCall![3]!;
+      validate.mockClear().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Destination unavailable'));
+      await expect(checkRename()).rejects.toThrow('Destination unavailable');
+      expect(validate.mock.calls).toEqual([['file.txt'], ['renamed.txt']]);
       const create = fileMutation({
         kind: GlyphFileMutationKind.CREATE,
         path: 'new.txt',
@@ -901,6 +1353,29 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(request.mock.lastCall?.[1]).toMatchObject({ mutation: { path: 'one/file.txt' } });
     });
 
+    it('uses selected-file authority for an explicit capture and project authority for automatic expansions', async () => {
+      const fixture = await factoryFixture();
+      const project = await fixture.folder('project', { 'notes.md': 'original' });
+      const personal = join(isolatedUserDirectory, 'rules/personal.md');
+      await mkdir(dirname(personal), { recursive: true });
+      await writeFile(personal, 'reserved user rule');
+      useFilesystemIndex();
+      const runtime = await fixture.create([project, isolatedUserDirectory]);
+      const name = basename(isolatedUserDirectory);
+      const source = { uri: pathToFileURL(personal).href, path: name + '/rules/personal.md', folder: false };
+      const signal = new AbortController().signal;
+      await expect(runtime.attachmentAccess.resolve(source, signal)).resolves.toBeUndefined();
+      await expect(runtime.attachmentAccess.resolve({ ...source, projectFile: true }, signal)).rejects.toThrow(
+        'excluded',
+      );
+      await expect(runtime.attachmentAccess.resolve({ ...source, path: 'project/notes.md' }, signal)).rejects.toThrow(
+        'declared workspace path',
+      );
+      await expect(
+        runtime.attachmentAccess.resolve({ path: 'project', uri: pathToFileURL(project).href, folder: true }, signal),
+      ).resolves.toEqual({ files: ['notes.md'], truncated: false });
+    });
+
     it('lists and canonicalizes editor paths through the workspace index and disk', async () => {
       const fixture = await factoryFixture();
       const root = await fixture.folder('workspace', { 'file.txt': 'disk' });
@@ -911,11 +1386,397 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         .mockResolvedValue({ files: ['file.txt'], truncated: false });
       await expect(client.listPaths(10)).resolves.toEqual({ files: ['file.txt'], truncated: false });
       expect(glob).toHaveBeenLastCalledWith('**/*', { limit: 10 });
-      await client.listPaths(5, '*.txt', 'src');
-      expect(glob).toHaveBeenLastCalledWith('*.txt', { limit: 5, targetDirectory: 'src' });
+      const signal = new AbortController().signal;
+      await client.listPaths(5, '*.txt', 'src', signal);
+      expect(glob).toHaveBeenLastCalledWith('*.txt', { limit: 5, targetDirectory: 'src', signal });
       await expect(client.canonicalPath('file.txt')).resolves.toBe(
-        await new FileSystemWorkspaceTextStore(root).canonicalPath('file.txt'),
+        await fixtureWorkspace(root).canonicalPath('file.txt'),
       );
+    });
+
+    it.each([false, true])('excludes host state and traces from user references with aliased state %s', async alias => {
+      const state = join(isolatedUserDirectory, 'private-state');
+      const trace = join(isolatedUserDirectory, 'trace.log');
+      await mkdir(state);
+      await writeFile(join(state, 'secret.md'), 'PRIVATE STATE CONTENT');
+      await writeFile(trace, 'PRIVATE TRACE CONTENT');
+      const stateAlias = join(isolatedUserDirectory, 'state-alias');
+      if (alias) await symlink(state, stateAlias);
+      const fixture = await factoryFixture({ stateDirectory: alias ? stateAlias : state, traceFile: trace });
+      const rules = join(isolatedUserDirectory, 'rules');
+      await mkdir(rules);
+      for (const [name, reference] of [
+        ['state', 'private-state/secret.md'],
+        ['trace', 'trace.log'],
+        ['public', 'notes.md'],
+      ])
+        await writeFile(join(rules, `${name}.mdc`), `---\nreferences: [${reference}]\nalwaysApply: true\n---\nRule`);
+      await writeFile(join(isolatedUserDirectory, 'notes.md'), 'PUBLIC REFERENCE');
+      useFilesystemIndex();
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'assertReplaceableMetadata').mockResolvedValue();
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_owner, request) => {
+        if (request.type !== GlyphEditorRequestType.CHECK_USER_WORKING_COPIES)
+          throw new Error('Expected a user-rule working-copy check');
+        return { operationId: request.operationId, ok: true, workingCopiesClean: true };
+      });
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({
+        root: rules,
+        fileCount: 3,
+        fromCache: false,
+        truncated: false,
+        durationMilliseconds: 0,
+      });
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const runtime = await fixture.create([await fixture.folder('project')]);
+      const snapshot = await runtime.snapshot();
+      expect(snapshot.instructionSources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: '~/.glyph/rules/state.mdc', status: 'error' }),
+          expect.objectContaining({ path: '~/.glyph/rules/trace.mdc', status: 'error' }),
+          expect.objectContaining({
+            path: '~/.glyph/rules/public.mdc',
+            status: 'active',
+            content: expect.stringContaining('PUBLIC REFERENCE'),
+          }),
+        ]),
+      );
+      expect(JSON.stringify(snapshot.instructionSources)).not.toMatch(/PRIVATE (STATE|TRACE) CONTENT/u);
+      const source = snapshot.instructionSources!.find(source => source.path === '~/.glyph/rules/public.mdc')!;
+      await runtime.handle({
+        type: GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED,
+        path: 'rules/public.mdc',
+        expectedRevision: source.managementRevision!,
+        enabled: false,
+      });
+      expect(await readFile(join(rules, 'public.mdc'), 'utf8')).toContain('enabled: false');
+    });
+
+    it('keeps an unavailable user rule location separate and retries after repair', async () => {
+      const fixture = await factoryFixture();
+      const root = await fixture.folder('project');
+      useFilesystemIndex();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const rules = join(isolatedUserDirectory, 'rules');
+      await writeFile(rules, 'occupied');
+      const runtime = await fixture.create([root]);
+      expect((await runtime.snapshot()).instructionSources).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: 'glyph_user_rule', status: 'error' })]),
+      );
+      await rm(rules);
+      await mkdir(rules);
+      await writeFile(join(rules, 'restored.mdc'), 'Restored');
+      expect((await runtime.snapshot()).instructionSources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'glyph_user_rule', status: 'active', content: 'Restored' }),
+        ]),
+      );
+    });
+
+    it('discovers project instructions through the native index while reading current editor text', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const root = await fixture.folder('workspace', { 'AGENTS.md': 'Disk guidance' });
+      const glob = vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async pattern => ({
+        files: pattern === 'AGENTS.md' ? ['AGENTS.md'] : [],
+        truncated: false,
+      }));
+      // Neither user nor project instruction discovery may use the disk listing port.
+      const diskList = vi
+        .spyOn(FileSystemWorkspaceTextStore.prototype, 'list')
+        .mockResolvedValue({ files: [], truncated: false });
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => ({
+        ...editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance'),
+        snapshot: {
+          ...editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance').snapshot!,
+          uri: pathToFileURL(join(root, 'AGENTS.md')).href,
+          dirty: true,
+        },
+      }));
+      const runtime = await fixture.create([root]);
+      const snapshot = await runtime.snapshot();
+      expect(snapshot.instructionSources).toEqual([
+        expect.objectContaining({
+          path: 'AGENTS.md',
+          status: 'active',
+          revision: contentRevision('Unsaved editor guidance', false),
+        }),
+      ]);
+      expect(glob).toHaveBeenCalledTimes(5);
+      expect(glob.mock.calls).toEqual(
+        expect.arrayContaining([
+          ['*.mdc', { limit: 10_000, rootFilesOnly: true }],
+          ['AGENTS.md', { limit: 1, rootFilesOnly: true }],
+          ['**/?*/AGENTS.md', { limit: 9_999 }],
+          ['**/.glyph/rules/*.mdc', { limit: 10_000 }],
+          ['**/.cursor/rules/*.mdc', { limit: 10_000 }],
+        ]),
+      );
+      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      expect(glob).toHaveBeenCalledTimes(10);
+      expect(diskList).not.toHaveBeenCalled();
+    });
+
+    it('uses project reference routes and checks user editor working copies before publishing Settings changes', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const root = await fixture.folder('project', { 'guide.md': 'Guidance' });
+      await mkdir(join(root, '.glyph/rules'), { recursive: true });
+      await writeFile(join(root, '.glyph/rules/project.mdc'), '---\nreferences: [guide.md]\n---\nBody');
+      vi.spyOn(RustWorkspacePathIndex, 'filesystemCaseSensitive')
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(new Error('unavailable user store'));
+      useFilesystemIndex();
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({
+        root,
+        fileCount: 0,
+        fromCache: false,
+        truncated: false,
+        durationMilliseconds: 0,
+      });
+      const request = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_owner, rpc) => ({
+        operationId: 'operationId' in rpc ? rpc.operationId : '',
+        ok: true,
+        workingCopiesClean: true,
+      }));
+      const runtime = await fixture.create([root]);
+      expect((await runtime.snapshot()).instructionSources).toContainEqual(
+        expect.objectContaining({ referenceResources: [{ uri: 'file://' + root + '/guide.md', caseSensitive: true }] }),
+      );
+      await runtime.handle({
+        type: GlyphWorkbenchCommandType.CREATE_USER_RULE,
+        name: 'New rule',
+        activation: 'manual',
+      });
+      expect(
+        request.mock.calls.filter(([, rpc]) => rpc.type === GlyphEditorRequestType.CHECK_USER_WORKING_COPIES),
+      ).toHaveLength(2);
+    });
+    it('routes catalog reads across roots and rejects snapshots for another file', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const first = await fixture.folder('first', { 'AGENTS.md': 'First disk' });
+      const second = await fixture.folder('second', { 'AGENTS.md': 'Second disk' });
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async pattern => ({
+        files: pattern === 'AGENTS.md' ? ['AGENTS.md'] : [],
+        truncated: false,
+      }));
+      const request = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_owner, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Unexpected request');
+        return request.path === 'first/AGENTS.md'
+          ? { ok: true, operationId: request.operationId }
+          : editorResponse(request, 'wrong/file');
+      });
+      const runtime = await fixture.create([first, second]);
+      const snapshot = await runtime.snapshot();
+      expect(snapshot.instructionSources).toEqual([
+        expect.objectContaining({ path: 'first/AGENTS.md', status: 'active' }),
+        expect.objectContaining({
+          path: 'second/AGENTS.md',
+          status: 'error',
+          message: expect.stringContaining('different path'),
+        }),
+      ]);
+      expect(request.mock.calls.map(([, req]) => 'path' in req && req.path)).toEqual([
+        'first/AGENTS.md',
+        'second/AGENTS.md',
+      ]);
+    });
+
+    it('retains mandatory and manual instruction identity when an alias becomes a second workspace route', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      useFilesystemIndex();
+      const rpc = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
+        return { operationId: request.operationId, ok: true };
+      });
+      const root = await fixture.folder('actual', { 'AGENTS.md': 'Required body' });
+      await mkdir(join(root, '.glyph/rules'), { recursive: true });
+      await writeFile(join(root, '.glyph/rules/manual.mdc'), '---\nactivation: manual\n---\nManual body');
+      const alias = join(dirname(root), 'alias');
+      await symlink(root, alias);
+      const first = await (await fixture.create([root])).snapshot();
+      const joined = await fixture.create([root, alias]);
+      const current = await joined.snapshot();
+      expect(current.instructionSources!.map(source => source.id)).toEqual(
+        first.instructionSources!.map(source => source.id),
+      );
+      const turn = await captured.providerFactories.at(-1)![3]!.beginTurn({
+        turnId: 'legacy',
+        attachmentPaths: [],
+        manualRuleIds: ['glyph_project_rule:.glyph/rules/manual.mdc'],
+      });
+      expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual(['Manual body', 'Required body']);
+      rpc.mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
+        if (request.path.endsWith('AGENTS.md')) return editorResponse(request, request.path, request.path);
+        return {
+          operationId: request.operationId,
+          ok: false,
+          error: { code: GlyphDesktopErrorCode.INVALID_REQUEST, message: 'Editor disconnected', retryable: true },
+        };
+      });
+      expect((await joined.snapshot()).instructionSources!.map(source => source.message)).toEqual(
+        expect.arrayContaining(['Editor disconnected', expect.stringContaining('conflicting unsaved edits')]),
+      );
+      rpc.mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
+        return { operationId: request.operationId, ok: false };
+      });
+      expect((await joined.snapshot()).instructionSources![0]!.message).toContain('catalog snapshot is unavailable');
+    });
+
+    it.each([false, true])(
+      'rechecks a replaced project folder through its selected route (alias %s)',
+      async aliasSelected => {
+        const fixture = await factoryFixture();
+        vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+        useFilesystemIndex();
+        const rpc = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+          if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a catalog read');
+          return { operationId: request.operationId, ok: true };
+        });
+        const first = await fixture.folder('first', { 'AGENTS.md': 'Original' });
+        const other = await fixture.folder('other', { 'AGENTS.md': 'Replacement' });
+        const alias = join(dirname(first), 'attached');
+        await symlink(first, alias);
+        const runtime = await fixture.create([aliasSelected ? alias : first]);
+        expect((await runtime.snapshot()).instructionSources![0]!.uri).toBe(
+          pathToFileURL(join(first, 'AGENTS.md')).href,
+        );
+        const coordinator = captured.providerFactories.at(-1)![3]!;
+        await coordinator.beginTurn({ turnId: 'attached', attachmentPaths: [] });
+        const allowed = await coordinator.authorizeDisclosure('attached');
+        allowed();
+        const pending = captured.indexOptions[0]!.access.beginOperation();
+        await writeFile(join(first, 'AGENTS.md'), 'Edited in the same directory');
+        allowed();
+        const entered = new Deferred<void>();
+        const release = new Deferred<void>();
+        rpc.mockImplementation(async (_identity, request) => {
+          if (request.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Expected a file read');
+          entered.resolve();
+          await release.promise;
+          return editorResponse(request, request.path, 'Pending snapshot');
+        });
+        const read = { type: GlyphEditorRequestType.READ_SNAPSHOT, operationId: 'file', path: 'AGENTS.md' } as const;
+        const pendingRead = captured.editorClients[0]!.request(read);
+        await entered.promise;
+        if (aliasSelected) {
+          await rm(alias);
+          await symlink(other, alias);
+        } else {
+          await renameDirectory(first, first + '-moved');
+          await renameDirectory(other, first);
+        }
+        release.resolve();
+        await expect(pendingRead).rejects.toThrow('workspace folder changed');
+        expect(allowed).toThrow('workspace folder changed');
+        await expect(coordinator.authorizeDisclosure('attached')).rejects.toThrow('workspace folder changed');
+        expect(pending.assertCurrent).toThrow('workspace folder changed');
+        rpc.mockClear();
+        for (const editor of captured.editorClients)
+          await expect(editor.request(read)).rejects.toThrow('workspace folder changed');
+        expect(rpc).not.toHaveBeenCalled();
+      },
+    );
+
+    it('lists independent project guidance when the personal rule store is cyclic and retries after repair', async () => {
+      const rules = join(isolatedUserDirectory, 'rules');
+      await symlink('rules', rules);
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      useFilesystemIndex();
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected metadata query');
+        return { operationId: request.operationId, ok: true };
+      });
+      const root = await fixture.folder('project', { 'AGENTS.md': 'Independent guidance' });
+      const runtime = await fixture.create([root]);
+      const sources = (await runtime.snapshot()).instructionSources!;
+      expect(sources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'AGENTS.md', status: 'active' }),
+          expect.objectContaining({ kind: 'glyph_user_rule', status: 'error' }),
+        ]),
+      );
+      await rm(rules);
+      await mkdir(rules);
+      await writeFile(join(rules, 'recovered.mdc'), 'Recovered rule');
+      expect((await runtime.snapshot()).instructionSources).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: 'recovered', status: 'active' })]),
+      );
+    });
+
+    it('uses the physical profile for discovery and resolves a formerly shared project rule only through its user owner', async () => {
+      const profile = join(isolatedUserDirectory, 'current');
+      const first = join(isolatedUserDirectory, 'first');
+      const second = join(isolatedUserDirectory, 'second');
+      await mkdir(join(first, '.glyph'), { recursive: true });
+      await symlink(join(first, '.glyph'), profile);
+      const fixture = await factoryFixture({ userDirectory: profile });
+      useFilesystemIndex();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected metadata query');
+        return { operationId: request.operationId, ok: true };
+      });
+      for (const root of [first, second]) {
+        await mkdir(join(root, '.glyph/rules'), { recursive: true });
+        await writeFile(
+          join(root, '.glyph/rules/shared.mdc'),
+          '---\nactivation: manual\nreferences: [context.md]\n---\nShared',
+        );
+        await writeFile(join(root, '.glyph/context.md'), basename(root) + ' profile context');
+        await writeFile(join(root, 'context.md'), 'Project context');
+      }
+      const old = 'glyph_project_rule:.glyph/rules/shared.mdc';
+      for (const root of [first, second]) {
+        if (root === second) {
+          await rm(profile);
+          await symlink(join(second, '.glyph'), profile);
+          await writeFile(join(second, '.glyph/rules/new.mdc'), 'New');
+        }
+        const runtime = await fixture.create([root]);
+        const sources = (await runtime.snapshot()).instructionSources!;
+        const user = sources.find(source => source.kind === 'glyph_user_rule')!;
+        expect(sources).toHaveLength(root === first ? 1 : 3);
+        expect(user.kind).toBe('glyph_user_rule');
+        expect(user.legacyIds).toBeUndefined();
+        expect(runtime.resolveRuleReference(old)).toBe(
+          root === first
+            ? user.id
+            : sources.find(source => source.kind === 'glyph_project_rule' && source.path.endsWith('shared.mdc'))!.id,
+        );
+        const turn = await captured.providerFactories
+          .at(-1)![3]!
+          .beginTurn({ turnId: 'manual', attachmentPaths: [], manualRuleIds: [old] });
+        const bodies = turn.initialEnvelope().sources.map(source => source.content);
+        expect(bodies).toHaveLength(1);
+        expect(bodies[0]).toContain(root === first ? 'first profile context' : 'Project context');
+        if (root === first) expect(bodies[0]).not.toContain('Project context');
+      }
+    });
+
+    it('reports an unsafe user rules directory without querying its native index', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const glob = vi
+        .spyOn(RustWorkspacePathIndex.prototype, 'glob')
+        .mockResolvedValue({ files: [], truncated: false });
+      vi.spyOn(FileSystemWorkspaceTextStore.prototype, 'canonicalPath').mockRejectedValue(
+        new Error('Symlink directory is not allowed'),
+      );
+      const runtime = await fixture.create([await fixture.folder('workspace')]);
+      expect((await runtime.snapshot()).instructionSources).toEqual([
+        expect.objectContaining({
+          kind: 'glyph_user_rule',
+          status: 'error',
+          message: 'Symlink directory is not allowed',
+        }),
+      ]);
+      expect(glob).not.toHaveBeenCalledWith('*.mdc', expect.anything());
+      expect(glob).toHaveBeenCalledTimes(4);
     });
 
     it.each([
@@ -938,6 +1799,17 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         );
       const signal = new AbortController().signal;
       await expect(captured.indexOptions[0]!.readContentOverrides!(signal)).resolves.toEqual({ 'file.txt': 'live' });
+      const metadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
+      const authority = new NativePinnedSourceAuthority(metadata, new WorkspaceAccessPolicy(), () => {});
+      const retain = vi.fn();
+      await expect(captured.indexOptions[0]!.readContentOverrides!(signal, { authority, retain })).resolves.toEqual({
+        'file.txt': 'live',
+      });
+      expect(retain.mock.calls[0]?.[0]).toBe('file.txt');
+      const disclosure = retain.mock.calls[0]![1] as WorkspaceDisclosure;
+      (await disclosure.authorize(signal))();
+      await renameDirectory(join(roots[0]!, 'file.txt'), join(roots[0]!, 'moved.txt'));
+      await expect(disclosure.authorize(signal)).rejects.toThrow();
       expect(request).toHaveBeenLastCalledWith(
         factoryIdentity,
         expect.objectContaining({ type: GlyphEditorRequestType.READ_SNAPSHOT, path: read }),
@@ -1136,7 +2008,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const transport = vi.fn<typeof fetch>();
       const fixture = await factoryFixture({ transport });
       await fixture.create([await fixture.folder('workspace')]);
-      const clients = captured.providerFactories.map(([, , , client]) => client);
+      const clients = captured.providerFactories.map(([, , client]) => client);
       expect(clients).toHaveLength(2);
       expect(clients[0]).toBeInstanceOf(OpenAI);
       expect(clients[1]).toBe(clients[0]);
@@ -1145,7 +2017,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
   });
 
   it('leaves workspace-wide editor requests unqualified even when given a path', () => {
-    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, isolatedUserDirectory);
     const request: GlyphEditorRequest = { type: GlyphEditorRequestType.LIST_WORKING_COPIES, operationId: 'copies' };
 
     const qualified = (
@@ -1161,14 +2033,43 @@ describe(OpenAIDesktopRuntimeFactory, () => {
 const repositoryRoot = resolve(import.meta.dirname, '..', '..', '..', '..');
 const factoryIdentity: GlyphConnectionIdentity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
 
-async function factoryFixture(options: { readonly transport?: typeof fetch } = {}) {
+function releaseExecutable(executable: string): string {
+  return join(repositoryRoot, 'target', 'release', basename(executable));
+}
+
+function useFilesystemIndex(): void {
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
+    this: RustWorkspacePathIndex,
+    pattern,
+    options,
+  ) {
+    const configuration = captured.indexOptions[captured.indexes.indexOf(this)]!;
+    return fixtureWorkspace(configuration.access.root, { accessPolicy: configuration.access.policy }).list(
+      options.limit,
+      pattern,
+    );
+  });
+}
+
+async function factoryFixture(
+  options: {
+    readonly userDirectory?: string;
+    readonly transport?: typeof fetch;
+    readonly stateDirectory?: string;
+    readonly traceFile?: string;
+  } = {},
+) {
   for (const values of Object.values(captured)) values.length = 0;
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-')));
-  vi.stubEnv('GLYPH_CONFIG_DIR', join(directory, 'state'));
-  vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
+  vi.stubEnv('GLYPH_CONFIG_DIR', options.stateDirectory ?? join(directory, 'state'));
+  vi.stubEnv('CHAT_TRACE_FILE', options.traceFile ?? join(directory, 'trace.log'));
   const initialize = vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
   const editors = new EditorRpcRouter();
-  const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport);
+  const factory = new OpenAIDesktopRuntimeFactory(
+    editors,
+    options.transport,
+    options.userDirectory ?? isolatedUserDirectory,
+  );
   const runtimes: ProviderDesktopRuntime[] = [];
   onTestFinished(async () => {
     for (const runtime of runtimes) await runtime.dispose();
@@ -1178,6 +2079,7 @@ async function factoryFixture(options: { readonly transport?: typeof fetch } = {
     await rm(directory, { recursive: true, force: true });
   });
   return {
+    factory,
     editors,
     initialize,
     async folder(name: string, files: Readonly<Record<string, string>> = {}) {
@@ -1190,6 +2092,7 @@ async function factoryFixture(options: { readonly transport?: typeof fetch } = {
       const runtime = await factory.create({
         identity: factoryIdentity,
         roots: paths.map(path => ({ name: basename(path), canonicalPath: path, uri: `file://${path}` })),
+        assertTrusted: () => {},
         trusted: true,
         emit,
       });

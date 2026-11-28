@@ -191,7 +191,7 @@ describe(EditorWorkspaceTextStore, () => {
         listPaths,
       });
       await expect(store.list(10, '*.ts', 'src')).resolves.toEqual({ files: ['src/a.ts'], truncated: true });
-      expect(listPaths).toHaveBeenCalledExactlyOnceWith(10, '*.ts', 'src');
+      expect(listPaths).toHaveBeenCalledExactlyOnceWith(10, '*.ts', 'src', undefined);
     });
   });
 

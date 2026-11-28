@@ -30,6 +30,7 @@ function composerActions(overrides: Partial<GlyphWorkbenchViewActions> = {}): Gl
     context: {
       selectFiles: vi.fn(async () => []),
       searchFiles: vi.fn(async () => []),
+      searchRules: vi.fn(async () => []),
       captureFile: vi.fn(async (uri: string) => fileAttachment({ uri })),
       openAttachment: vi.fn(async () => {}),
       refreshAttachment: vi.fn(async (attachment: GlyphContextAttachment) => attachment),
@@ -97,21 +98,46 @@ function sendButton() {
   return document.querySelector<HTMLButtonElement>('.glyph-send')!;
 }
 
-function picker() {
-  return screen.queryByRole('listbox', { name: 'Files and folders to attach' });
+function picker(mode: 'context' | 'rules' = 'context') {
+  return screen.queryByRole('listbox', { name: mode === 'rules' ? 'Rules to invoke' : 'Files and folders to attach' });
 }
 
 async function openPicker(actions: GlyphWorkbenchViewActions, text: string, candidates: GlyphContextCandidate[]) {
-  vi.mocked(actions.context.searchFiles).mockResolvedValue(candidates);
+  const rules = text.startsWith('/');
+  vi.mocked(rules ? actions.context.searchRules : actions.context.searchFiles).mockResolvedValue(candidates);
   typeDraft(actions.composer, text);
   if (candidates.length > 0) await screen.findAllByRole('option', {}, patience);
   else
     await waitFor(() => {
-      expect(screen.getByRole('status').textContent).toBe('No matching files');
+      expect(screen.getByRole('status').textContent).toBe(rules ? 'No matching rules' : 'No matching files');
     }, patience);
 }
 
 describe(useGlyphComposerState, () => {
+  it('repeats an open rule search when the catalog changes', async () => {
+    const actions = composerActions();
+    let refresh!: () => void;
+    const context = {
+      ...actions.context,
+      onDidChangeInstructions: (listener: () => void) => {
+        refresh = listener;
+        return () => {};
+      },
+    };
+    renderComposer({ status: GlyphWorkbenchStatus.READY, actions: { ...actions, context } });
+    typeDraft(actions.composer, '/rule');
+    await waitFor(() => {
+      expect(context.searchRules).toHaveBeenCalled();
+    }, patience);
+    vi.mocked(context.searchRules).mockClear();
+    act(() => {
+      refresh();
+    });
+    await waitFor(() => {
+      expect(context.searchRules).toHaveBeenCalled();
+    }, patience);
+  });
+
   it('sends the draft on Enter and clears the prompt', async () => {
     const actions = composerActions();
     renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
@@ -424,6 +450,62 @@ describe(useGlyphComposerState, () => {
       expect(picker()).toBeNull();
     }, patience);
     expect(actions.context.captureFile).toHaveBeenCalledWith('file:///workspace/src/a.ts');
+  });
+
+  it('inserts a manual rule as a composer-only context badge', async () => {
+    const actions = composerActions();
+    renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
+    await openPicker(actions, '/typ', [
+      {
+        uri: 'glyph-rule:typescript',
+        path: 'TypeScript',
+        kind: GlyphContextCandidateKind.RULE,
+        ruleId: 'rule-id',
+      },
+    ]);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('option', { name: 'TypeScript' }));
+    });
+
+    expect(actions.context.captureFile).not.toHaveBeenCalled();
+    expect(actions.context.searchRules).toHaveBeenCalledWith('typ');
+    expect(actions.context.searchFiles).not.toHaveBeenCalled();
+    expect(actions.composer.snapshot.document.parts).toEqual([
+      {
+        type: 'attachment',
+        attachment: {
+          kind: GlyphContextAttachmentKind.RULE,
+          uri: 'glyph-rule:typescript',
+          path: 'TypeScript',
+          text: '',
+          contentRevision: 'rule-id',
+          ruleId: 'rule-id',
+        },
+      },
+    ]);
+  });
+
+  it('rejects manual rule candidates without a selection position or stable id', async () => {
+    const actions = composerActions();
+    const { result } = renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
+    await act(() =>
+      result.current.choose({
+        uri: 'glyph-rule:missing',
+        path: 'Missing',
+        kind: GlyphContextCandidateKind.RULE,
+        ruleId: 'rule-id',
+      }),
+    );
+    expect(screen.getByRole('alert').textContent).toBe('This rule cannot be selected.');
+
+    await openPicker(actions, '/missing', [
+      { uri: 'glyph-rule:missing', path: 'Missing', kind: GlyphContextCandidateKind.RULE },
+    ]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('option', { name: 'Missing' }));
+    });
+    expect(screen.getByRole('alert').textContent).toBe('This rule cannot be selected.');
   });
 
   it('closes the file search on Escape and keeps other keys working', async () => {

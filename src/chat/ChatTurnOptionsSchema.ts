@@ -59,14 +59,44 @@ export const chatTurnOptionsSchema = z
     annotations: z.array(annotationSchema).max(100).optional(),
     planBuild: planBuildOrderSchema.optional(),
     planProgress: planProgressSchema.optional(),
+    referenceSpans: z
+      .array(
+        z
+          .object({
+            kind: z.literal('rule'),
+            sourceId: z.string().min(1).max(500),
+            label: z.string().min(1),
+            revision: z.string().min(1),
+            from: z.number().int().nonnegative(),
+            to: z.number().int().positive(),
+          })
+          .strict()
+          .refine(span => span.to - span.from === span.label.length + 1),
+      )
+      .optional(),
+    manualRuleIds: z.array(z.string().min(1).max(500)).max(32).optional(),
   })
   .strict()
-  .transform(({ mode, annotations, turnId, attachmentSpans, agentReviewId, planBuild, planProgress }) => ({
-    ...(attachmentSpans ? { attachmentSpans } : {}),
-    ...(turnId !== undefined && turnId !== '' ? { turnId } : {}),
-    ...(agentReviewId !== undefined && agentReviewId !== '' ? { agentReviewId } : {}),
-    ...(mode !== undefined ? { mode } : {}),
-    ...(annotations ? { annotations } : {}),
-    ...(planBuild ? { planBuild } : {}),
-    ...(planProgress ? { planProgress } : {}),
-  }));
+  .transform(
+    ({
+      mode,
+      annotations,
+      turnId,
+      attachmentSpans,
+      referenceSpans,
+      agentReviewId,
+      planBuild,
+      planProgress,
+      manualRuleIds,
+    }) => ({
+      ...(referenceSpans && referenceSpans.length > 0 ? { referenceSpans } : {}),
+      ...(attachmentSpans ? { attachmentSpans } : {}),
+      ...(turnId !== undefined && turnId !== '' ? { turnId } : {}),
+      ...(agentReviewId !== undefined && agentReviewId !== '' ? { agentReviewId } : {}),
+      ...(mode !== undefined ? { mode } : {}),
+      ...(annotations ? { annotations } : {}),
+      ...(planBuild ? { planBuild } : {}),
+      ...(planProgress ? { planProgress } : {}),
+      ...(manualRuleIds && manualRuleIds.length > 0 ? { manualRuleIds: [...new Set(manualRuleIds)] } : {}),
+    }),
+  );

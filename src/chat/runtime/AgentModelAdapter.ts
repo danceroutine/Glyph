@@ -1,3 +1,4 @@
+import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
 import type { AgentMode } from '#src/chat/AgentMode.js';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
@@ -34,6 +35,8 @@ export interface AgentTurnContext {
   readonly mode: AgentMode;
   readonly signal: AbortSignal;
   readonly round: number;
+  /** Provider-neutral instructions prepared by the host for this boundary. */
+  readonly instructionContext?: AgentInstructionContext;
   readonly onText: (delta: string) => void;
   readonly onReasoningSummary?: (delta: string) => void;
   readonly trace: (kind: string, data: unknown, round?: number) => void;
@@ -67,7 +70,15 @@ export interface AgentModelAdapter<TTurn> {
    * Adapters own provider-specific delivery; this operation must not execute or cancel tools.
    */
   steerTurn(turn: TTurn, request: ChatRequest, context: AgentTurnContext): Promise<TTurn>;
-  streamStep(turn: TTurn, context: AgentTurnContext): Promise<AgentTurnStep<TTurn>>;
+  /** Prepare credentials and other asynchronous transport state before the runtime authorizes the
+   * model request. Only the returned sender may trace or transmit protected input. It invokes the
+   * supplied synchronous guard at handoff. After asynchronous transport preparation or a retry,
+   * obtain a fresh guard and invoke it immediately before transport. */
+  prepareStep(
+    turn: TTurn,
+    context: AgentTurnContext,
+  ): Promise<(assertCurrent: () => void, authorize: () => Promise<() => void>) => Promise<AgentTurnStep<TTurn>>>;
+  /** Return a new turn containing the outcomes, preserving the prior turn for recovery projection. */
   appendToolResults(turn: TTurn, results: readonly AgentToolResult[]): TTurn;
   /** Snapshot live wire state. The runtime projects it into durable history before storing or publishing it. */
   snapshot(turn: TTurn): ChatProviderState;

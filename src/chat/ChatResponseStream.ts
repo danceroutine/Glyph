@@ -5,5 +5,7 @@ import type { ChatResponsePart } from './ChatResponsePart.ts';
  * adapter can translate them to ChatResponseStream or LanguageModelResponsePart.
  */
 export interface ChatResponseStream {
+  /** Called when the provider has admitted the request and is starting its model turn. */
+  onTurnAdmitted?: () => void;
   push(part: ChatResponsePart): void;
 }

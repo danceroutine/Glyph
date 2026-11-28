@@ -1,3 +1,9 @@
+import { restoreGlyphPrompt } from '#src/desktop/workbench/restoreGlyphPrompt.js';
+import { toGlyphPromptText } from '#src/desktop/workbench/GlyphPromptDocument.js';
+import { formatFolderAttachment } from '#src/desktop/workbench/formatFolderContextOutline.js';
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
+import { DesktopAttachmentAccess } from '#src/desktop/host/DesktopAttachmentAccess.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
@@ -60,6 +66,8 @@ import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
 import { GoalStatus } from '#src/goals/GoalStatus.js';
 import {
+  AgentInstructionActivationMode,
+  AgentInstructionActivationReason,
   AgentInstructionSourceKind,
   AgentInstructionSourceStatus,
   type AgentInstructionSource,
@@ -73,11 +81,21 @@ async function fixture(
   ownerWindowId = 'owner',
   reviews?: ProposalReviewManager,
   extras: {
+    readonly reportsTurnAdmission?: boolean;
     readonly agentReviews?: AgentReviewService;
+    readonly trusted?: boolean;
     readonly records?: readonly ChatSessionRecord[];
+    readonly refreshCatalogs?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['refreshCatalogs'];
+    readonly restoreAttachmentPath?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['restoreAttachmentPath'];
+    readonly referenceResources?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['referenceResources'];
     readonly instructionCatalog?: NonNullable<
       ConstructorParameters<typeof ProviderDesktopRuntime>[0]['instructionCatalog']
     >;
+    readonly userRules?: {
+      create(name: string, activation: 'always' | 'file_pattern' | 'model' | 'manual'): Promise<void>;
+      setEnabled(path: string, revision: string, enabled: boolean): Promise<void>;
+      remove(path: string, revision: string): Promise<void>;
+    };
   } = {},
 ) {
   const events: GlyphHostEvent[] = [];
@@ -130,6 +148,7 @@ async function fixture(
           context.splice(0, context.length, ...(states.get(JSON.stringify(state.data)) ?? []));
         },
         reset: () => {},
+        ...(extras.reportsTurnAdmission ? { reportsTurnAdmission: true } : {}),
         send: async (_request, options) => {
           const reported = await send(options, interactions);
           return { usage: reported === undefined ? usage : reported, responseId: 'response' };
@@ -190,6 +209,7 @@ async function fixture(
     dispose: vi.fn(async () => {}),
   };
   runtime = new ProviderDesktopRuntime({
+    attachmentAccess: fixtureAttachmentAccess(),
     glyph,
     interactions,
     shellSessions: shells,
@@ -197,8 +217,13 @@ async function fixture(
       events.push(event);
     },
     ownerWindowId,
+    ...(extras.trusted === undefined ? {} : { trusted: extras.trusted }),
     ...(extras.agentReviews ? { agentReviews: extras.agentReviews } : {}),
+    ...(extras.refreshCatalogs ? { refreshCatalogs: extras.refreshCatalogs } : {}),
+    ...(extras.restoreAttachmentPath && { restoreAttachmentPath: extras.restoreAttachmentPath }),
+    ...(extras.referenceResources ? { referenceResources: extras.referenceResources } : {}),
     ...(extras.instructionCatalog ? { instructionCatalog: extras.instructionCatalog } : {}),
+    ...(extras.userRules ? { userRules: extras.userRules as never } : {}),
   });
   await runtime.handle({ type: Command.CREATE_CHAT, accountProvider: 'fixture', accountId: 'account', model: 'model' });
   const chatId = (await runtime.snapshot()).chats.find(
@@ -225,12 +250,25 @@ async function fixture(
   };
 }
 
+it('refreshes only the instruction catalog while preserving connected chat runs', async () => {
+  const refreshCatalogs = vi.fn(async () => {});
+  const { runtime, events } = await fixture(async () => {}, 'owner', undefined, { refreshCatalogs });
+  onTestFinished(() => runtime.dispose());
+  events.length = 0;
+  await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
+  expect(refreshCatalogs).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
+  expect(events).toEqual([]);
+  refreshCatalogs.mockRejectedValueOnce(new Error('Discovery failed'));
+  await expect(runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS })).rejects.toThrow('Discovery failed');
+});
+
 it('projects instruction catalog snapshots and live changes without exposing file contents', async () => {
   let changed: ((sources: readonly AgentInstructionSource[]) => void) | undefined;
   const unsubscribe = vi.fn();
   const sources: readonly AgentInstructionSource[] = [
     {
       id: 'agents_md:AGENTS.md',
+      references: ['a.md'],
       kind: AgentInstructionSourceKind.AGENTS_MD,
       label: 'AGENTS.md',
       path: 'AGENTS.md',
@@ -247,6 +285,32 @@ it('projects instruction catalog snapshots and live changes without exposing fil
       status: AgentInstructionSourceStatus.ERROR,
       message: 'Unreadable',
     },
+    {
+      id: 'glyph_user_rule:rules/user.mdc',
+      kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+      label: 'Glyph user rule',
+      name: 'User',
+      description: 'User description',
+      path: '~/.glyph/rules/user.mdc',
+      scope: '.',
+      status: AgentInstructionSourceStatus.ACTIVE,
+      content: 'User body',
+      revision: 'one',
+      sourceRevision: 'source-one',
+      activation: AgentInstructionActivationMode.MANUAL,
+      globs: ['**/*.ts'],
+      enabled: true,
+      references: ['style.md'],
+      uri: 'file:///home/user/.glyph/rules/user.mdc',
+    },
+    {
+      id: 'glyph_user_rule:rules/empty.mdc',
+      kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+      label: 'Glyph user rule',
+      path: '~/.glyph/rules/empty.mdc',
+      scope: '.',
+      status: AgentInstructionSourceStatus.ACTIVE,
+    },
   ];
   const instructionCatalog = {
     sources,
@@ -256,21 +320,148 @@ it('projects instruction catalog snapshots and live changes without exposing fil
       return unsubscribe;
     }),
   };
-  const harness = await fixture(async () => {}, 'owner', undefined, { instructionCatalog });
+  const historical = chatRecord({
+    transcript: [
+      {
+        userText: 'Used rules',
+        attachmentPaths: [],
+        assistantText: 'Done',
+        reasoningSummary: '',
+        createdAt: '2026-10-01T00:00:00.000Z',
+        context: {
+          schema: 'glyph.turn-context.v1',
+          turnId: 'turn',
+          sources: [sources[0]!, sources[2]!],
+          activations: [{ sourceId: sources[2]!.id, reason: AgentInstructionActivationReason.MANUAL }],
+          candidates: [{ id: 'candidate', name: 'Candidate', description: 'When relevant', scope: '.' }],
+        },
+      },
+    ],
+  });
+  const harness = await fixture(async () => {}, 'owner', undefined, {
+    instructionCatalog,
+    referenceResources: path => [{ uri: 'file:///repo/' + path, caseSensitive: true }],
+    records: [historical],
+  });
   try {
-    expect((await harness.runtime.snapshot()).instructionSources).toEqual([
-      expect.not.objectContaining({ content: expect.anything() }),
-      expect.objectContaining({ path: 'src/AGENTS.md', message: 'Unreadable' }),
-    ]);
+    const projected = (await harness.runtime.snapshot()).instructionSources!;
+    expect(projected[0]).not.toHaveProperty('content');
+    expect(projected[0]?.referenceResources).toEqual([{ uri: 'file:///repo/a.md', caseSensitive: true }]);
+    expect(projected[1]).toMatchObject({ path: 'src/AGENTS.md', message: 'Unreadable' });
+    expect(projected[2]).toMatchObject({
+      content: 'User body',
+      managementPath: 'rules/user.mdc',
+      managementRevision: 'source-one',
+    });
+    expect(projected[3]).not.toHaveProperty('content');
     changed?.(sources);
     expect(harness.events.at(-1)).toEqual({
       type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED,
       sources: expect.arrayContaining([expect.objectContaining({ path: 'AGENTS.md' })]),
     });
+    await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: historical.id });
+    expect((await harness.runtime.snapshot()).runs.find(run => run.chatId === historical.id)?.context).toEqual({
+      sources: [
+        expect.objectContaining({ content: sources[0]!.content }),
+        expect.objectContaining({ content: 'User body', managementPath: 'rules/user.mdc' }),
+      ],
+      activations: [{ sourceId: sources[2]!.id, reason: AgentInstructionActivationReason.MANUAL }],
+      candidates: [{ id: 'candidate', name: 'Candidate', description: 'When relevant' }],
+    });
   } finally {
     await harness.runtime.dispose();
   }
   expect(unsubscribe).toHaveBeenCalledOnce();
+});
+
+it('keeps a completed turn when the post-turn instruction refresh fails', async () => {
+  const refresh = vi
+    .fn<() => Promise<readonly AgentInstructionSource[]>>()
+    .mockResolvedValueOnce([])
+    .mockRejectedValueOnce(new Error('refresh failed'));
+  const harness = await fixture(
+    async options => {
+      options.onText('Done');
+    },
+    'owner',
+    undefined,
+    { instructionCatalog: { sources: [], refresh, onDidChange: () => () => {} } },
+  );
+  try {
+    await harness.runtime.handle({
+      type: Command.SEND,
+      chatId: harness.chatId,
+      runId: 'rule-refresh-failure',
+      text: 'Create a rule',
+      attachments: [],
+    });
+    await vi.waitFor(() => {
+      expect(harness.saved.get(harness.chatId)?.transcript).toHaveLength(1);
+      expect(
+        harness.events.some(
+          event =>
+            event.type === GlyphHostEventType.RUN_STATE &&
+            event.run.runId === 'rule-refresh-failure' &&
+            event.run.status === GlyphRunStatus.COMPLETED,
+        ),
+      ).toBe(true);
+    });
+    expect(refresh).toHaveBeenCalledTimes(2);
+  } finally {
+    await harness.runtime.dispose();
+  }
+});
+
+it('dispatches user rule lifecycle commands and reports unavailable management', async () => {
+  const userRules = {
+    create: vi.fn(async () => {}),
+    setEnabled: vi.fn(async () => {}),
+    remove: vi.fn(async () => {}),
+  };
+  const harness = await fixture(async () => {}, 'owner', undefined, { userRules });
+  try {
+    await harness.runtime.handle({ type: Command.CREATE_USER_RULE, name: 'Test', activation: 'manual' });
+    await harness.runtime.handle({
+      type: Command.SET_USER_RULE_ENABLED,
+      path: 'rules/test.mdc',
+      expectedRevision: 'one',
+      enabled: false,
+    });
+    await harness.runtime.handle({
+      type: Command.DELETE_USER_RULE,
+      path: 'rules/test.mdc',
+      expectedRevision: 'two',
+    });
+    expect(userRules.create).toHaveBeenCalledWith(expect.any(AbortSignal), 'Test', 'manual', undefined);
+    expect(userRules.setEnabled).toHaveBeenCalledWith(expect.any(AbortSignal), 'rules/test.mdc', 'one', false);
+    expect(userRules.remove).toHaveBeenCalledWith(expect.any(AbortSignal), 'rules/test.mdc', 'two');
+  } finally {
+    await harness.runtime.dispose();
+  }
+
+  const unavailable = await fixture(async () => {});
+  try {
+    await expect(
+      unavailable.runtime.handle({ type: Command.CREATE_USER_RULE, name: 'Test', activation: 'manual' }),
+    ).rejects.toThrow('User rules are unavailable');
+    await expect(
+      unavailable.runtime.handle({
+        type: Command.SET_USER_RULE_ENABLED,
+        path: 'rules/test.mdc',
+        expectedRevision: 'one',
+        enabled: true,
+      }),
+    ).rejects.toThrow('User rules are unavailable');
+    await expect(
+      unavailable.runtime.handle({
+        type: Command.DELETE_USER_RULE,
+        path: 'rules/test.mdc',
+        expectedRevision: 'one',
+      }),
+    ).rejects.toThrow('User rules are unavailable');
+  } finally {
+    await unavailable.runtime.dispose();
+  }
 });
 
 function reviewFixture() {
@@ -338,7 +529,108 @@ function reviewFixture() {
   };
 }
 
+it('keeps ordinary saved chat visible after trust revocation without privileged context or tool payloads', async () => {
+  const record = chatRecord({
+    transcript: [
+      {
+        userText: 'Review this',
+        assistantText: 'Ordinary answer',
+        reasoningSummary: '',
+        attachmentPaths: [],
+        createdAt: '2026-10-01T00:00:00.000Z',
+        context: {
+          schema: 'glyph.turn-context.v1',
+          turnId: 'prior',
+          sources: [
+            {
+              id: 'private',
+              kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+              label: 'User',
+              path: '~/.glyph/rules/private.mdc',
+              scope: '.',
+              status: AgentInstructionSourceStatus.ACTIVE,
+              content: 'PRIVATE RULE BODY',
+            },
+          ],
+          activations: [],
+          candidates: [],
+        },
+        tools: [
+          {
+            callId: 'resource',
+            name: 'skills.read_resource',
+            phase: ToolActivityPhase.COMPLETED,
+            arguments: 'PRIVATE ARGS',
+            output: 'PRIVATE RESOURCE',
+          },
+        ],
+      },
+    ],
+  });
+  const harness = await fixture(async () => {}, 'owner', undefined, { records: [record], trusted: false });
+  await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: record.id });
+  const state = await harness.runtime.snapshot();
+  const run = state.runs.find(run => run.chatId === record.id)!;
+  expect(run.text).toBe('Ordinary answer');
+  expect(run).not.toHaveProperty('context');
+  expect(JSON.stringify(run)).not.toContain('PRIVATE');
+  await harness.runtime.dispose();
+});
+
 describe(ProviderDesktopRuntime, () => {
+  it.each([false, true])(
+    'acknowledges the exact provider admission boundary before completing the turn (admitted=%s)',
+    async accepted => {
+      const entered = deferredVoid();
+      const prepare = deferredVoid();
+      const finish = deferredVoid();
+      const harness = await fixture(
+        async options => {
+          entered.resolve();
+          await prepare.promise;
+          if (!accepted) throw new Error('Selected manual rule is unavailable');
+          options.onTurnAdmitted!();
+          await finish.promise;
+          throw new Error('Provider disconnected');
+        },
+        'owner',
+        undefined,
+        { reportsTurnAdmission: true },
+      );
+      try {
+        const send = harness.runtime.handle({
+          type: Command.SEND,
+          chatId: harness.chatId,
+          runId: 'pending',
+          text: 'Keep this',
+          attachments: [],
+        });
+        await entered.promise;
+        const steer = harness.runtime.handle({
+          type: Command.STEER,
+          chatId: harness.chatId,
+          runId: 'pending',
+          messageId: 'later',
+          text: 'Later',
+          attachments: [],
+        });
+        const checked = accepted
+          ? Promise.all([send, steer])
+          : Promise.all([expect(send).rejects.toThrow('unavailable'), expect(steer).rejects.toThrow('unavailable')]);
+        prepare.resolve();
+        await checked;
+        expect((await harness.runtime.snapshot()).runs[0]?.steering?.length ?? 0).toBe(accepted ? 1 : 0);
+        finish.resolve();
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe('failed');
+        });
+      } finally {
+        prepare.resolve();
+        finish.resolve();
+        await harness.runtime.dispose();
+      }
+    },
+  );
   it('routes steering to its exact active run, persists it, and rejects a stale target without a competing send', async () => {
     const gate = deferredVoid();
     const entered = deferredVoid();
@@ -515,6 +807,58 @@ describe(ProviderDesktopRuntime, () => {
       expect(ticked.plans!.at(-1)!.build).toBeUndefined();
       expect(ticked.todos).toEqual([{ id: `plan:${listed.id}:step`, text: 'Step', status: 'completed' }]);
       expect(harness.saved.get(harness.chatId)!.plans!.at(-1)!.build).toBeUndefined();
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it.each([false, true])('restores canonical manual rule references and optional spans (%s)', async withSpans => {
+    const checkpoint = {
+      providerState: { provider: 'fixture', version: 1, data: [] },
+      plans: [],
+      todos: [],
+      mode: AgentModeID.AGENT,
+    };
+    const span = { kind: 'rule' as const, sourceId: 'old', label: 'Old', revision: '1', from: 0, to: 1 };
+    const options = {
+      turnId: 'selected',
+      manualRuleIds: ['old', 'current', 'gone'],
+      ...(withSpans ? { referenceSpans: [span, { ...span, sourceId: 'other' }] } : {}),
+    };
+    const record = chatRecord({
+      transcript: [
+        {
+          userText: 'Old',
+          attachmentPaths: [],
+          assistantText: 'Done',
+          reasoningSummary: '',
+          createdAt: '2026-10-01T00:00:00.000Z',
+          checkpoints: { before: checkpoint, after: checkpoint },
+          options,
+        },
+      ],
+    });
+    const harness = await fixture(async () => {}, 'owner', undefined, { records: [record] });
+    expect(harness.runtime.resolveRuleReference('absent')).toBeUndefined();
+    vi.spyOn(harness.runtime, 'resolveRuleReference').mockImplementation(id => (id === 'old' ? 'current' : undefined));
+    try {
+      await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'selected' });
+      expect(harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)).toMatchObject({
+        draft: {
+          options: {
+            ...options,
+            manualRuleIds: ['current', 'gone'],
+            ...(withSpans
+              ? {
+                  referenceSpans: [
+                    { ...span, sourceId: 'current' },
+                    { ...span, sourceId: 'other' },
+                  ],
+                }
+              : {}),
+          },
+        },
+      });
     } finally {
       await harness.runtime.dispose();
     }
@@ -896,6 +1240,7 @@ describe(ProviderDesktopRuntime, () => {
         },
       ]);
       const restored = new ProviderDesktopRuntime({
+        attachmentAccess: fixtureAttachmentAccess(),
         glyph: harness.glyph,
         interactions: new DesktopInteractionBroker(() => {}),
         shellSessions: harness.shells,
@@ -972,21 +1317,24 @@ describe(ProviderDesktopRuntime, () => {
       await originalSave(record);
     };
     try {
-      await harness.runtime.handle({
-        type: Command.SEND,
-        chatId: harness.chatId,
-        runId: 'cancelled',
-        text: 'First',
-        attachments: [],
-      });
+      const notAdmitted = expect(
+        harness.runtime.handle({
+          type: Command.SEND,
+          chatId: harness.chatId,
+          runId: 'cancelled',
+          text: 'First',
+          attachments: [],
+        }),
+      ).rejects.toThrow();
       await vi.waitFor(() => {
         expect(attempts).toBe(1);
       });
       await harness.runtime.handle({ type: Command.CANCEL_RUN, chatId: harness.chatId, runId: 'cancelled' });
+      await notAdmitted;
       await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
       });
-      await harness.runtime.handle({
+      const retry = harness.runtime.handle({
         type: Command.SEND,
         chatId: harness.chatId,
         runId: 'retry',
@@ -995,6 +1343,7 @@ describe(ProviderDesktopRuntime, () => {
       });
       expect(send).not.toHaveBeenCalled();
       release();
+      await retry;
       await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs[1]?.status).toBe(GlyphRunStatus.COMPLETED);
       });
@@ -1111,17 +1460,20 @@ describe(ProviderDesktopRuntime, () => {
     const close = vi.spyOn(harness.store, 'dispose');
     let stopping: Promise<void> | undefined;
     try {
-      await harness.runtime.handle({
-        type: Command.SEND,
-        chatId: harness.chatId,
-        runId: 'run',
-        text: 'Continue',
-        attachments: [],
-      });
+      const notAdmitted = expect(
+        harness.runtime.handle({
+          type: Command.SEND,
+          chatId: harness.chatId,
+          runId: 'run',
+          text: 'Continue',
+          attachments: [],
+        }),
+      ).rejects.toThrow();
       await vi.waitFor(() => {
         expect(saving).toBe(true);
       });
       await harness.runtime.handle({ type: Command.CANCEL_RUN, chatId: harness.chatId, runId: 'run' });
+      await notAdmitted;
       await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
       });
@@ -1156,14 +1508,17 @@ describe(ProviderDesktopRuntime, () => {
     store.save.mockImplementation(async () => gate);
     const rejecting = reviews.rejectInReview(proposal.proposalId, proposal.itemId);
     try {
-      await harness.runtime.handle({
-        type: Command.SEND,
-        chatId: harness.chatId,
-        runId: 'run',
-        text: 'Continue',
-        attachments: [],
-      });
+      const notAdmitted = expect(
+        harness.runtime.handle({
+          type: Command.SEND,
+          chatId: harness.chatId,
+          runId: 'run',
+          text: 'Continue',
+          attachments: [],
+        }),
+      ).rejects.toThrow();
       await harness.runtime.handle({ type: Command.CANCEL_RUN, chatId: harness.chatId, runId: 'run' });
+      await notAdmitted;
       await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
       });
@@ -1695,9 +2050,9 @@ describe(ProviderDesktopRuntime, () => {
     await harness.runtime.dispose();
 
     await expect(
-      (harness.runtime as unknown as { dispatch(command: GlyphRuntimeCommand): Promise<void> }).dispatch({
-        type: Command.LIST_CHATS,
-      }),
+      (
+        harness.runtime as unknown as { dispatch(command: GlyphRuntimeCommand, signal: AbortSignal): Promise<void> }
+      ).dispatch({ type: Command.LIST_CHATS }, new AbortController().signal),
     ).rejects.toThrow('The workspace runtime has stopped.');
   });
 
@@ -1740,8 +2095,30 @@ describe(ProviderDesktopRuntime, () => {
         await expect(harness.runtime.handle({ type: Command.START_AGENT_REVIEW, review, model })).rejects.toThrow(
           'The selected account cannot run reviews.',
         );
+        const privateReview = {
+          ...review,
+          files: [
+            {
+              path: 'a.ts',
+              uri: 'file:///elsewhere/a.ts',
+              before: 'old',
+              after: 'new',
+              revision: 'v1',
+              contextText: 'frozen diff',
+            },
+          ],
+        };
+        await expect(
+          harness.runtime.handle({ type: Command.START_AGENT_REVIEW, review: privateReview, model }),
+        ).rejects.toThrow('declared workspace path');
+        expect(agentReviews.start).not.toHaveBeenCalled();
         await harness.runtime.handle({ type: Command.START_AGENT_REVIEW, review, model });
-        expect(agentReviews.start).toHaveBeenCalledExactlyOnceWith(review, model);
+        expect(agentReviews.start).toHaveBeenCalledExactlyOnceWith(
+          review,
+          model,
+          expect.any(AbortSignal),
+          expect.any(WorkspaceDisclosure),
+        );
       } finally {
         await harness.runtime.dispose();
       }
@@ -1824,6 +2201,106 @@ describe(ProviderDesktopRuntime, () => {
       }
     });
 
+    it.each([true, false])(
+      'restores upgraded file and folder badges with saved provenance and spans (routed file URI %s)',
+      async routed => {
+        const legacy = 'root@file%3A%2F%2F%2Fproject%2Flib';
+        const current = 'root@1234';
+        const file = legacy + '/notes';
+        const folder = legacy + '/src';
+        const outline = formatFolderAttachment(folder, ['app.ts'], false);
+        const checkpoint = {
+          providerState: { provider: 'fixture', version: 1, data: [] },
+          plans: [],
+          todos: [],
+          mode: AgentModeID.AGENT,
+        };
+        const text = '@' + file + ' then @' + folder;
+        const record = chatRecord({
+          transcript: [
+            {
+              userText: text,
+              attachmentPaths: [file, folder],
+              assistantText: 'Done',
+              reasoningSummary: '',
+              createdAt: '2026-10-02T00:00:00Z',
+              options: {
+                turnId: 'restored',
+                attachmentSpans: [
+                  { from: 0, to: file.length + 1 },
+                  { from: text.indexOf('@' + folder), to: text.length },
+                ],
+              },
+              checkpoints: { before: checkpoint, after: checkpoint },
+              attachments: [
+                {
+                  path: file,
+                  text: 'prior contents',
+                  revision: 'prior',
+                  byteOrderMark: false,
+                  byteLength: 14,
+                  source: { kind: 'file', uri: file, version: 0, revision: 'prior', projectFile: true },
+                },
+                {
+                  path: folder,
+                  text: outline,
+                  revision: 'outline-revision',
+                  byteOrderMark: false,
+                  byteLength: outline.length,
+                  source: {
+                    kind: 'folder',
+                    uri: 'file:///project/lib/src',
+                    revision: 'outline-revision',
+                    version: 0,
+                    folderListing: { files: ['app.ts'], truncated: false },
+                  },
+                },
+              ],
+            },
+          ],
+        });
+        const harness = await fixture(async () => {}, 'owner', undefined, {
+          records: [record],
+          restoreAttachmentPath: path => path.replace(legacy, current),
+          referenceResources: path =>
+            routed ? [{ uri: 'file:///project/lib/' + path.split('/')[1], caseSensitive: true }] : [],
+        });
+        try {
+          await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'restored' });
+          const restored = harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)!;
+          const prompt = restoreGlyphPrompt(
+            restored.draft,
+            () => undefined,
+            () => 'capture',
+          );
+          expect(toGlyphPromptText(prompt.parts)).toBe('@' + current + '/notes then @' + current + '/src');
+          expect(prompt.parts).toMatchObject([
+            {
+              type: 'attachment',
+              attachment: {
+                path: current + '/notes',
+                uri: routed ? 'file:///project/lib/notes' : current + '/notes',
+                projectFile: true,
+                contentRevision: 'prior',
+                text: 'prior contents',
+              },
+            },
+            { type: 'text', text: ' then ' },
+            {
+              type: 'attachment',
+              attachment: {
+                path: current + '/src',
+                uri: 'file:///project/lib/src',
+                folderListing: { files: ['app.ts'], truncated: false },
+                text: formatFolderAttachment(current + '/src', ['app.ts'], false),
+              },
+            },
+          ]);
+        } finally {
+          await harness.runtime.dispose();
+        }
+      },
+    );
     it('restores the draft of a checkpointed turn together with its captured attachments', async () => {
       const checkpoint = {
         providerState: { provider: 'fixture', version: 1, data: [] },
@@ -1879,7 +2356,10 @@ describe(ProviderDesktopRuntime, () => {
           },
         ],
       });
-      const harness = await fixture(async () => {}, 'owner', undefined, { records: [record] });
+      const harness = await fixture(async () => {}, 'owner', undefined, {
+        records: [record],
+        referenceResources: path => [{ uri: 'file:///project/' + path, caseSensitive: true }],
+      });
       try {
         await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'second' });
         expect(harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)).toEqual({
@@ -1892,7 +2372,7 @@ describe(ProviderDesktopRuntime, () => {
             attachments: [
               {
                 kind: GlyphContextAttachmentKind.FILE,
-                uri: 'plain.ts',
+                uri: 'file:///project/plain.ts',
                 path: 'plain.ts',
                 text: 'plain',
                 contentRevision: 'r1',
@@ -2229,6 +2709,8 @@ describe(ProviderDesktopRuntime, () => {
       const harness = await fixture(async () => {});
       try {
         const range = { start: { line: 2, column: 1 }, end: { line: 3, column: 1 } };
+        const folderListing = { files: [], truncated: false };
+        const outline = formatFolderAttachment('.', folderListing.files, folderListing.truncated);
         const capture = {
           kind: GlyphContextAttachmentKind.SELECTION,
           uri: 'file:///project/a.ts',
@@ -2250,8 +2732,22 @@ describe(ProviderDesktopRuntime, () => {
               range,
               side: 'modified',
             },
-            { ...capture, path: 'b.ts', sourceVersion: 4 },
-            { ...capture, path: 'c.ts', kind: GlyphContextAttachmentKind.FILE },
+            { ...capture, uri: 'file:///project/b.ts', path: 'b.ts', sourceVersion: 4 },
+            {
+              ...capture,
+              uri: 'file:///project/c.ts',
+              path: 'c.ts',
+              kind: GlyphContextAttachmentKind.FILE,
+              projectFile: true,
+            },
+            {
+              ...capture,
+              uri: 'file:///project/',
+              path: '.',
+              kind: GlyphContextAttachmentKind.FOLDER,
+              text: outline,
+              folderListing,
+            },
           ],
         });
         await vi.waitFor(async () => {
@@ -2259,13 +2755,15 @@ describe(ProviderDesktopRuntime, () => {
         });
         expect((await harness.runtime.snapshot()).runs[0]?.attachments).toEqual([
           { uri: capture.uri, path: 'a.ts', text: 'abc', revision: 'content', range, side: 'modified' },
-          { uri: capture.uri, path: 'b.ts', text: 'abc', revision: 'content' },
-          { uri: capture.uri, path: 'c.ts', text: 'abc', revision: 'content' },
+          { uri: 'file:///project/b.ts', path: 'b.ts', text: 'abc', revision: 'content' },
+          { uri: 'file:///project/c.ts', path: 'c.ts', text: 'abc', revision: 'content' },
+          { uri: 'file:///project/', path: '.', text: outline, revision: 'content' },
         ]);
         expect(harness.saved.get(harness.chatId)?.transcript[0]?.attachments?.map(value => value.source)).toEqual([
           { kind: 'selection', uri: capture.uri, version: 7, revision: 'source', range, side: 'modified' },
-          { kind: 'selection', uri: capture.uri, version: 4, revision: 'content' },
-          { kind: 'file', uri: capture.uri, version: 0, revision: 'content' },
+          { kind: 'selection', uri: 'file:///project/b.ts', version: 4, revision: 'content' },
+          { kind: 'file', uri: 'file:///project/c.ts', version: 0, revision: 'content', projectFile: true },
+          { kind: 'folder', uri: 'file:///project/', version: 0, revision: 'content', folderListing },
         ]);
       } finally {
         await harness.runtime.dispose();
@@ -2365,6 +2863,13 @@ describe(ProviderDesktopRuntime, () => {
             reasoningSummary: '',
             createdAt: '2026-09-01T00:00:00.000Z',
             options: { turnId: 'legacy-run' },
+            context: {
+              schema: 'glyph.turn-context.v1',
+              turnId: 'legacy-run',
+              sources: [],
+              activations: [],
+              candidates: [],
+            },
           },
         ],
       });
@@ -2377,6 +2882,13 @@ describe(ProviderDesktopRuntime, () => {
           usage: null,
           responseId: 'response',
           durationMs: 0,
+          context: {
+            schema: 'glyph.turn-context.v1',
+            turnId: 'legacy-run',
+            sources: [],
+            activations: [],
+            candidates: [],
+          },
         });
         await harness.runtime.handle({
           type: Command.SEND,
@@ -2393,7 +2905,43 @@ describe(ProviderDesktopRuntime, () => {
         const run = (await harness.runtime.snapshot()).runs.find(value => value.runId === 'legacy-run')!;
         expect(run.createdAt).toBe('2026-09-01T00:00:00.000Z');
         expect(run).not.toHaveProperty('checkpointTurnId');
+        expect(run.context).toEqual({ sources: [], activations: [], candidates: [] });
       } finally {
+        await harness.runtime.dispose();
+      }
+    });
+
+    it('keeps rejected captures out of run and steering events and provider requests', async () => {
+      const gate = deferredVoid();
+      const entered = deferredVoid();
+      const provider = vi.fn(async () => {
+        entered.resolve();
+        await gate.promise;
+      });
+      const harness = await fixture(provider);
+      try {
+        const send = { type: Command.SEND, chatId: harness.chatId, runId: 'run', text: 'Start' } as const;
+        const attachment = {
+          kind: GlyphContextAttachmentKind.SELECTION,
+          uri: 'file:///elsewhere/secret',
+          path: 'a.ts',
+          text: 'private frozen bytes',
+          contentRevision: 'v1',
+        };
+        await expect(harness.runtime.handle({ ...send, attachments: [attachment] })).rejects.toThrow(
+          'declared workspace path',
+        );
+        expect((await harness.runtime.snapshot()).runs).toEqual([]);
+        expect(provider).not.toHaveBeenCalled();
+        await harness.runtime.handle({ ...send, attachments: [] });
+        await entered.promise;
+        await expect(
+          harness.runtime.handle({ ...send, type: Command.STEER, messageId: 'steer', attachments: [attachment] }),
+        ).rejects.toThrow('declared workspace path');
+        expect((await harness.runtime.snapshot()).runs[0]?.steering ?? []).toEqual([]);
+        expect(JSON.stringify(harness.events)).not.toContain(attachment.text);
+      } finally {
+        gate.resolve();
         await harness.runtime.dispose();
       }
     });
@@ -3391,7 +3939,10 @@ describe('background shell continuation scheduling', () => {
         expect(saving).toHaveBeenCalledTimes(1);
         expect(send).not.toHaveBeenCalled();
         expect(harness.recorded.flat()).toEqual([]);
-        await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId }, { windowId: 'peer' });
+        await harness.runtime.handle(
+          { type: Command.OPEN_CHAT, chatId: harness.chatId },
+          { windowId: 'peer', signal: new AbortController().signal },
+        );
         expect(saving).toHaveBeenCalledTimes(1);
         await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
         await vi.waitFor(() => {
@@ -3562,7 +4113,10 @@ describe('background shell continuation scheduling', () => {
     try {
       await harness.runtime.connectionLost('owner');
       harness.wake(wakeFor(harness.chatId));
-      await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId }, { windowId: 'peer' });
+      await harness.runtime.handle(
+        { type: Command.OPEN_CHAT, chatId: harness.chatId },
+        { windowId: 'peer', signal: new AbortController().signal },
+      );
       await harness.runtime.snapshot();
       expect(sends).toBe(0);
       await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
@@ -3701,7 +4255,7 @@ describe('goal continuation', () => {
       });
       await harness.runtime.handle(
         { type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id },
-        { windowId: 'peer' },
+        { windowId: 'peer', signal: new AbortController().signal },
       );
       expect(send).not.toHaveBeenCalled();
       expect((await goalOf(harness.runtime, harness.chatId))?.continuationCount).toBe(0);
@@ -4330,3 +4884,25 @@ describe('goal continuation', () => {
     }
   });
 });
+
+function fixtureAttachmentAccess() {
+  const binding = WorkspaceRootAccess.forMetadataProbe('/project');
+  const beginOperation = () => binding.beginOperation();
+  const access = new DesktopAttachmentAccess(
+    { referenceResources: path => [{ uri: new URL(path, 'file:///project/').href, caseSensitive: true }] },
+    [
+      {
+        name: 'project',
+        selectedDisk: { beginOperation, validateAccess: async () => {} },
+        disk: {
+          beginOperation,
+          validateAccess: async () => {},
+          inspectDirectory: async () => ({ root: '/project', searchRoot: '/project' }),
+        },
+        index: { glob: async () => ({ files: [], truncated: false }) },
+      },
+    ],
+    () => () => {},
+  );
+  return access;
+}

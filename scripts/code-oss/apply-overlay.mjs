@@ -30,16 +30,19 @@ await copyProtocol(protocolSourceRoot, protocolTargetRoot);
 // in the generated tree instead of maintaining a second set of wire values.
 const chatContractTarget = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'chat');
 await mkdir(chatContractTarget, { recursive: true });
-for (const name of ['AgentMode.ts']) {
+for (const name of ['AgentMode.ts', 'ChatTurnOptions.ts']) {
   const source = join(repositoryRoot, 'src', 'chat', name);
   await writeFile(join(chatContractTarget, name), (await readFile(source, 'utf8')).replaceAll(".ts'", ".js'"));
 }
-const reviewContractTarget = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'reviewing');
-await mkdir(reviewContractTarget, { recursive: true });
-await writeFile(
-  join(reviewContractTarget, 'AgentReview.ts'),
-  await readFile(join(repositoryRoot, 'src/reviewing/AgentReview.ts'), 'utf8'),
-);
+for (const [directory, file] of [
+  ['reviewing', 'AgentReview.ts'],
+  ['instructions', 'resolveInstructionId.ts'],
+  ['workspace', 'FilesystemNamePolicy.ts'],
+]) {
+  const target = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', directory);
+  await mkdir(target, { recursive: true });
+  await writeFile(join(target, file), await readFile(join(repositoryRoot, 'src', directory, file), 'utf8'));
+}
 // Request-envelope validation is shared with the host. Its generated relative
 // import must resolve inside Code OSS, just like the mode and review contracts.
 const validatorTarget = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'shared', 'validators');
@@ -183,9 +186,19 @@ for (const [relativePath, before, after] of [
   await writeFile(path, contents.replace(before, after));
 }
 
-// Guard structural mutations after native participants and before working-copy teardown.
+// Guard editor mutations when the native workbench commits a file operation or snapshots a queued save.
 // The callback stays in the renderer; it is never part of the wire protocol.
 for (const [relativePath, before, after] of [
+  [
+    'src/vs/workbench/services/textfile/common/textfiles.ts',
+    'export interface ITextFileSaveOptions extends ISaveOptions {',
+    'export interface ITextFileSaveOptions extends ISaveOptions {\n\t/** Prepare host authorization, then check the model synchronously before its write snapshot. */\n\treadonly validateBeforeWrite?: () => Promise<() => void>;',
+  ],
+  [
+    'src/vs/workbench/services/textfile/common/textFileEditorModel.ts',
+    '\t\t\t\ttry {\n\t\t\t\t\tconst stat = await this.textFileService.write(lastResolvedFileStat.resource, resolvedTextFileEditorModel.createSnapshot(), {',
+    '\t\t\t\tif (options.validateBeforeWrite) (await options.validateBeforeWrite())();\n\t\t\t\ttry {\n\t\t\t\t\tconst stat = await this.textFileService.write(lastResolvedFileStat.resource, resolvedTextFileEditorModel.createSnapshot(), {',
+  ],
   [
     'src/vs/editor/browser/services/bulkEditService.ts',
     'export class ResourceFileEdit extends ResourceEdit implements IWorkspaceFileEdit {',

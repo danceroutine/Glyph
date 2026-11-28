@@ -1,3 +1,6 @@
+import { searchTextSource, type SearchFileIdentity } from '#src/context/search/WorkspaceContentSearchResult.js';
+import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
@@ -5,36 +8,29 @@ import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexE
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
-import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
-import type { AgentInstructionDisclosureProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
+import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 
 interface ProjectAccessOptions {
   maxFiles?: number;
   maxFileBytes?: number;
-  excludedPaths?: string[];
-  accessPolicy?: WorkspaceAccessPolicy;
 }
 
 const defaults = {
   maxFiles: 2_000,
   maxFileBytes: 512 * 1024,
-  excludedPaths: [],
 } as const;
 
 const projectAccessOptionsSchema = z
   .object({
     maxFiles: z.number().int().positive().default(defaults.maxFiles),
     maxFileBytes: z.number().int().positive().default(defaults.maxFileBytes),
-    excludedPaths: z.array(z.string().min(1)).default([...defaults.excludedPaths]),
-    accessPolicy: z.instanceof(WorkspaceAccessPolicy).default(() => new WorkspaceAccessPolicy()),
   })
   .strict();
 
@@ -131,17 +127,14 @@ type ReadArguments = z.infer<typeof readProjectFileArguments>;
 export class ProjectAccess {
   private readonly options: ResolvedProjectAccessOptions;
 
-  private readonly workspace: WorkspaceTextStore;
   constructor(
-    root: string,
+    private readonly workspace: Pick<WorkspaceTextStore, 'read' | 'normalizePath'>,
+    private readonly pathIndex: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
     options: ProjectAccessOptions = {},
-    workspace?: WorkspaceTextStore,
-    private readonly pathIndex?: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
-    private readonly instructions?: AgentInstructionDisclosureProvider,
+    private readonly turnContexts?: Pick<TurnContextCoordinator, 'withPathInstructions'>,
+    private readonly sourceAuthority?: PinnedSourceAuthority,
   ) {
-    const { maxFiles, maxFileBytes, excludedPaths, accessPolicy } = projectAccessOptionsSchema.parse(options);
-    this.options = { maxFiles, maxFileBytes, excludedPaths, accessPolicy };
-    this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, { excludedPaths, accessPolicy });
+    this.options = projectAccessOptionsSchema.parse(options);
   }
 
   get tools(): readonly Tool[] {
@@ -173,7 +166,7 @@ export class ProjectAccess {
         execute: (input, signal, context) => this.execute(ProjectToolName.READ_FILE, input, signal, context),
       },
     ];
-    if (this.pathIndex?.searchContents)
+    if (this.pathIndex.searchContents)
       tools.push({
         namespace: ProjectToolNamespace.PROJECT,
         name: ProjectToolName.SEARCH_CONTENTS,
@@ -196,23 +189,45 @@ export class ProjectAccess {
     signal?: AbortSignal,
     context?: ToolExecutionContext,
   ): Promise<string> {
+    const access = new WorkspaceDisclosure();
+    const deliver = (value: object) => {
+      const output = JSON.stringify(value);
+      signal?.throwIfAborted();
+      access.assertCurrent();
+      if (access.hasSources)
+        context?.retainResultAccess?.(
+          access.assertCurrent,
+          access.hasValidators ? cancellation => access.authorize(cancellation) : undefined,
+        );
+      return output;
+    };
+    const deliverWithInstructions = (result: object, paths: readonly string[]) =>
+      context?.turnId && this.turnContexts
+        ? this.turnContexts.withPathInstructions(
+            context.turnId,
+            paths,
+            instructions => deliver(instructions ? { ...result, instructionContext: instructions } : result),
+            signal,
+          )
+        : deliver(result);
     try {
       switch (isEnumValue(ProjectToolName, name) ? name : undefined) {
         case ProjectToolName.LIST_FILES:
-          return JSON.stringify(
-            await this.listFiles(listProjectFilesArguments.parse(JSON.parse(rawArguments)), signal),
+          return deliver(
+            await this.listFiles(listProjectFilesArguments.parse(JSON.parse(rawArguments)), access, signal),
           );
         case ProjectToolName.READ_FILE: {
           const arguments_ = readProjectFileArguments.parse(JSON.parse(rawArguments));
-          const result = await this.readFile(arguments_);
-          return this.withInstructions(result, [result.path], context);
+          const result = await this.readFile(arguments_, access);
+          return await deliverWithInstructions(result, [result.path]);
         }
         case ProjectToolName.SEARCH_CONTENTS: {
           const result = await this.searchContents(
             resolvedSearchProjectContentsArguments.parse(JSON.parse(rawArguments)),
+            access,
             signal,
           );
-          return this.withInstructions(result, searchResultPaths(result), context);
+          return await deliverWithInstructions(result, searchResultPaths(result));
         }
         default:
           throw new Error(`Unknown project tool: ${name}`);
@@ -237,41 +252,55 @@ export class ProjectAccess {
     }
   }
 
-  private withInstructions(result: object, paths: readonly string[], context?: ToolExecutionContext): string {
-    const instructions = context?.turnId ? this.instructions?.disclose(context.turnId, paths) : undefined;
-    return JSON.stringify(instructions ? { ...result, instructionContext: instructions } : result);
-  }
-
   private async searchContents(
     { pattern, options }: z.output<typeof resolvedSearchProjectContentsArguments>,
+    access: WorkspaceDisclosure,
     signal?: AbortSignal,
   ) {
     const pathIndex = this.pathIndex;
-    if (!pathIndex?.searchContents) throw new Error('Native project content search is unavailable.');
-    return pathIndex.searchContents(pattern, {
+    if (!pathIndex.searchContents) throw new Error('Native project content search is unavailable.');
+    const authority = this.sourceAuthority;
+    const result = await pathIndex.searchContents(pattern, {
+      ...(authority && { sourceAuthority: authority }),
       ...options,
+      retainAccess: access.retain,
       path: options.path === null ? null : this.workspace.normalizePath(options.path),
       signal,
     });
+    if (authority && result.outputMode === 'content') {
+      const disk: SearchFileIdentity[] = [];
+      const editors = new Set<WorkspaceDisclosure>();
+      for (const match of result.matches) {
+        const source = match[searchTextSource];
+        if (!source) throw new Error('The source of a search match is unavailable.');
+        if (source instanceof WorkspaceDisclosure) editors.add(source);
+        else disk.push(source);
+      }
+      await access.retainFiles(authority, disk, signal);
+      for (const editor of editors) access.revalidate(cancellation => editor.authorize(cancellation));
+    }
+    return result;
   }
 
   private async listFiles(
     { glob_pattern: globPattern, target_directory: targetDirectory }: z.infer<typeof listProjectFilesArguments>,
+    access: WorkspaceDisclosure,
     signal?: AbortSignal,
   ): Promise<{ files: string[]; truncated: boolean }> {
     signal?.throwIfAborted();
     const normalizedTarget = targetDirectory === null ? undefined : this.workspace.normalizePath(targetDirectory);
-    if (this.pathIndex) {
-      return this.pathIndex.glob(globPattern, {
-        ...(normalizedTarget === undefined ? {} : { targetDirectory: normalizedTarget }),
-        limit: this.options.maxFiles,
-        ...(signal ? { signal } : {}),
-      });
-    }
-    return this.workspace.list(this.options.maxFiles, globPattern, normalizedTarget);
+    return this.pathIndex.glob(globPattern, {
+      retainAccess: access.retain,
+      ...(normalizedTarget === undefined ? {} : { targetDirectory: normalizedTarget }),
+      limit: this.options.maxFiles,
+      ...(signal ? { signal } : {}),
+    });
   }
 
-  private async readFile({ path, start_line: requestedStart, end_line: requestedEnd }: ReadArguments): Promise<{
+  private async readFile(
+    { path, start_line: requestedStart, end_line: requestedEnd }: ReadArguments,
+    access: WorkspaceDisclosure,
+  ): Promise<{
     path: string;
     startLine: number;
     endLine: number;
@@ -284,7 +313,11 @@ export class ProjectAccess {
     lines: { number: number; content: string; lineEnding: '' | '\n' | '\r\n' | '\r' }[];
   }> {
     const startLine = requestedStart ?? 1;
-    const snapshot = await this.workspace.read(path, { maxBytes: this.options.maxFileBytes });
+    const snapshot = await this.workspace.read(path, {
+      maxBytes: this.options.maxFileBytes,
+      ...(this.sourceAuthority && { source: { authority: this.sourceAuthority, disclosure: access } }),
+      retainAccess: access.retain,
+    });
     // Follow-up: read oversized files incrementally so line-range requests do not load the whole file.
     if (snapshot.byteLength > this.options.maxFileBytes) {
       throw new Error(`File exceeds the ${this.options.maxFileBytes}-byte read limit.`);

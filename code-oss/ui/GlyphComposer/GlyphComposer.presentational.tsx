@@ -62,7 +62,7 @@ const styles = {
       font: 'inherit',
     },
     '& .ProseMirror > p:only-child:has(> br:only-child)::before': {
-      content: '"Plan, build, @ for context"',
+      content: '"Plan, build, / for rules, @ for context"',
       color: tokens.input.placeholder,
       pointerEvents: 'none',
       position: 'absolute',
@@ -199,6 +199,7 @@ export function GlyphComposer(state: GlyphComposerProps) {
         {state.query && (
           <GlyphContextPicker
             id={state.pickerId}
+            mode={state.query.trigger === '/' ? 'rules' : 'context'}
             candidates={state.candidates}
             selected={state.selected}
             searching={state.searching}

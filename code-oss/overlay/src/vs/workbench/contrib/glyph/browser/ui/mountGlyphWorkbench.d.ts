@@ -12,11 +12,29 @@ export declare const mountGlyphAgentInstructions: (
   container: HTMLElement,
   sources: readonly import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource[],
   query: string,
-  openSource: (source: import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource) => void,
+  openSource: (
+    source: import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource,
+  ) => void | Promise<void>,
+  actions?: {
+    createUserRule?(
+      name: string,
+      activation: 'always' | 'file_pattern' | 'model' | 'manual',
+      condition?: string,
+    ): void | Promise<void>;
+    setUserRuleEnabled?(
+      source: import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource,
+      enabled: boolean,
+    ): void | Promise<void>;
+    deleteUserRule?(
+      source: import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource,
+    ): void | Promise<void>;
+  },
 ) => {
   update(
     sources: readonly import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource[],
     query: string,
+    readOnly?: boolean,
+    refreshError?: string,
   ): void;
   dispose(): void;
 };

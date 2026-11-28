@@ -1,4 +1,4 @@
-/** Bridges an imperative host API to a result completed by a React event. */
+/** A promise settled by a separate asynchronous operation. */
 export class Deferred<Result> {
   readonly promise: Promise<Result>;
   readonly resolve: (result: Result | PromiseLike<Result>) => void;

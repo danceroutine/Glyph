@@ -1,14 +1,23 @@
+import type { DesktopAttachmentAccess } from './DesktopAttachmentAccess.ts';
 import type { GlyphDesktopSnapshot } from '#src/desktop/protocol/events/GlyphDesktopSnapshot.js';
 import type { GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import type { GlyphWorkbenchCommand, GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
 
-export type GlyphRuntimeCommand = Exclude<
+export type GlyphAttachedCommand = Exclude<
   GlyphWorkbenchCommand,
   {
     readonly type:
       | GlyphWorkbenchCommandType.ATTACH_WORKSPACE
       | GlyphWorkbenchCommandType.REQUEST_SNAPSHOT
       | GlyphWorkbenchCommandType.DETACH;
+  }
+>;
+
+export type GlyphRuntimeCommand = Exclude<
+  GlyphAttachedCommand,
+  {
+    readonly type:
+      GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE | GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE;
   }
 >;
 
@@ -20,10 +29,13 @@ export type GlyphRuntimeSnapshot = Omit<GlyphDesktopSnapshot, 'ownerWindowId' | 
  */
 export interface GlyphDesktopWorkspaceRuntime {
   snapshot(): Promise<GlyphRuntimeSnapshot>;
+  readonly attachmentAccess?: Pick<DesktopAttachmentAccess, 'admit' | 'resolve'> | undefined;
+  resolveRuleReference?(id: string): string | undefined;
   handle(
     command: GlyphRuntimeCommand,
     context: {
       readonly windowId?: string;
+      /** Revoked by the host when this attachment loses authority. Pass it through to deferred effects. */
       readonly signal: AbortSignal;
       readonly emit: (event: GlyphHostEvent) => void;
     },

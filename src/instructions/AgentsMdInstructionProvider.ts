@@ -1,3 +1,8 @@
+import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { sourceReads } from '#src/workspace/SourceDisclosure.js';
+import { workspaceReadFailureBytes } from '#src/workspace/WorkspaceReadFailure.js';
+import type { InstructionFileListing } from './listInstructionFilesAcrossRoots.ts';
+import { defaultInstructionPaths, type InstructionPaths } from './InstructionPaths.ts';
 import { posix } from 'node:path';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import {
@@ -14,19 +19,27 @@ const DEFAULT_MAX_BYTES = 64 * 1024;
 export class AgentsMdInstructionProvider implements AgentInstructionSourceProvider {
   constructor(
     private readonly workspace: WorkspaceTextStore,
-    private readonly options: { readonly maxFiles?: number; readonly maxBytes?: number } = {},
+    private readonly options: {
+      readonly authority?: PinnedSourceAuthority;
+      readonly maxFiles?: number;
+      readonly uriForPath?: (path: string) => string;
+      readonly paths?: InstructionPaths;
+      readonly maxBytes?: number;
+      readonly maxDiscoveryBytes?: number;
+    } = {},
     private readonly listFiles: (
       maxFiles: number,
       globPattern: string,
-    ) => Promise<{ files: string[]; truncated: boolean }> = (maxFiles, globPattern) =>
-      workspace.list(maxFiles, globPattern),
+      signal?: AbortSignal,
+    ) => Promise<InstructionFileListing> = (maxFiles, globPattern, signal) =>
+      workspace.list(maxFiles, globPattern, undefined, signal),
   ) {}
 
   async discover(signal?: AbortSignal): Promise<readonly AgentInstructionSource[]> {
     signal?.throwIfAborted();
-    let listed: { files: string[]; truncated: boolean };
+    let listed: InstructionFileListing;
     try {
-      listed = await this.listFiles(this.options.maxFiles ?? DEFAULT_MAX_FILES, '**/AGENTS.md');
+      listed = await this.listFiles(this.options.maxFiles ?? DEFAULT_MAX_FILES, '**/AGENTS.md', signal);
     } catch (error) {
       if (signal?.aborted === true) throw signal.reason;
       return [
@@ -42,37 +55,63 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
       ];
     }
     signal?.throwIfAborted();
-    const sources = await Promise.all(
-      listed.files.map(async (path): Promise<AgentInstructionSource> => {
-        const normalized = this.workspace.normalizePath(path);
-        const base = {
-          id: `${AgentInstructionSourceKind.AGENTS_MD}:${normalized}`,
-          kind: AgentInstructionSourceKind.AGENTS_MD,
-          label: 'AGENTS.md',
-          path: normalized,
-          scope: instructionScope(normalized),
-        } as const;
-        try {
-          const snapshot = await this.workspace.read(normalized, {
-            maxBytes: this.options.maxBytes ?? DEFAULT_MAX_BYTES,
-          });
-          signal?.throwIfAborted();
-          return {
-            ...base,
-            status: AgentInstructionSourceStatus.ACTIVE,
-            content: snapshot.text,
-            revision: snapshot.revision,
-          } satisfies AgentInstructionSource;
-        } catch (error) {
-          if (signal?.aborted === true) throw signal.reason;
-          return {
-            ...base,
-            status: AgentInstructionSourceStatus.ERROR,
-            message: error instanceof Error ? error.message : 'Instruction file could not be read.',
-          } satisfies AgentInstructionSource;
-        }
-      }),
-    );
+    const sources: AgentInstructionSource[] = (listed.failures ?? []).map(({ path, message }) => ({
+      id: `${AgentInstructionSourceKind.AGENTS_MD}:discovery-error:${path}`,
+      kind: AgentInstructionSourceKind.AGENTS_MD,
+      label: 'AGENTS.md discovery',
+      path,
+      scope: instructionScope(path),
+      status: AgentInstructionSourceStatus.ERROR,
+      message,
+    }));
+    let remainingBytes = this.options.maxDiscoveryBytes ?? 8 * 1024 * 1024;
+    for (const path of listed.files.toSorted((a, b) => a.split('/').length - b.split('/').length)) {
+      signal?.throwIfAborted();
+      let normalized = path;
+      const base = () => ({
+        ...(this.options.paths ?? defaultInstructionPaths).sourceIdentity(
+          AgentInstructionSourceKind.AGENTS_MD,
+          normalized,
+        ),
+        kind: AgentInstructionSourceKind.AGENTS_MD,
+        label: 'AGENTS.md',
+        path: normalized,
+        scope: instructionScope(normalized),
+      });
+      try {
+        normalized = this.workspace.normalizePath(path);
+        if (remainingBytes <= 0) throw new Error('Instruction discovery read budget exhausted.');
+        const snapshot = await this.workspace.read(normalized, {
+          physicalByteBudget: remainingBytes,
+          maxBytes: Math.min(remainingBytes, this.options.maxBytes ?? DEFAULT_MAX_BYTES),
+        });
+        signal?.throwIfAborted();
+        remainingBytes -= Math.max(snapshot.bytesRead ?? 0, snapshot.byteLength ?? Buffer.byteLength(snapshot.text));
+        sources.push({
+          ...base(),
+          status: AgentInstructionSourceStatus.ACTIVE,
+          ...(this.options.uriForPath ? { uri: this.options.uriForPath(normalized) } : {}),
+          ...(this.options.authority
+            ? {
+                [sourceReads]: {
+                  authority: this.options.authority,
+                  files: [{ uri: this.options.uriForPath!(normalized), identity: snapshot.identity }],
+                },
+              }
+            : {}),
+          content: snapshot.text,
+          revision: snapshot.revision,
+        });
+      } catch (error) {
+        remainingBytes -= workspaceReadFailureBytes(error);
+        signal?.throwIfAborted();
+        sources.push({
+          ...base(),
+          status: AgentInstructionSourceStatus.ERROR,
+          message: error instanceof Error ? error.message : 'Instruction file could not be read.',
+        });
+      }
+    }
     if (listed.truncated) {
       sources.push({
         id: `${AgentInstructionSourceKind.AGENTS_MD}:discovery-limit`,

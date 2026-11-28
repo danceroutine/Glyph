@@ -39,8 +39,9 @@ export const ProjectContextResolver = {
   },
 
   async folder(path: string, authority = defaultAuthority()): Promise<ProjectContext> {
-    const root = await canonicalDirectory(path);
-    const roots = [{ name: basename(root), path: root }];
+    const location = await canonicalDirectory(path);
+    const root = location.path;
+    const roots = [{ name: basename(root), ...location }];
     return {
       id: ProjectContextIdentity.create(ProjectContextKind.FOLDER, authority, root),
       mutationIdentity: ProjectContextIdentity.createMutationScope(ProjectContextKind.FOLDER, authority, roots),
@@ -71,7 +72,7 @@ export const ProjectContextResolver = {
     const roots = await Promise.all(
       result.data.folders.map(async folder => ({
         name: folder.name ?? basename('path' in folder ? folder.path : new URL(folder.uri).pathname),
-        path: await resolveFolderLocation(folder, manifest),
+        ...(await resolveFolderLocation(folder, manifest)),
       })),
     );
     validateRootNames(roots, manifest);
@@ -91,7 +92,7 @@ export const ProjectContextResolver = {
 async function resolveFolderLocation(
   folder: z.infer<typeof workspaceSchema>['folders'][number],
   manifest: string,
-): Promise<string> {
+): Promise<Omit<ProjectRoot, 'name'>> {
   if ('path' in folder) return canonicalDirectory(resolve(dirname(manifest), folder.path));
   const uri = new URL(folder.uri);
   if (uri.protocol === 'file:') return canonicalDirectory(fileURLToPath(uri));
@@ -100,12 +101,13 @@ async function resolveFolderLocation(
   throw new ConfigurationError(`Workspace ${manifest} contains unsupported folder URI: ${folder.uri}`);
 }
 
-async function canonicalDirectory(path: string): Promise<string> {
-  const canonical = await realpath(resolve(path));
+async function canonicalDirectory(path: string): Promise<Omit<ProjectRoot, 'name'>> {
+  const selected = resolve(path);
+  const canonical = await realpath(selected);
   if (!(await lstat(canonical)).isDirectory()) {
     throw new ConfigurationError(`Project root is not a directory: ${canonical}`);
   }
-  return canonical;
+  return { path: canonical, ...(selected !== canonical && { selectedPath: selected }) };
 }
 
 function validateRootNames(roots: readonly ProjectRoot[], workspaceFile: string): void {

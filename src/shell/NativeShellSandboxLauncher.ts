@@ -4,15 +4,17 @@ import { basename, delimiter, isAbsolute, relative, sep } from 'node:path';
 import type { ShellExecutionAuthorization } from './ShellExecutionAuthorization.ts';
 import type { ShellProcessLauncher } from './ShellProcessLauncher.ts';
 import { ShellSandboxProfile } from './ShellSandboxProfile.ts';
-import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 export interface NativeShellSandboxLauncherOptions {
   readonly binaryPath: string;
   readonly workspaceRoots: readonly string[];
+  /** Verify the attached directory immediately before handing the authorized command to its process. */
+  readonly verifyWorkspaceRoot?: (physicalRoot: string) => void;
   readonly stateDirectory: string;
   readonly protectedPaths?: readonly string[];
   readonly environment?: NodeJS.ProcessEnv;
-  readonly accessPolicy?: WorkspaceAccessPolicy;
+  readonly accessPolicy: WorkspaceAccessPolicy;
 }
 
 type SpawnProcess = (command: string, arguments_: readonly string[], options: SpawnOptions) => ChildProcess;
@@ -34,16 +36,18 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     };
+    const workspaceRoot = mostSpecificWorkspaceRoot(this.options.workspaceRoots, workingDirectory);
     if (authorization.sandboxProfile === ShellSandboxProfile.FULL_ACCESS) {
       const arguments_ = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-lc', command];
+      this.options.verifyWorkspaceRoot?.(workspaceRoot);
       return this.spawnProcess(fullAccessShell, arguments_, {
         ...common,
         env: { ...environment, TERM: 'dumb', NO_COLOR: '1' },
       });
     }
     const shell = sandboxShell(environment);
-    const accessPolicy = this.options.accessPolicy ?? new WorkspaceAccessPolicy();
-    const workspaceRoot = mostSpecificWorkspaceRoot(this.options.workspaceRoots, workingDirectory);
+    const accessPolicy = this.options.accessPolicy;
+    const operation = accessPolicy.beginOperation();
     const arguments_ = [
       '--profile',
       authorization.sandboxProfile === ShellSandboxProfile.READ_ONLY ? 'read-only' : 'workspace-write',
@@ -54,12 +58,15 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       '--workspace-root',
       workspaceRoot,
       ...(this.options.protectedPaths ?? []).flatMap(path => ['--protected-path', path]),
+      ...operation.privatePaths.flatMap(path => ['--private-path', path]),
       '--workspace-policy',
       JSON.stringify(accessPolicy.toJSON()),
       '--',
       shell.executable,
       ...shell.arguments(command),
     ];
+    operation.assertCurrent();
+    this.options.verifyWorkspaceRoot?.(workspaceRoot);
     return this.spawnProcess(this.options.binaryPath, arguments_, {
       ...common,
       env: sandboxEnvironment(authorization.sandboxProfile, shell.executable, environment),

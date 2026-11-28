@@ -87,6 +87,8 @@ async function modules() {
               : 'export const ipcRenderer = { on() {}, removeListener() {}, send() {} };',
           }));
           builder.onResolve({ filter: /^#vs\// }, args => {
+            if (args.path.endsWith('/resolveInstructionId.js'))
+              return { path: resolve('src/instructions/resolveInstructionId.ts') };
             if (args.path.startsWith('#vs/base/') || args.path.endsWith('/browserViewUri.js'))
               return { path: resolve('.code-oss/src/src/vs', args.path.slice(4).replace(/\.js$/, '.ts')) };
             if (/\/(NativeGlyphWorkbenchService|GlyphDesktopClient)\.js$/.test(args.path))
@@ -175,6 +177,8 @@ it('loads saved history through the latest untrusted attachment when revocation 
     },
     {
       createInstance: () => ({
+        setInstructionRefresh() {},
+        notifyInstructionsChanged() {},
         invalidate() {},
         rebindWorkspace() {},
         rebindAttachment: (/** @type {unknown} */ value) => value,
@@ -297,6 +301,8 @@ it.each(['handshake', 'attach acknowledgement'])(
       },
       {
         createInstance: () => ({
+          setInstructionRefresh() {},
+          notifyInstructionsChanged() {},
           invalidate() {},
           rebindWorkspace() {},
           rebindAttachment: (/** @type {unknown} */ value) => value,
@@ -530,6 +536,8 @@ it.each(
     { isWorkspaceTrusted: () => true, onDidChangeTrust: subscribe('trust') },
     {
       createInstance: () => ({
+        setInstructionRefresh() {},
+        notifyInstructionsChanged() {},
         invalidate,
         rebindWorkspace() {},
         rebindAttachment: (/** @type {unknown} */ value) => value,
@@ -716,6 +724,8 @@ it('drains the old runtime before rebinding, coalesces folder changes, and prese
     { isWorkspaceTrusted: () => true, onDidChangeTrust: () => ({ dispose() {} }) },
     {
       createInstance: () => ({
+        setInstructionRefresh() {},
+        notifyInstructionsChanged() {},
         invalidate() {},
         rebindWorkspace: rebind,
         rebindAttachment: (/** @type {unknown} */ value) => value,

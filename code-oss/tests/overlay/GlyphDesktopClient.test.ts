@@ -118,7 +118,7 @@ function host({ generation = 'generation', acknowledge = true } = {}) {
 }
 
 function client(
-  handleEditorRequest = async (_request: GlyphEditorRequest): Promise<GlyphEditorResponse> => {
+  handleEditorRequest: ConstructorParameters<typeof GlyphDesktopClient>[0] = async (): Promise<GlyphEditorResponse> => {
     throw new Error('No editor requests expected.');
   },
 ) {
@@ -568,9 +568,52 @@ describe(GlyphDesktopClient, () => {
         expect(port.posted.at(-1)).toEqual({ type: GlyphTransportMessageType.EDITOR_RESPONSE, response });
       });
       expect(handler).toHaveBeenCalledTimes(1);
-      expect(handler).toHaveBeenCalledWith(request);
+      expect(handler).toHaveBeenCalledWith(request, expect.any(Function));
     });
 
+    it('uses the originating editor request and port for each mutation check', async () => {
+      let verify!: () => Promise<void>;
+      const response = { operationId: 'edit', ok: true };
+      const { instance } = client(async (_request, check) => {
+        verify = check;
+        return response;
+      });
+      const { port } = host();
+      await instance.connect(roots, true);
+      const request = { operationId: 'edit', type: 'apply' } as unknown as GlyphEditorRequest;
+      port.receive({ type: GlyphTransportMessageType.EDITOR_REQUEST, request });
+      await expect(verify()).rejects.toThrow('authorized');
+      port.receive({ type: GlyphTransportMessageType.EDITOR_REQUEST, request, grantId: 'grant' });
+      port.onPost = value => {
+        const message = value as { type: GlyphTransportMessageType; grantId: string; requestId: string };
+        if (message.type === GlyphTransportMessageType.CHECK_EDITOR_MUTATION) {
+          expect(message.grantId).toBe('grant');
+          port.receive({
+            type: GlyphTransportMessageType.EDITOR_MUTATION_CHECKED,
+            requestId: message.requestId,
+            ok: true,
+          });
+        }
+      };
+      await expect(verify()).resolves.toBeUndefined();
+      port.onPost = value => {
+        const message = value as { type: GlyphTransportMessageType; requestId: string };
+        if (message.type === GlyphTransportMessageType.CHECK_EDITOR_MUTATION)
+          port.receive({
+            type: GlyphTransportMessageType.EDITOR_MUTATION_CHECKED,
+            requestId: message.requestId,
+            ok: false,
+          });
+      };
+      await expect(verify()).rejects.toThrow('authority changed');
+      port.onPost = () => {
+        throw new Error('Port closed');
+      };
+      await expect(verify()).rejects.toThrow('Port closed');
+      port.onPost = () => {};
+      transport.exitHost();
+      await expect(verify()).rejects.toThrow('authorized');
+    });
     it('rejects pending commands on transport errors', async () => {
       const { instance } = client();
       const { port } = host();

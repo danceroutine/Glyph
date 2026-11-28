@@ -1,4 +1,6 @@
+import { fireEvent, waitFor } from '@testing-library/preact';
 import { describe, expect, it, vi } from 'vitest';
+import { Dimension } from '#vs/base/browser/dom.js';
 import { URI } from '#vs/base/common/uri.js';
 import { GlyphAgentInstructionsPreferences } from '#vs/workbench/contrib/glyph/browser/GlyphAgentInstructionsPreferences.js';
 
@@ -27,19 +29,16 @@ describe(GlyphAgentInstructionsPreferences, () => {
       ],
     };
     const glyph = {
+      openLink: vi.fn(async () => {}),
       state,
       onDidChangeState: (listener: () => void) => {
         changed = listener;
         return { dispose: vi.fn() };
       },
     };
-    const workspace = {
-      getWorkspace: () => ({ folders: [{ name: 'workspace', uri: URI.file('/workspace') }] }),
-    };
-    const editors = { openEditor: vi.fn(async () => undefined) };
-    const page = new GlyphAgentInstructionsPreferences(glyph as never, workspace as never, editors as never);
+    const page = new GlyphAgentInstructionsPreferences(glyph as never);
 
-    page.layout({ width: 800, height: 600 });
+    page.layout(new Dimension(800, 600));
     expect(page.getDomNode().style.height).toBe('600px');
     expect(page.getDomNode().textContent).toContain('AGENTS.md');
     expect(page.getDomNode().textContent).toContain('Applies to the workspace');
@@ -47,7 +46,8 @@ describe(GlyphAgentInstructionsPreferences, () => {
     expect(page.getDomNode().textContent).toContain('File exceeds the read limit.');
 
     page.getDomNode().querySelector<HTMLButtonElement>('button.source-path')!.click();
-    expect(editors.openEditor).toHaveBeenCalledWith({ resource: URI.file('/workspace/AGENTS.md') });
+    expect(glyph.openLink).toHaveBeenCalledWith('glyph-instruction:root');
+    expect(page.getDomNode().querySelectorAll<HTMLButtonElement>('button.source-path')[1].disabled).toBe(true);
 
     page.search('src/');
     expect(page.getDomNode().querySelectorAll('.instruction-source')).toHaveLength(1);
@@ -60,92 +60,78 @@ describe(GlyphAgentInstructionsPreferences, () => {
     page.dispose();
   });
 
-  it('opens a source from its named workspace root', () => {
-    const editors = { openEditor: vi.fn(async () => undefined) };
-    const page = new GlyphAgentInstructionsPreferences(
-      {
-        state: {
-          instructionSources: [
-            {
-              id: 'root',
-              kind: 'agents_md',
-              label: 'AGENTS.md',
-              path: 'api/AGENTS.md',
-              scope: 'api',
-              status: 'active',
-            },
-          ],
-        },
-        onDidChangeState: () => ({ dispose() {} }),
-      } as never,
-      {
-        getWorkspace: () => ({
-          folders: [
-            { name: 'web', uri: URI.file('/web') },
-            { name: 'api', uri: URI.file('/api') },
-          ],
-        }),
-      } as never,
-      editors as never,
-    );
-
-    page.getDomNode().querySelector<HTMLButtonElement>('button.source-path')!.click();
-    expect(editors.openEditor).toHaveBeenCalledWith({ resource: URI.file('/api/AGENTS.md') });
+  it('requests fresh sources on open and on search, and reports refresh errors in the pane', async () => {
+    const refreshInstructionSources = vi.fn(async () => {}).mockRejectedValueOnce(new Error('Catalog unavailable.'));
+    const page = new GlyphAgentInstructionsPreferences({
+      state: { instructionSources: [], readOnly: true },
+      onDidChangeState: () => ({ dispose() {} }),
+      refreshInstructionSources,
+    } as never);
+    await waitFor(() => {
+      expect(page.getDomNode().textContent).toContain('Catalog unavailable.');
+    });
+    expect(page.getDomNode().querySelector('form')).toBeNull();
+    page.search('root');
+    await waitFor(() => {
+      expect(page.getDomNode().textContent).not.toContain('Catalog unavailable.');
+    });
+    refreshInstructionSources.mockRejectedValueOnce('disconnected');
+    page.search('');
+    await waitFor(() => {
+      expect(page.getDomNode().textContent).toContain('Agent Instructions could not be refreshed.');
+    });
+    expect(refreshInstructionSources).toHaveBeenCalledTimes(3);
     page.dispose();
   });
-
-  it('handles an absent catalog and paths that do not resolve to a workspace folder', () => {
-    const editors = { openEditor: vi.fn(async () => undefined) };
-    const glyph = {
-      state: {} as { instructionSources?: readonly unknown[] },
+  it('handles an absent catalog', () => {
+    const page = new GlyphAgentInstructionsPreferences({
+      state: {},
       onDidChangeState: () => ({ dispose() {} }),
-    };
-    const page = new GlyphAgentInstructionsPreferences(
-      glyph as never,
-      { getWorkspace: () => ({ folders: [] }) } as never,
-      editors as never,
-    );
+    } as never);
     expect(page.getDomNode().textContent).toContain('No active instruction files were found');
     page.dispose();
-
-    const sourceState = {
-      state: {
-        instructionSources: [
-          {
-            id: 'missing',
-            kind: 'agents_md',
-            label: 'AGENTS.md',
-            path: 'missing/AGENTS.md',
-            scope: 'missing',
-            status: 'active',
-          },
-        ],
-      },
-      onDidChangeState: () => ({ dispose() {} }),
+  });
+  it('forwards user rule management and opens direct source URIs', () => {
+    const createUserRule = vi.fn(async () => {});
+    const setUserRuleEnabled = vi.fn(async () => {});
+    const deleteUserRule = vi.fn(async () => {});
+    const openLink = vi.fn(async () => {});
+    const source = {
+      id: 'user',
+      kind: 'glyph_user_rule',
+      label: 'Glyph user rule',
+      path: '~/.glyph/rules/test.mdc',
+      managementPath: 'rules/test.mdc',
+      managementRevision: 'source-one',
+      uri: URI.file('/home/user/.glyph/rules/test.mdc').toString(),
+      scope: '.',
+      status: 'active',
+      activation: 'manual',
+      revision: 'one',
+      enabled: true,
     };
-    const noFolders = new GlyphAgentInstructionsPreferences(
-      sourceState as never,
-      { getWorkspace: () => ({ folders: [] }) } as never,
-      editors as never,
-    );
-    noFolders.getDomNode().querySelector<HTMLButtonElement>('button.source-path')!.click();
-    expect(editors.openEditor).not.toHaveBeenCalled();
-    noFolders.dispose();
+    const page = new GlyphAgentInstructionsPreferences({
+      state: { instructionSources: [source] },
+      onDidChangeState: () => ({ dispose() {} }),
+      openLink,
+      createUserRule,
+      setUserRuleEnabled,
+      deleteUserRule,
+    } as never);
+    const root = page.getDomNode();
+    const input = root.querySelector<HTMLInputElement>('[aria-label="New user rule name"]')!;
+    fireEvent.input(input, { target: { value: 'My Rule' } });
+    const activation = root.querySelector<HTMLSelectElement>('[aria-label="Rule activation"]')!;
+    fireEvent.change(activation, { target: { value: 'always' } });
+    fireEvent.submit(root.querySelector('form')!);
+    root.querySelector<HTMLButtonElement>('button.source-path')!.click();
+    [...root.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Disable')!.click();
+    [...root.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Remove')!.click();
 
-    const unresolved = new GlyphAgentInstructionsPreferences(
-      sourceState as never,
-      {
-        getWorkspace: () => ({
-          folders: [
-            { name: 'web', uri: URI.file('/web') },
-            { name: 'api', uri: URI.file('/api') },
-          ],
-        }),
-      } as never,
-      editors as never,
-    );
-    unresolved.getDomNode().querySelector<HTMLButtonElement>('button.source-path')!.click();
-    expect(editors.openEditor).not.toHaveBeenCalled();
-    unresolved.dispose();
+    expect(createUserRule).toHaveBeenCalledWith('My Rule', 'manual', undefined);
+    expect(setUserRuleEnabled).toHaveBeenCalledWith(source, false);
+    expect(deleteUserRule).toHaveBeenCalledWith(source);
+    expect(openLink).toHaveBeenCalledWith('glyph-instruction:user');
+    page.dispose();
   });
 });

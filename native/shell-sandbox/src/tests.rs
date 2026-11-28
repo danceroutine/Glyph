@@ -98,12 +98,13 @@ fn sensitive_file_policy_rejects_case_variants() {
     );
 }
 
-fn request(profile: SandboxProfile, root: &Path, state: &Path) -> SandboxRequest {
+pub(super) fn request(profile: SandboxProfile, root: &Path, state: &Path) -> SandboxRequest {
     SandboxRequest {
         profile,
         working_directory: root.to_owned(),
         state_directory: state.to_owned(),
         workspace_roots: vec![root.to_owned()],
+        private_paths: Vec::new(),
         protected_paths: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["sh".into(), "-c".into(), "pwd".into()],
@@ -362,6 +363,7 @@ fn seatbelt_policy_escapes_paths_as_strings() {
         working_directory: PathBuf::from("/tmp/project"),
         state_directory: PathBuf::from("/tmp/state\"quoted"),
         workspace_roots: vec![PathBuf::from("/tmp/project\\root")],
+        private_paths: Vec::new(),
         protected_paths: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["true".into()],
@@ -456,6 +458,7 @@ fn bubblewrap_arguments_fail_closed_and_overlay_writable_roots_safely() {
         working_directory: config_root.clone(),
         state_directory: state.clone(),
         workspace_roots: vec![config_root, docker_root],
+        private_paths: Vec::new(),
         protected_paths: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["true".into()],
@@ -664,6 +667,7 @@ fn accepts_repeated_workspace_roots_and_protected_paths() {
             working_directory: PathBuf::from("/workspace"),
             state_directory: PathBuf::from("/state"),
             workspace_roots: vec![PathBuf::from("/workspace"), PathBuf::from("/other")],
+            private_paths: Vec::new(),
             protected_paths: vec![
                 PathBuf::from("/workspace/worker"),
                 PathBuf::from("/workspace/helper")
@@ -949,6 +953,7 @@ fn seatbelt_policy_escapes_control_characters_in_paths() {
         working_directory: PathBuf::from("/tmp/project"),
         state_directory: PathBuf::from("/tmp/state\nline\rreturn\ttab"),
         workspace_roots: vec![PathBuf::from("/tmp/project")],
+        private_paths: Vec::new(),
         protected_paths: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["true".into()],
@@ -1074,4 +1079,112 @@ fn bubblewrap_discovery_preserves_trusted_order_and_canonicalization_errors() {
         Err(SandboxError::Backend(_))
     ));
     assert_eq!(*absent.inspected.borrow(), ["/usr/bin/bwrap", "/bin/bwrap"]);
+}
+
+#[test]
+fn confines_personal_sources_and_keeps_ordinary_project_files_available() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().canonicalize().unwrap();
+    let root = base.join("work");
+    let state = base.join("state");
+    let profile = root.join("personal");
+    let rules = profile.join("rules");
+    let ordinary = root.join("ordinary");
+    fs::create_dir_all(&rules).unwrap();
+    fs::create_dir(&state).unwrap();
+    fs::write(&ordinary, "ordinary").unwrap();
+    fs::write(rules.join("selected"), "personal").unwrap();
+    let mut input = request(SandboxProfile::WorkspaceWrite, &root, &state);
+    input.private_paths = vec![rules.clone(), profile.join("missing/skills")];
+    let prepared = prepare_request(input).unwrap();
+    assert!(prepared.private_paths.contains(&profile.join("missing")));
+    let policy = macos::seatbelt_policy(&prepared, &base.join("scratch"), None).unwrap();
+    assert!(policy.contains(&format!(
+        "(deny file-read* file-write* file-test-existence (subpath \"{}\"))",
+        rules.display()
+    )));
+    let home = base.join("home");
+    fs::create_dir_all(home.join(".cargo")).unwrap();
+    std::os::unix::fs::symlink(&profile, home.join(".cargo/bin")).unwrap();
+    let mounts = linux::bubblewrap_arguments(&prepared, Some(&home)).unwrap();
+    assert!(mounts.iter().any(|arg| arg == ordinary.as_os_str()));
+    assert!(!mounts
+        .iter()
+        .any(|arg| arg == rules.join("selected").as_os_str()));
+    assert!(mounts
+        .windows(2)
+        .any(|pair| pair[0] == "--tmpfs" && pair[1] == home.join(".cargo/bin/rules").as_os_str()));
+    let mut inside = request(SandboxProfile::ReadOnly, &rules, &state);
+    inside.private_paths = vec![rules.clone()];
+    assert!(prepare_request(inside).is_err());
+    let mut invalid = request(SandboxProfile::ReadOnly, &root, &state);
+    invalid.private_paths = vec!["relative".into()];
+    assert!(prepare_request(invalid).is_err());
+}
+
+#[test]
+fn projected_roots_keep_ordinary_names_and_skip_sensitive_or_unsupported_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().canonicalize().unwrap();
+    let root = base.join("work");
+    let private = root.join("personal");
+    let home = base.join("home");
+    fs::create_dir_all(&private).unwrap();
+    fs::create_dir_all(home.join(".cargo")).unwrap();
+    std::os::unix::fs::symlink(&private, home.join(".cargo/bin")).unwrap();
+    let ordinary = root.join("ordinary");
+    let link = root.join("link");
+    fs::write(&ordinary, "fixture").unwrap();
+    std::os::unix::fs::symlink("ordinary", &link).unwrap();
+    fs::write(root.join(".env"), "fixture").unwrap();
+    let paired = root.join("paired");
+    fs::write(&paired, "fixture").unwrap();
+    fs::hard_link(&paired, root.join("alias")).unwrap();
+    let _socket = std::os::unix::net::UnixListener::bind(root.join("sock")).unwrap();
+    let mut input = request(SandboxProfile::WorkspaceWrite, &root, &base.join("state"));
+    input.private_paths.push(private.clone());
+
+    let plan = linux::bubblewrap_arguments(&input, Some(&home)).unwrap();
+    assert!(plan
+        .windows(3)
+        .any(|a| a[0] == "--bind" && a[2] == ordinary));
+    assert!(plan
+        .windows(3)
+        .any(|a| a[0] == "--symlink" && a[1] == "ordinary" && a[2] == link));
+    for omitted in [
+        root.join(".env"),
+        private,
+        paired,
+        root.join("alias"),
+        root.join("sock"),
+        home.join(".cargo/bin"),
+    ] {
+        assert!(!plan.contains(&omitted.into_os_string()));
+    }
+}
+
+#[test]
+fn projected_roots_report_incomplete_metadata_and_directory_scans() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let mut input = request(SandboxProfile::ReadOnly, &root, &root.join("state"));
+    input.private_paths.push(root.join("personal"));
+    fs::write(root.join(".git"), [0xff]).unwrap();
+    let error = linux::bubblewrap_arguments(&input, None).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("Git metadata pointer is not valid UTF-8"));
+    fs::remove_file(root.join(".git")).unwrap();
+
+    // The metadata scan skips target; the file projection has its own depth bound.
+    let mut nested = root.join("target");
+    for _ in 0..MAX_WORKSPACE_SCAN_DEPTH {
+        nested.push("d");
+    }
+    fs::create_dir_all(nested).unwrap();
+    let error = linux::bubblewrap_arguments(&input, None).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Workspace projection exceeds its directory depth limit."
+    );
 }

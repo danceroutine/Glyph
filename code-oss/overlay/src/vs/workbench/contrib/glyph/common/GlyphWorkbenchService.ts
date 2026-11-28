@@ -12,6 +12,7 @@ import { Event } from '#vs/base/common/event.js';
 import { createDecorator } from '#vs/platform/instantiation/common/instantiation.js';
 import type { GlyphWorkbenchState } from '#glyph/workbench/GlyphWorkbenchState.js';
 import type { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
+import type { GlyphInstructionSource } from '#glyph/protocol/events/GlyphInstructionSource.js';
 
 export const GlyphWorkbenchService = createDecorator<GlyphWorkbenchService>('glyphWorkbenchService');
 
@@ -41,7 +42,7 @@ export interface GlyphWorkbenchService {
   branchChat?(chatId: string, turnId: string): Promise<void>;
   restoreCheckpoint?(chatId: string, turnId: string): Promise<void>;
   copyText(text: string): Promise<void>;
-  openLink?(href: string): Promise<void>;
+  openLink(href: string): Promise<void>;
   viewPlan?(chatId: string, plan: GlyphPlanRecord): Promise<void>;
   cancel(): void;
   startAgentReview(review: AgentReviewInput): Promise<void>;
@@ -74,4 +75,12 @@ export interface GlyphWorkbenchService {
   decideApproval(chatId: string, runId: string, approvalId: string, decision: GlyphApprovalDecision): Promise<void>;
   acceptProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void>;
   rejectProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void>;
+  refreshInstructionSources?(): Promise<void>;
+  createUserRule(
+    name: string,
+    activation: NonNullable<GlyphInstructionSource['activation']>,
+    condition?: string,
+  ): Promise<void>;
+  setUserRuleEnabled(source: GlyphInstructionSource, enabled: boolean): Promise<void>;
+  deleteUserRule(source: GlyphInstructionSource): Promise<void>;
 }

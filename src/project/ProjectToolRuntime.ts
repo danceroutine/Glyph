@@ -14,7 +14,7 @@ import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
-import type { AgentInstructionDisclosureProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
+import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 
 export class ProjectToolRuntime implements ToolSource {
   private readonly logger: Logger;
@@ -24,7 +24,7 @@ export class ProjectToolRuntime implements ToolSource {
     private readonly proposals: EditProposalService,
     private readonly reviews: ProposalReviewManager,
     logger: Logger = new NullLogger(),
-    private readonly instructions?: AgentInstructionDisclosureProvider,
+    private readonly turnContexts?: Pick<TurnContextCoordinator, 'disclosePaths'>,
   ) {
     this.logger = logger.forNamespace('project.tool');
   }
@@ -35,7 +35,12 @@ export class ProjectToolRuntime implements ToolSource {
       {
         namespace: ProjectToolNamespace.PROJECT,
         name: ProjectToolName.PROPOSE_PATCH,
+        requiresExclusiveRound: true,
         allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+        activityPresentation: {
+          afterCompletion: true,
+          show: showProposalActivity,
+        },
         description: `Apply a strict patch immediately, retaining changes for Keep/Revert review. Prefer this for ordinary source edits. The grammar is:
 *** Begin Patch
 *** Add File: path
@@ -63,7 +68,12 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
       {
         namespace: ProjectToolNamespace.PROJECT,
         name: ProjectToolName.PROPOSE_EDITS,
+        requiresExclusiveRound: true,
         allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+        activityPresentation: {
+          afterCompletion: true,
+          show: showProposalActivity,
+        },
         description:
           'Apply exact UTF-16 range edits immediately with Keep/Revert review. Use for whitespace, line-ending, or Unicode-sensitive changes.',
         inputKind: ToolInputKind.JSON,
@@ -100,9 +110,10 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
           throw new Error(`Unknown project tool: ${name}`);
       }
       const instructionContext = context?.turnId
-        ? this.instructions?.disclose(
+        ? await this.turnContexts?.disclosePaths(
             context.turnId,
             proposal.files.flatMap(file => [...new Set([file.sourcePath, file.targetPath])]),
+            signal,
           )
         : undefined;
       if (instructionContext)
@@ -165,4 +176,9 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
 function toJsonSchema(schema: z.ZodType): Record<string, unknown> {
   const { $schema: _, ...parameters } = z.toJSONSchema(schema, { target: 'draft-7' });
   return parameters;
+}
+
+function showProposalActivity(output: string): boolean {
+  const reply: unknown = JSON.parse(output);
+  return z.object({ status: z.string().optional() }).parse(reply).status !== 'INSTRUCTION_CONTEXT_REQUIRED';
 }

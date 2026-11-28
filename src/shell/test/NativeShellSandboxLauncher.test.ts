@@ -1,3 +1,4 @@
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { realpathSync, statSync, type Stats } from 'node:fs';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { delimiter } from 'node:path';
@@ -9,12 +10,37 @@ vi.mock('node:fs', { spy: true });
 
 describe(NativeShellSandboxLauncher, () => {
   describe(NativeShellSandboxLauncher.prototype.launch, () => {
+    it.each([ShellSandboxProfile.READ_ONLY, ShellSandboxProfile.FULL_ACCESS])(
+      'rechecks a selected root at %s launch',
+      sandboxProfile => {
+        const spawn = vi.fn(() => ({}) as ChildProcess);
+        const verifyWorkspaceRoot = vi.fn(() => {
+          throw new Error('Replaced workspace directory');
+        });
+        const launcher = new NativeShellSandboxLauncher(
+          {
+            binaryPath: '/sandbox',
+            workspaceRoots: ['/work', '/work/nested'],
+            stateDirectory: '/state',
+            accessPolicy: new WorkspaceAccessPolicy(),
+            verifyWorkspaceRoot,
+          },
+          spawn,
+        );
+        expect(() => launcher.launch('pwd', '/work/nested/dir', { sandboxProfile })).toThrow(
+          'Replaced workspace directory',
+        );
+        expect(verifyWorkspaceRoot).toHaveBeenCalledWith('/work/nested');
+        expect(spawn).not.toHaveBeenCalled();
+      },
+    );
     it('routes restricted commands through the helper with a sanitized environment', () => {
       const spawn = vi.fn<(command: string, arguments_: readonly string[], options: SpawnOptions) => ChildProcess>(
         () => ({}) as ChildProcess,
       );
       const launcher = new NativeShellSandboxLauncher(
         {
+          accessPolicy: new WorkspaceAccessPolicy({}, ['/project/personal']),
           binaryPath: '/bin/glyph-shell-sandbox',
           workspaceRoots: ['/project', '/second'],
           stateDirectory: '/state',
@@ -46,6 +72,8 @@ describe(NativeShellSandboxLauncher, () => {
           '/project',
           '--protected-path',
           '/project/worker',
+          '--private-path',
+          '/project/personal',
         ]),
       );
       expect(arguments_).not.toContain('/second');
@@ -67,6 +95,7 @@ describe(NativeShellSandboxLauncher, () => {
       const shell = realpathSync('/bin/sh');
       const launcher = new NativeShellSandboxLauncher(
         {
+          accessPolicy: new WorkspaceAccessPolicy(),
           binaryPath: '/sandbox',
           workspaceRoots: ['/project'],
           stateDirectory: '/state',
@@ -87,6 +116,7 @@ describe(NativeShellSandboxLauncher, () => {
       );
       const launcher = new NativeShellSandboxLauncher(
         {
+          accessPolicy: new WorkspaceAccessPolicy(),
           binaryPath: '/sandbox',
           workspaceRoots: ['/project'],
           stateDirectory: '/state',
@@ -114,7 +144,13 @@ describe(NativeShellSandboxLauncher, () => {
         () => ({}) as ChildProcess,
       );
       const launcher = new NativeShellSandboxLauncher(
-        { binaryPath: '/sandbox', workspaceRoots: ['/project'], stateDirectory: '/state', environment: {} },
+        {
+          accessPolicy: new WorkspaceAccessPolicy(),
+          binaryPath: '/sandbox',
+          workspaceRoots: ['/project'],
+          stateDirectory: '/state',
+          environment: {},
+        },
         spawn,
       );
 
@@ -145,7 +181,13 @@ describe(NativeShellSandboxLauncher, () => {
         () => ({}) as ChildProcess,
       );
       const launcher = new NativeShellSandboxLauncher(
-        { binaryPath: '/sandbox', workspaceRoots: ['/project'], stateDirectory: '/state', environment },
+        {
+          accessPolicy: new WorkspaceAccessPolicy(),
+          binaryPath: '/sandbox',
+          workspaceRoots: ['/project'],
+          stateDirectory: '/state',
+          environment,
+        },
         spawn,
       );
 
@@ -165,6 +207,7 @@ describe(NativeShellSandboxLauncher, () => {
       );
       const launcher = new NativeShellSandboxLauncher(
         {
+          accessPolicy: new WorkspaceAccessPolicy(),
           binaryPath: '/sandbox',
           workspaceRoots: ['/project', '/project/packages/app', '/other'],
           stateDirectory: '/state',
@@ -182,7 +225,13 @@ describe(NativeShellSandboxLauncher, () => {
     it('refuses working directories outside every workspace root', () => {
       const spawn = vi.fn<(command: string, arguments_: readonly string[], options: SpawnOptions) => ChildProcess>();
       const launcher = new NativeShellSandboxLauncher(
-        { binaryPath: '/sandbox', workspaceRoots: ['/project'], stateDirectory: '/state', environment: {} },
+        {
+          accessPolicy: new WorkspaceAccessPolicy(),
+          binaryPath: '/sandbox',
+          workspaceRoots: ['/project'],
+          stateDirectory: '/state',
+          environment: {},
+        },
         spawn,
       );
 
@@ -205,6 +254,7 @@ describe(NativeShellSandboxLauncher, () => {
       );
       const launcher = new NativeShellSandboxLauncher(
         {
+          accessPolicy: new WorkspaceAccessPolicy(),
           binaryPath: '/sandbox',
           workspaceRoots: ['/project'],
           stateDirectory: '/state',
@@ -234,6 +284,7 @@ describe(NativeShellSandboxLauncher, () => {
       );
       const launcher = new NativeShellSandboxLauncher(
         {
+          accessPolicy: new WorkspaceAccessPolicy(),
           binaryPath: '/sandbox',
           workspaceRoots: ['/project'],
           stateDirectory: '/state',
@@ -253,6 +304,7 @@ describe(NativeShellSandboxLauncher, () => {
       );
       const launcher = new NativeShellSandboxLauncher(
         {
+          accessPolicy: new WorkspaceAccessPolicy(),
           binaryPath: '/sandbox',
           workspaceRoots: ['/project'],
           stateDirectory: '/state',

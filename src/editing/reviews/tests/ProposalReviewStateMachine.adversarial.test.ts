@@ -1,9 +1,9 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
@@ -41,7 +41,7 @@ describe(ProposalReviewManager, () => {
         ).join('');
         await writeFile(join(root, 'file.txt'), original);
 
-        const workspace = new FileSystemWorkspaceTextStore(root);
+        const workspace = fixtureWorkspace(root);
         const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
         const base = await workspace.read('file.txt');
         const proposal = await service.proposeStructured({
@@ -120,12 +120,7 @@ describe(ProposalReviewManager, () => {
 });
 
 function managerFor(root: string, state: string): ProposalReviewManager {
-  return new ProposalReviewManager(
-    new FileSystemWorkspaceTextStore(root),
-    new FileProposalReviewStore(state),
-    new NullLogger(),
-    8,
-  );
+  return new ProposalReviewManager(fixtureWorkspace(root), new FileProposalReviewStore(state), new NullLogger(), 8);
 }
 
 function pseudoRandom(seed: number): () => number {

@@ -1,9 +1,9 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import type { ProjectAccess } from '#src/project/ProjectAccess.js';
@@ -18,7 +18,7 @@ afterEach(async () => {
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'plan-edits-'));
   directories.push(root);
-  const workspace = new FileSystemWorkspaceTextStore(root);
+  const workspace = fixtureWorkspace(root);
   const proposals = new EditProposalService(workspace, new JsDiffTextDiffer(), {
     maxRawProposalBytes: 1024 * 1024,
     maxChangedBytes: 1024 * 1024,

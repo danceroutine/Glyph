@@ -5,7 +5,7 @@ import type { GlyphPlanRecord } from './events/GlyphPlanRecord.ts';
 import type { GlyphTurnOptions } from './events/GlyphAnnotation.ts';
 import type { GlyphApprovalDecision } from './GlyphApprovalDecision.ts';
 import type { GlyphWorkspaceRoot } from './connection/GlyphWorkspaceRoot.ts';
-import type { GlyphContextAttachment } from './connection/GlyphContextAttachment.ts';
+import type { GlyphAttachmentResource, GlyphContextAttachment } from './connection/GlyphContextAttachment.ts';
 
 /** Discriminants for commands sent from the workbench to the utility host. */
 export enum GlyphWorkbenchCommandType {
@@ -20,6 +20,9 @@ export enum GlyphWorkbenchCommandType {
   START_AGENT_REVIEW = 'start_agent_review',
   CANCEL_AGENT_REVIEW = 'cancel_agent_review',
   DISMISS_AGENT_REVIEW_FINDING = 'dismiss_agent_review_finding',
+  CREATE_USER_RULE = 'create_user_rule',
+  SET_USER_RULE_ENABLED = 'set_user_rule_enabled',
+  DELETE_USER_RULE = 'delete_user_rule',
   SEND = 'send',
   STEER = 'steer',
   UPDATE_PLAN = 'update_plan',
@@ -40,6 +43,9 @@ export enum GlyphWorkbenchCommandType {
   REJECT_PROPOSAL_ITEM = 'reject_proposal_item',
   WRITE_SHELL_INPUT = 'write_shell_input',
   STOP_SHELL_SESSION = 'stop_shell_session',
+  RESOLVE_ATTACHMENT_RESOURCE = 'resolve_attachment_resource',
+  RESOLVE_RULE_REFERENCE = 'resolve_rule_reference',
+  REFRESH_CONTEXT_CATALOGS = 'refresh_context_catalogs',
   REQUEST_SNAPSHOT = 'request_snapshot',
   DETACH = 'detach',
 }
@@ -49,6 +55,34 @@ export enum GlyphWorkbenchCommandType {
  * through MessagePort without coupling either process to the other's classes.
  */
 export type GlyphWorkbenchCommand =
+  | {
+      readonly type: GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE;
+      readonly lookupId: string;
+      readonly resource: GlyphAttachmentResource;
+    }
+  | {
+      readonly type: GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE;
+      readonly lookupId: string;
+      readonly ruleId: string;
+    }
+  | { readonly type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS }
+  | {
+      readonly type: GlyphWorkbenchCommandType.CREATE_USER_RULE;
+      readonly name: string;
+      readonly activation: 'always' | 'file_pattern' | 'model' | 'manual';
+      readonly condition?: string;
+    }
+  | {
+      readonly type: GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED;
+      readonly path: string;
+      readonly expectedRevision: string;
+      readonly enabled: boolean;
+    }
+  | {
+      readonly type: GlyphWorkbenchCommandType.DELETE_USER_RULE;
+      readonly path: string;
+      readonly expectedRevision: string;
+    }
   | {
       readonly type: GlyphWorkbenchCommandType.START_AGENT_REVIEW;
       readonly review: AgentReviewInput;

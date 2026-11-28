@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -83,6 +83,20 @@ describe('ProjectContextResolver', () => {
     expect(expanded.roots).toHaveLength(3);
   });
 
+  it('retains the selected directory route while keeping its physical mutation identity', async () => {
+    const root = await realpath(await fixture());
+    const target = join(root, 'physical');
+    const alias = join(root, 'selected');
+    await mkdir(target);
+    await symlink(target, alias);
+    const manifest = join(root, 'project.code-workspace');
+    await writeFile(manifest, JSON.stringify({ folders: [{ name: 'app', path: alias }] }));
+    const selected = await ProjectContextResolver.workspace(manifest, root);
+    expect(selected.roots).toEqual([{ name: 'app', path: target, selectedPath: alias }]);
+    await writeFile(manifest, JSON.stringify({ folders: [{ name: 'app', path: target }] }));
+    expect((await ProjectContextResolver.workspace(manifest, root)).mutationIdentity).toBe(selected.mutationIdentity);
+  });
+
   it('rejects malformed manifests and ambiguous folder names', async () => {
     const root = await fixture();
     await Promise.all([mkdir(join(root, 'one')), mkdir(join(root, 'two'))]);
@@ -117,7 +131,7 @@ describe('ProjectContextResolver', () => {
   });
 
   it('resolves a local file URI folder to its canonical directory', async () => {
-    const root = await fixture();
+    const root = await realpath(await fixture());
     await mkdir(join(root, 'local'));
     const manifest = join(root, 'local.code-workspace');
     await writeFile(manifest, JSON.stringify({ folders: [{ uri: pathToFileURL(join(root, 'local')).href }] }));

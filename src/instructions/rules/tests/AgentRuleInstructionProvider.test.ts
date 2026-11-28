@@ -1,0 +1,523 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
+import { pathToFileURL } from 'node:url';
+import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
+import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
+import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import {
+  AgentInstructionActivationMode,
+  AgentInstructionSourceKind,
+  AgentInstructionSourceStatus,
+} from '#src/instructions/AgentInstructionSource.js';
+import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
+import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleInstructionProvider.js';
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+});
+
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), 'glyph-rules-'));
+  roots.push(root);
+  await Promise.all([
+    mkdir(join(root, '.glyph', 'rules'), { recursive: true }),
+    mkdir(join(root, 'packages', 'api', '.cursor', 'rules'), { recursive: true }),
+    mkdir(join(root, 'packages', 'api', 'docs'), { recursive: true }),
+  ]);
+  return { root, workspace: fixtureWorkspace(root) };
+}
+
+describe(AgentRuleInstructionProvider, () => {
+  it.each(['rules', 'agents'])('charges malformed file bytes to the %s discovery allowance', async family => {
+    const { root, workspace } = await fixture();
+    const files =
+      family === 'rules' ? ['.glyph/rules/bad.mdc', '.glyph/rules/good.mdc'] : ['AGENTS.md', 'packages/AGENTS.md'];
+    await writeFile(join(root, files[0]!), Buffer.alloc(8, 255));
+    await writeFile(join(root, files[1]!), 'ok');
+    const list = async () => ({ files, truncated: false });
+    const provider =
+      family === 'rules'
+        ? new AgentRuleInstructionProvider(
+            workspace,
+            { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', maxDiscoveryBytes: 8 },
+            list,
+          )
+        : new AgentsMdInstructionProvider(workspace, { maxDiscoveryBytes: 8 }, list);
+    const sources = await provider.discover();
+    expect(sources.map(source => source.message)).toEqual([
+      expect.stringContaining('UTF-8'),
+      expect.stringContaining('budget exhausted'),
+    ]);
+  });
+
+  it.each(['rules', 'agents'])('charges the two verified disk reads when a dirty %s file is shorter', async family => {
+    const { root, workspace: disk } = await fixture();
+    const files =
+      family === 'rules' ? ['.glyph/rules/a.mdc', '.glyph/rules/b.mdc'] : ['AGENTS.md', 'packages/AGENTS.md'];
+    for (const path of files) await writeFile(join(root, path), '1234');
+    const request = vi.fn(async ({ path, operationId }: { path: string; operationId: string }) => ({
+      operationId,
+      ok: true,
+      snapshot: {
+        path,
+        uri: pathToFileURL(join(root, path)).href,
+        text: 'x',
+        byteOrderMark: false,
+        contentRevision: 'live',
+        byteLength: 1,
+        mode: 0o600,
+        identity: 'editor',
+        dirty: true,
+        token: { workspaceGeneration: 'g', resource: 'r', incarnation: 'i', version: 1 },
+      },
+    }));
+    const workspace = createCatalogWorkspace(disk, disk, request);
+    const list = async () => ({ files, truncated: false });
+    const provider =
+      family === 'rules'
+        ? new AgentRuleInstructionProvider(
+            workspace,
+            { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', maxDiscoveryBytes: 8 },
+            list,
+          )
+        : new AgentsMdInstructionProvider(workspace, { maxDiscoveryBytes: 8 }, list);
+    const sources = await provider.discover();
+    expect(sources.map(source => source.status)).toEqual(['active', 'error']);
+    expect(sources[1]!.message).toContain('budget exhausted');
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])('matches the user rules directory using its filesystem case policy (%s)', async sensitive => {
+    const workspace = {
+      caseSensitive: sensitive,
+      normalizePath: (path: string) => path,
+      read: async () => ({
+        text: '---\nname: Selected\ndescription: Fixture\nreferences: [missing.md]\n---\nBody',
+        revision: 'current',
+      }),
+      readOptional: async () => null,
+    } as never;
+    const provider = new AgentRuleInstructionProvider(
+      workspace,
+      {
+        kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+        directory: '.',
+        uriForPath: path => 'file:///profile/' + path,
+      },
+      async () => ({ files: ['RULES/UPPER.MDC', 'rules/lower.mdc'], truncated: false }),
+    );
+    const sources = await provider.discover();
+    expect(sources.map(source => source.path)).toEqual(
+      sensitive ? ['rules/lower.mdc'] : ['RULES/UPPER.MDC', 'rules/lower.mdc'],
+    );
+    for (const source of sources)
+      expect(source).toMatchObject({
+        name: 'Selected',
+        sourceRevision: 'current',
+        uri: 'file:///profile/' + source.path,
+        references: ['missing.md'],
+        message: expect.stringContaining('Missing rule reference'),
+      });
+  });
+
+  it('watches an authorized reference even when its content read fails, while rejecting forbidden aliases', async () => {
+    const limit = new WorkspaceReadLimitError('guide.md', 10, 20);
+    const readOptional = vi.fn().mockRejectedValueOnce(limit);
+    const workspace = {
+      normalizePath: (path: string) => path,
+      read: async () => ({ text: '---\nreferences: [guide.md]\n---\nMain', revision: '1' }),
+      readOptional,
+    };
+    const rules = new AgentRuleInstructionProvider(
+      workspace as never,
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+      async () => ({ files: ['.glyph/rules/base.mdc'], truncated: false }),
+    );
+    expect((await rules.discover())[0]).toMatchObject({ references: ['guide.md'], message: limit.message });
+    for (const next of [() => Promise.resolve(undefined), () => Promise.reject(limit)]) {
+      readOptional.mockRejectedValueOnce(new Error('Decode failed')).mockImplementationOnce(next);
+      expect((await rules.discover())[0]).toMatchObject({ references: ['guide.md'], message: 'Decode failed' });
+      expect(readOptional).toHaveBeenLastCalledWith('guide.md', { maxBytes: 0 });
+    }
+    readOptional.mockRejectedValue(new Error('Linked file is not eligible'));
+    expect((await rules.discover())[0]?.references).toBeUndefined();
+  });
+
+  it('retains parsed identity and prevents another root from supplying a referenced file', async () => {
+    const readOptional = vi.fn();
+    const provider = new AgentRuleInstructionProvider(
+      {
+        normalizePath: (path: string) => path,
+        read: async () => ({ text: '---\nname: Shared\nreferences: [../other/data.md]\n---\nBody', revision: 'one' }),
+        readOptional,
+      } as never,
+      {
+        kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+        directory: '.glyph',
+        paths: new InstructionPaths(
+          new Map([
+            ['App', false],
+            ['other', true],
+          ]),
+        ),
+      },
+      async () => ({ files: ['App/.GLYPH/RULES/a.MDC', 'other/.GLYPH/rules/a.mdc'], truncated: false }),
+    );
+    const [native, unexpected] = await provider.discover();
+    expect(native).toMatchObject({
+      name: 'Shared',
+      sourceRevision: 'one',
+      scope: 'App',
+      message: expect.stringContaining('leaves'),
+    });
+    expect(unexpected?.message).toContain('outside');
+    expect(readOptional).not.toHaveBeenCalled();
+  });
+
+  it('reuses referenced snapshots but charges each occurrence and limits total reads and expanded bytes', async () => {
+    const main = '---\nreferences: [ref.md, ref.md]\n---\nMain';
+    const readOptional = vi.fn(async () => ({ text: 'Ref', revision: 'two' }));
+    const workspace = {
+      normalizePath: (path: string) => path,
+      read: async () => ({ text: main, revision: 'one' }),
+      readOptional,
+    } as never;
+    const options = { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' } as const;
+    const list = async () => ({ files: ['.glyph/rules/a.mdc'], truncated: false });
+    const [source] = await new AgentRuleInstructionProvider(workspace, options, list).discover();
+    expect(source?.references).toEqual(['ref.md', 'ref.md']);
+    expect(readOptional).toHaveBeenCalledTimes(1);
+    for (const [budget, error] of [
+      [{ maxReferenceEdges: 1 }, 'count'],
+      [{ maxDiscoveryReferenceEdges: 1 }, 'count'],
+      [{ maxExpandedBytes: 8 }, 'expanded'],
+      [{ maxDiscoveryBytes: Buffer.byteLength(main) }, 'read budget'],
+    ] as const) {
+      expect(
+        (await new AgentRuleInstructionProvider(workspace, { ...options, ...budget }, list).discover())[0]?.message,
+      ).toContain(error);
+    }
+  });
+
+  it('allows an empty manual rule to remain empty', async () => {
+    const provider = new AgentRuleInstructionProvider(
+      {
+        normalizePath: (path: string) => path,
+        read: async () => ({ text: '', revision: 'empty', byteLength: 0 }),
+      } as never,
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+      async () => ({ files: ['.glyph/rules/empty.mdc'], truncated: false }),
+    );
+    expect((await provider.discover())[0]?.content).toBe('');
+  });
+
+  it('uses a bounded stable selector for long paths and diagnoses unconfigured conditional rules', async () => {
+    const directory = 'long/'.repeat(110);
+    const modes = ['model', 'file_pattern'];
+    const provider = new AgentRuleInstructionProvider(
+      {
+        normalizePath: (path: string) => path,
+        read: async () => ({ text: `---\nactivation: ${modes.shift()}\n---\nBody`, revision: 'one' }),
+      } as never,
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+      async () => ({
+        files: [`${directory}.glyph/rules/one.mdc`, `${directory}.glyph/rules/two.mdc`],
+        truncated: false,
+      }),
+    );
+    const [model, pattern] = await provider.discover();
+    expect(model?.id).toMatch(/^glyph_project_rule:sha256:[0-9a-f]{64}$/u);
+    expect(model?.id).not.toBe(pattern?.id);
+    expect(model?.message).toContain('description');
+    expect(pattern?.message).toContain('glob');
+  });
+
+  it('discovers native rules, expands authorized references, and derives a composite revision', async () => {
+    const { root, workspace } = await fixture();
+    await writeFile(join(root, 'docs.md'), 'Shared guidance.');
+    await writeFile(
+      join(root, '.glyph', 'rules', 'typescript.mdc'),
+      '---\nname: TypeScript\nactivation: file_pattern\nglobs: ["**/*.ts"]\nreferences: [docs.md]\n---\nUse strict types.',
+    );
+    const provider = new AgentRuleInstructionProvider(workspace, {
+      kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      directory: '.glyph',
+    });
+
+    const [rule] = await provider.discover();
+    expect(rule).toMatchObject({
+      id: 'glyph_project_rule:.glyph/rules/typescript.mdc',
+      name: 'TypeScript',
+      scope: '.',
+      status: AgentInstructionSourceStatus.ACTIVE,
+      activation: AgentInstructionActivationMode.FILE_PATTERN,
+      globs: ['**/*.ts'],
+      references: ['docs.md'],
+    });
+    expect(rule?.content).toContain('Use strict types.');
+    expect(rule?.content).toContain('Referenced source (docs.md):\nShared guidance.');
+    expect(rule?.revision).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('loads Cursor metadata at nested scope and infers always, file, model, and manual modes', async () => {
+    const { root, workspace } = await fixture();
+    const directory = join(root, 'packages', 'api', '.cursor', 'rules');
+    await Promise.all([
+      writeFile(join(directory, 'always.mdc'), '---\ndescription:\nglobs:\nalwaysApply: true\n---\nAlways.'),
+      writeFile(join(directory, 'files.mdc'), '---\nglobs: "**/*.ts"\n---\nFiles.'),
+      writeFile(join(directory, 'model.mdc'), '---\ndescription: Relevant APIs\n---\nModel.'),
+      writeFile(join(directory, 'manual.mdc'), 'Manual.'),
+    ]);
+    const provider = new AgentRuleInstructionProvider(workspace, {
+      kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
+      directory: '.cursor',
+    });
+
+    const rules = await provider.discover();
+    expect(rules.map(rule => [rule.name, rule.scope, rule.activation])).toEqual([
+      ['always', 'packages/api', AgentInstructionActivationMode.ALWAYS],
+      ['files', 'packages/api', AgentInstructionActivationMode.FILE_PATTERN],
+      ['manual', 'packages/api', AgentInstructionActivationMode.MANUAL],
+      ['model', 'packages/api', AgentInstructionActivationMode.MODEL],
+    ]);
+  });
+
+  it('reports malformed metadata, missing references, circular references, and discovery limits', async () => {
+    const { root, workspace } = await fixture();
+    await Promise.all([
+      writeFile(join(root, '.glyph', 'rules', 'broken.mdc'), '---\nglobs: [../bad]\n---\nBroken.'),
+      writeFile(join(root, '.glyph', 'rules', 'missing.mdc'), '---\nreferences: [missing.md]\n---\nMissing.'),
+      writeFile(join(root, '.glyph', 'rules', 'cycle.mdc'), '---\nreferences: [.glyph/rules/cycle.mdc]\n---\nCycle.'),
+    ]);
+    const provider = new AgentRuleInstructionProvider(workspace, {
+      kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      directory: '.glyph',
+    });
+    const rules = await provider.discover();
+    expect(rules).toHaveLength(3);
+    expect(rules.every(rule => rule.status === AgentInstructionSourceStatus.ERROR)).toBe(true);
+    expect(rules.map(rule => rule.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Invalid rule glob'),
+        expect.stringContaining('Circular rule reference'),
+        expect.stringContaining('Missing rule reference'),
+      ]),
+    );
+
+    const limited = new AgentRuleInstructionProvider(
+      workspace,
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', maxFiles: 1 },
+      async () => ({ files: [], truncated: true }),
+    );
+    expect((await limited.discover()).at(-1)).toMatchObject({
+      status: AgentInstructionSourceStatus.ERROR,
+      message: 'Rule discovery exceeded the 1-file limit.',
+    });
+  });
+
+  it('qualifies user rule display paths and direct source URIs', async () => {
+    const { root, workspace } = await fixture();
+    await writeFile(join(root, '.glyph', 'rules', 'user.mdc'), 'User rule.');
+    const provider = new AgentRuleInstructionProvider(workspace, {
+      kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+      directory: '.glyph',
+      displayPrefix: '~/',
+      uriForPath: path => `file:///home/test/${path}`,
+    });
+
+    expect((await provider.discover())[0]).toMatchObject({
+      path: '~/.glyph/rules/user.mdc',
+      uri: 'file:///home/test/.glyph/rules/user.mdc',
+      activation: AgentInstructionActivationMode.MANUAL,
+    });
+  });
+
+  it('reports discovery failures, filters nested user paths, and uses fallback errors', async () => {
+    const workspace = {
+      normalizePath: (path: string) => path,
+      read: vi.fn().mockRejectedValue('untyped read failure'),
+    } as unknown as FileSystemWorkspaceTextStore;
+    const discovery = new AgentRuleInstructionProvider(
+      workspace,
+      { kind: AgentInstructionSourceKind.GLYPH_USER_RULE, directory: '.', displayPrefix: '~/.glyph/' },
+      async () => {
+        throw 'untyped discovery failure';
+      },
+    );
+    await expect(discovery.discover()).resolves.toEqual([
+      expect.objectContaining({ message: 'Rules could not be discovered.' }),
+    ]);
+
+    const read = new AgentRuleInstructionProvider(
+      workspace,
+      { kind: AgentInstructionSourceKind.GLYPH_USER_RULE, directory: '.' },
+      async () => ({ files: ['rules/direct.mdc', 'nested/rules/ignored.mdc'], truncated: false }),
+    );
+    await expect(read.discover()).resolves.toEqual([
+      expect.objectContaining({ path: 'rules/direct.mdc', message: 'Rule could not be read.' }),
+    ]);
+
+    const projectAlias = { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, id: 'project:direct', scope: '.' };
+    const withUri = new AgentRuleInstructionProvider(
+      workspace,
+      {
+        kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+        directory: '.',
+        uriForPath: path => `file:///rules/${path}`,
+        projectAlias: () => projectAlias,
+      },
+      async () => ({ files: ['rules/direct.mdc'], truncated: false }),
+    );
+    const [unreadable] = await withUri.discover();
+    expect(unreadable).toMatchObject({ status: AgentInstructionSourceStatus.ERROR, projectAlias });
+    expect(unreadable).not.toHaveProperty('uri');
+  });
+
+  it('propagates cancellation while reading and expanding references', async () => {
+    for (const phase of ['read', 'reference'] as const) {
+      const controller = new AbortController();
+      const cancelled = new Error(`cancelled ${phase}`);
+      const workspace = {
+        normalizePath: (path: string) => path,
+        read: vi.fn(async () => {
+          if (phase === 'read') controller.abort(cancelled);
+          return { text: '---\nreferences: [docs.md]\n---\nBody', revision: 'one' };
+        }),
+        readOptional: vi.fn(async () => {
+          controller.abort(cancelled);
+          throw new Error('reference stopped');
+        }),
+      } as unknown as FileSystemWorkspaceTextStore;
+      const provider = new AgentRuleInstructionProvider(
+        workspace,
+        { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+        async () => ({ files: ['.glyph/rules/test.mdc'], truncated: false }),
+      );
+      await expect(provider.discover(controller.signal)).rejects.toBe(cancelled);
+    }
+  });
+
+  it('rejects paths outside their configured rule root and excessive reference depth', async () => {
+    const outside = new AgentRuleInstructionProvider(
+      { normalizePath: (path: string) => path } as never,
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+      async () => ({ files: ['outside.mdc'], truncated: false }),
+    );
+    await expect(outside.discover()).resolves.toEqual([
+      expect.objectContaining({
+        status: AgentInstructionSourceStatus.ERROR,
+        message: expect.stringContaining('outside .glyph/rules'),
+      }),
+    ]);
+
+    const workspace = {
+      normalizePath: (path: string) => path,
+      read: vi.fn(async () => ({ text: '---\nreferences: [ref-0.mdc]\n---\nRoot', revision: 'root' })),
+      readOptional: vi.fn(async (path: string) => {
+        const index = Number(/ref-(\d+)/u.exec(path)?.[1] ?? 0);
+        return {
+          text: `---\nreferences: [ref-${index + 1}.mdc]\n---\n${index}`,
+          revision: String(index),
+        };
+      }),
+    } as unknown as FileSystemWorkspaceTextStore;
+    const deep = new AgentRuleInstructionProvider(
+      workspace,
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+      async () => ({ files: ['.glyph/rules/deep.mdc'], truncated: false }),
+    );
+    await expect(deep.discover()).resolves.toEqual([
+      expect.objectContaining({
+        status: AgentInstructionSourceStatus.ERROR,
+        message: expect.stringContaining('16 levels'),
+      }),
+    ]);
+  });
+
+  it('labels every supported source family and resolves synthetic root-prefixed paths', async () => {
+    const workspace = {
+      normalizePath: (path: string) => path,
+      read: vi.fn(async () => ({ text: 'Body', revision: 'one' })),
+      readOptional: vi.fn(),
+    } as unknown as FileSystemWorkspaceTextStore;
+    const variants = [
+      [AgentInstructionSourceKind.GLYPH_PROJECT_RULE, 'Glyph project rule'],
+      [AgentInstructionSourceKind.GLYPH_USER_RULE, 'Glyph user rule'],
+      [AgentInstructionSourceKind.CURSOR_PROJECT_RULE, 'Cursor-compatible rule'],
+      [AgentInstructionSourceKind.AGENTS_MD, 'AGENTS.md'],
+    ] as const;
+    for (const [kind, expected] of variants) {
+      const provider = new AgentRuleInstructionProvider(
+        workspace,
+        { kind: kind as never, directory: '.glyph' },
+        async () => ({ files: ['/.glyph/rules/root.mdc'], truncated: false }),
+      );
+      expect((await provider.discover())[0]).toMatchObject({ label: expected, scope: '.' });
+    }
+
+    const invalid = new AgentRuleInstructionProvider(
+      workspace,
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+      async () => ({ files: ['rules/not-glyph.mdc'], truncated: false }),
+    );
+    await expect(invalid.discover()).resolves.toEqual([
+      expect.objectContaining({
+        status: AgentInstructionSourceStatus.ERROR,
+        message: expect.stringContaining('outside .glyph/rules'),
+      }),
+    ]);
+  });
+
+  it('uses the default discovery limit and resolves references relative to nested rule scope', async () => {
+    const workspace = {
+      normalizePath: (path: string) => path,
+      read: vi.fn(async () => ({
+        text: '---\nreferences: [docs.md]\n---\nNested',
+        revision: 'one',
+      })),
+      readOptional: vi.fn(async () => ({ text: 'Docs', revision: 'two' })),
+    } as unknown as FileSystemWorkspaceTextStore;
+    const provider = new AgentRuleInstructionProvider(
+      workspace,
+      { kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE, directory: '.cursor' },
+      async (maxFiles, pattern) => {
+        expect(maxFiles).toBe(10_000);
+        expect(pattern).toBe('**/.cursor/rules/*.mdc');
+        return { files: ['packages/api/.cursor/rules/test.mdc'], truncated: true };
+      },
+    );
+
+    const discovered = await provider.discover();
+    expect(workspace.readOptional).toHaveBeenCalledWith('packages/api/docs.md', {
+      maxBytes: 64 * 1024,
+      physicalByteBudget: expect.any(Number),
+    });
+    expect(discovered).toEqual([
+      expect.objectContaining({ scope: 'packages/api', references: ['packages/api/docs.md'] }),
+      expect.objectContaining({ message: 'Rule discovery exceeded the 10000-file limit.' }),
+    ]);
+  });
+});
+
+it('preserves distinct source identities on a case-sensitive project filesystem', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'glyph-case-sensitive-rule-'));
+  roots.push(root);
+  const { WorkspaceSourceRoutes } = await import('#src/workspace/WorkspaceSourceRoutes.js');
+  const paths = new InstructionPaths(true, new WorkspaceSourceRoutes([{ name: 'App', path: root }]));
+  await mkdir(join(root, '.glyph/rules'), { recursive: true });
+  await writeFile(join(root, '.glyph/rules/Rule.mdc'), 'Rules');
+  const provider = new AgentRuleInstructionProvider(fixtureWorkspace(root), {
+    kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+    directory: '.glyph',
+    paths,
+  });
+  const [rule] = await provider.discover();
+  expect(rule?.id).toMatch(/^glyph_project_rule:file:/u);
+  expect(rule?.legacyIds).toContain('glyph_project_rule:App/.glyph/rules/Rule.mdc');
+});

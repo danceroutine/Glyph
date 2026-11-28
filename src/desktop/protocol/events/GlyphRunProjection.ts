@@ -7,6 +7,7 @@ import type { GlyphAttachmentPreview } from './GlyphAttachmentPreview.ts';
 import type { GlyphToolActivity } from './GlyphToolActivity.ts';
 import type { GlyphQuestionRequest } from './GlyphQuestionRequest.ts';
 import type { GlyphApprovalRequest } from './GlyphApprovalRequest.ts';
+import type { GlyphTurnContext } from './GlyphTurnContext.ts';
 
 export enum GlyphRunStatus {
   STREAMING = 'streaming',
@@ -37,4 +38,5 @@ export interface GlyphRunProjection {
   readonly question?: GlyphQuestionRequest;
   readonly approval?: GlyphApprovalRequest;
   readonly terminalMessage?: string;
+  readonly context?: GlyphTurnContext;
 }

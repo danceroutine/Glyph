@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import {
   GlyphTransportMessageType,
@@ -13,6 +14,31 @@ export class EditorRpcRouter {
     string,
     { connectionId: string; resolve: (response: GlyphEditorResponse) => void; reject: (error: Error) => void }
   >();
+
+  private readonly mutationGrants = new Map<
+    string,
+    { readonly connectionId: string; readonly assertCurrent: () => Promise<void> }
+  >();
+
+  constructor(
+    readonly trustedUserEditors: (
+      owner: GlyphConnectionIdentity,
+      sourcePath?: string,
+      sourceAliases?: readonly string[],
+    ) => readonly { identity: GlyphConnectionIdentity; connectionId: string }[] = () => [],
+  ) {}
+
+  /** Revalidate the mutation endpoints and retain approval only while the issuing port still owns the pending RPC. */
+  async validateMutation(connectionId: string, grantId: string): Promise<boolean> {
+    const grant = this.mutationGrants.get(grantId);
+    if (!grant || grant.connectionId !== connectionId) return false;
+    try {
+      await grant.assertCurrent();
+      return this.mutationGrants.get(grantId) === grant;
+    } catch {
+      return false;
+    }
+  }
 
   connect(
     connectionId: string,
@@ -37,6 +63,7 @@ export class EditorRpcRouter {
     identity: GlyphConnectionIdentity,
     request: GlyphEditorRequest,
     signal?: AbortSignal,
+    assertMutation?: () => Promise<void>,
   ): Promise<GlyphEditorResponse> {
     const port = this.ports.get(key(identity));
     if (!port) return Promise.reject(new Error('The owning editor is unavailable.'));
@@ -47,11 +74,15 @@ export class EditorRpcRouter {
         : request.operationId;
     if (this.pending.has(operationId)) return Promise.reject(new Error('This editor operation is already pending.'));
     signal?.throwIfAborted();
+    const grantId = assertMutation ? randomUUID() : undefined;
+    if (grantId && assertMutation)
+      this.mutationGrants.set(grantId, { connectionId: port.connectionId, assertCurrent: assertMutation });
     return new Promise((resolve, reject) => {
       const cleanup = () => {
         clearTimeout(timeout);
         signal?.removeEventListener('abort', abort);
         this.pending.delete(operationId);
+        if (grantId) this.mutationGrants.delete(grantId);
       };
       const fail = (error: Error) => {
         cleanup();
@@ -73,7 +104,7 @@ export class EditorRpcRouter {
       });
       signal?.addEventListener('abort', abort, { once: true });
       try {
-        port.send({ type: GlyphTransportMessageType.EDITOR_REQUEST, request });
+        port.send({ type: GlyphTransportMessageType.EDITOR_REQUEST, request, ...(grantId ? { grantId } : {}) });
       } catch (error) {
         fail(error instanceof Error ? error : new Error(String(error)));
       }

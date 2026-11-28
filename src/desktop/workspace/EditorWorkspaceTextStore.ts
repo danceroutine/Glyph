@@ -50,8 +50,9 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     maxFiles: number,
     globPattern?: string,
     targetDirectory?: string,
+    signal?: AbortSignal,
   ): Promise<{ files: string[]; truncated: boolean }> {
-    return this.client.listPaths(maxFiles, globPattern, targetDirectory);
+    return this.client.listPaths(maxFiles, globPattern, targetDirectory, signal);
   }
 
   normalizePath(input: string): string {
@@ -69,14 +70,20 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     return this.client.canonicalPath(this.normalizePath(input));
   }
 
-  async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
+  async read(input: string, options: WorkspaceReadOptions = {}, signal?: AbortSignal): Promise<WorkspaceTextSnapshot> {
     const path = this.normalizePath(input);
-    const response = await this.client.request({
-      type: GlyphEditorRequestType.READ_SNAPSHOT,
-      operationId: randomUUID(),
-      path,
-      ...options,
-    });
+    const { retainAccess, source, ...limits } = options;
+    const response = await this.client.request(
+      {
+        type: GlyphEditorRequestType.READ_SNAPSHOT,
+        operationId: randomUUID(),
+        path,
+        ...limits,
+      },
+      signal,
+      retainAccess,
+      source,
+    );
     const snapshot = requireSnapshot(response, path);
     return this.remember(snapshot);
   }
@@ -97,12 +104,18 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
 
   async readOptional(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot | undefined> {
     const path = this.normalizePath(input);
-    const response = await this.client.request({
-      type: GlyphEditorRequestType.READ_SNAPSHOT,
-      operationId: randomUUID(),
-      path,
-      ...options,
-    });
+    const { retainAccess, source, ...limits } = options;
+    const response = await this.client.request(
+      {
+        type: GlyphEditorRequestType.READ_SNAPSHOT,
+        operationId: randomUUID(),
+        path,
+        ...limits,
+      },
+      undefined,
+      retainAccess,
+      source,
+    );
     if (!response.ok && response.error?.code === GlyphDesktopErrorCode.NOT_FOUND) return undefined;
     return this.remember(requireSnapshot(response, path));
   }

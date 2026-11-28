@@ -39,9 +39,12 @@ struct RequestEnvelope {
 #[derive(Debug)]
 enum Request {
     Initialize(InitializeParams),
+    FilesystemCaseSensitive(String),
+    FilesystemNamePolicy(String),
     Search(SearchParams),
     Glob(GlobParams),
     FilterPaths(Vec<String>),
+    AssertReplaceableMetadata(String),
     ContentSearch(ContentSearchParams),
     Cancel(CancelParams),
     Refresh,
@@ -277,11 +280,29 @@ fn service_loop(
             WorkItem::Request(decoded) => {
                 let id = Some(decoded.id.clone());
                 match decoded.request {
+                    Request::FilesystemNamePolicy(root) => (
+                        result_response(
+                            id,
+                            crate::service::filesystem_name_policy(std::path::Path::new(&root)),
+                        ),
+                        false,
+                    ),
+                    Request::FilesystemCaseSensitive(root) => (
+                        result_response(
+                            id,
+                            crate::service::filesystem_case_sensitive(std::path::Path::new(&root)),
+                        ),
+                        false,
+                    ),
                     Request::Initialize(params) => {
                         (result_response(id, service.initialize(params)), false)
                     }
                     Request::Search(params) => (
                         result_response(id, service.search(params, latest_generation)),
+                        false,
+                    ),
+                    Request::AssertReplaceableMetadata(name) => (
+                        result_response(id, service.assert_replaceable_metadata(name)),
                         false,
                     ),
                     Request::FilterPaths(paths) => {
@@ -393,6 +414,16 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
     }
 
     let request = match envelope.method.as_str() {
+        "filesystemNamePolicy" => Request::FilesystemNamePolicy(decode_params(
+            "filesystemNamePolicy",
+            envelope.params,
+            Some(envelope.id.clone()),
+        )?),
+        "filesystemCaseSensitive" => Request::FilesystemCaseSensitive(decode_params(
+            "filesystemCaseSensitive",
+            envelope.params,
+            Some(envelope.id.clone()),
+        )?),
         "initialize" => Request::Initialize(decode_params(
             "initialize",
             envelope.params,
@@ -400,6 +431,11 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
         )?),
         "search" => Request::Search(decode_params(
             "search",
+            envelope.params,
+            Some(envelope.id.clone()),
+        )?),
+        "assertReplaceableMetadata" => Request::AssertReplaceableMetadata(decode_params(
+            "assertReplaceableMetadata",
             envelope.params,
             Some(envelope.id.clone()),
         )?),

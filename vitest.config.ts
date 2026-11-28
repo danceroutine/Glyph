@@ -15,6 +15,10 @@ const codeOssAliases: Plugin = {
       return resolve(root, 'code-oss/ui/mountGlyphWorkbench.tsx');
     if (id.startsWith('#glyph/protocol/')) return resolve(root, 'src/desktop/protocol', typescript(id.slice(16)));
     if (id.startsWith('#glyph/workbench/')) return resolve(root, 'src/desktop/workbench', typescript(id.slice(17)));
+    if (id === '#vs/platform/glyph/workspace/FilesystemNamePolicy.js')
+      return resolve(root, 'src/workspace/FilesystemNamePolicy.ts');
+    if (id === '#vs/platform/glyph/instructions/resolveInstructionId.js')
+      return resolve(root, 'src/instructions/resolveInstructionId.ts');
     if (id === '#vs/platform/glyph/reviewing/AgentReview.js') return resolve(root, 'src/reviewing/AgentReview.ts');
     if (id === '#vs/platform/glyph/chat/AgentMode.js') return resolve(root, 'src/chat/AgentMode.ts');
     if (id.startsWith('#vs/')) {

@@ -176,6 +176,7 @@ export class ChatSession {
     let reasoningSummary = '';
     const tools = new Map<string, ChatToolSummary>();
     const recordingResponse: ChatResponseStream = {
+      ...(response.onTurnAdmitted ? { onTurnAdmitted: response.onTurnAdmitted } : {}),
       push: part => {
         switch (part.type) {
           case ChatResponsePartType.TEXT:
@@ -246,12 +247,15 @@ export class ChatSession {
           ...(request.annotations ? { annotations: request.annotations } : {}),
           ...(request.planBuild ? { planBuild: request.planBuild } : {}),
           ...(request.planProgress ? { planProgress: request.planProgress } : {}),
+          ...(request.referenceSpans ? { referenceSpans: request.referenceSpans } : {}),
+          ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
         },
         attachmentPaths: request.attachments.map(attachment => attachment.path),
         ...(request.attachments.length > 0 ? { attachments: request.attachments } : {}),
         assistantText,
         reasoningSummary,
         ...(result.usage ? { usage: result.usage } : {}),
+        ...(result.context ? { context: result.context } : {}),
         tools: [...tools.values()],
         createdAt: new Date().toISOString(),
       });

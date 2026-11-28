@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -7,7 +8,6 @@ import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
 import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { EditingE2EHarness } from './fixtures/EditingE2EHarness.ts';
 import { ScriptedOpenAIResponsesFixture } from './fixtures/ScriptedOpenAIResponsesFixture.ts';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
@@ -443,7 +443,7 @@ describe('staged editing loop', () => {
       await writeFile(join(harness.projectRoot, 'file.txt'), 'collaborator\n');
       await writeFile(join(harness.projectRoot, 'unrelated.txt'), 'collaborator unrelated\n');
       const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(harness.projectRoot),
+        fixtureWorkspace(harness.projectRoot),
         new FileProposalReviewStore(harness.stateRoot),
         harness.logger,
       );

@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { PlanUpdate } from '#src/planning/PlanSchema.js';
 import type { TodoUpdate } from '#src/todos/TodoUpdate.js';
@@ -319,7 +320,9 @@ export class GlyphService {
   async resolveChatRequest(text: string, references: readonly ContextAttachmentReference[] = []): Promise<ChatRequest> {
     if (references.length === 0) return { text, attachments: [] };
     if (!this.contextAttachments) throw new Error('This host does not support workspace context attachments.');
-    return { text, attachments: await this.contextAttachments.resolve(references) };
+    const disclosure = new WorkspaceDisclosure();
+    const attachments = await this.contextAttachments.resolve(references, disclosure);
+    return { text, attachments, ...(disclosure.hasSources && { disclosure }) };
   }
 
   setTraceEnabled(enabled: boolean): void {

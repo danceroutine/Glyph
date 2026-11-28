@@ -1,8 +1,12 @@
+import type { ChatReferenceSpan } from '#src/chat/ChatTurnOptions.js';
 import type { GlyphComposerCommand } from './GlyphComposerCommand.ts';
 import { AgentMode } from '#src/chat/AgentMode.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphAnnotation, GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
-import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import {
+  GlyphContextAttachmentKind,
+  type GlyphContextAttachment,
+} from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { replaceGlyphPromptRange, toGlyphPromptText, type GlyphPromptDocument } from './GlyphPromptDocument.ts';
 export interface GlyphAnnotationPosition {
   /** Optional editor-owned mount point that reserves space in the source view. */
@@ -181,12 +185,31 @@ export class GlyphComposerState {
     this.setDocument({ ...document, parts, from, to });
   }
 
-  /** Revalidate context metadata without changing captured text, selection, or queue order. */
-  mapAttachments(map: (attachment: GlyphContextAttachment) => GlyphContextAttachment): void {
+  /** Rebind captures in the current drafts and queue, including edits made while an outline revision is computed. */
+  async mapAttachments(
+    map: (attachment: GlyphContextAttachment) => GlyphContextAttachment | Promise<GlyphContextAttachment>,
+  ): Promise<void> {
+    const mapped = new Map<GlyphContextAttachment, GlyphContextAttachment>();
+    for (;;) {
+      const documents = [this.value.document, ...this.documents, ...this.value.queued.map(message => message.document)];
+      const pending = new Set(
+        documents.flatMap(document =>
+          document.parts.flatMap(part =>
+            part.type === 'attachment' && !mapped.has(part.attachment) ? [part.attachment] : [],
+          ),
+        ),
+      );
+      if (pending.size === 0) break;
+      await Promise.all(
+        [...pending].map(async attachment => {
+          mapped.set(attachment, await map(attachment));
+        }),
+      );
+    }
     const transform = (document: GlyphPromptDocument): GlyphPromptDocument => ({
       ...document,
       parts: document.parts.map(part =>
-        part.type === 'attachment' ? { ...part, attachment: map(part.attachment) } : part,
+        part.type === 'attachment' ? { ...part, attachment: mapped.get(part.attachment)! } : part,
       ),
     });
     this.documents = this.documents.map(transform);
@@ -332,12 +355,50 @@ export class GlyphComposerState {
 /** Both queued and direct sends preserve the same exact captures and UTF-16 spans. */
 async function sendDocument(document: GlyphPromptDocument, send: SendMessage): Promise<void> {
   const draft = toGlyphPromptText(document.parts);
-  const attachments = document.parts.flatMap(part => (part.type === 'attachment' ? [part.attachment] : []));
-  let offset = -(draft.length - draft.trimStart().length);
-  const attachmentSpans = document.parts.flatMap(part => {
+  const { attachments, attachmentSpans, referenceSpans } = captureGlyphPrompt(
+    document,
+    draft.trimStart().length - draft.length,
+  );
+  // Both direct and queued submissions carry options from stamp().
+  const {
+    manualRuleIds: _ruleIds,
+    referenceSpans: _references,
+    attachmentSpans: _spans,
+    ...options
+  } = document.options!;
+  await send(draft, attachments, {
+    ...options,
+    ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}),
+    ...(referenceSpans.length > 0
+      ? { referenceSpans, manualRuleIds: [...new Set(referenceSpans.map(ref => ref.sourceId))] }
+      : {}),
+  });
+}
+
+/** Collect source identities and exact UTF-16 mention positions, independently of selected text or captured file bodies. */
+export function captureGlyphPrompt(document: GlyphPromptDocument, offset = 0) {
+  const attachments: GlyphContextAttachment[] = [];
+  const attachmentSpans: { from: number; to: number }[] = [];
+  const referenceSpans: ChatReferenceSpan[] = [];
+  for (const part of document.parts) {
     const from = offset;
     offset += toGlyphPromptText([part]).length;
-    return part.type === 'attachment' ? [{ from, to: offset }] : [];
-  });
-  await send(draft, attachments, { ...document.options, ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}) });
+    if (part.type === 'text') continue;
+    const attachment = part.attachment;
+    if (attachment.kind === GlyphContextAttachmentKind.RULE) {
+      if (attachment.ruleId)
+        referenceSpans.push({
+          kind: 'rule',
+          sourceId: attachment.ruleId,
+          label: attachment.path,
+          revision: attachment.contentRevision,
+          from,
+          to: offset,
+        });
+    } else {
+      attachments.push(attachment);
+      attachmentSpans.push({ from, to: offset });
+    }
+  }
+  return { attachments, attachmentSpans, referenceSpans };
 }

@@ -32,14 +32,18 @@ interface UtilityProcess extends NodeJS.Process {
 const parentPort = (process as UtilityProcess).parentPort;
 if (!parentPort) throw new Error('The Glyph desktop host must run as an Electron utility process.');
 
-const editors = new EditorRpcRouter();
+const editors = new EditorRpcRouter((owner, sourcePath, aliases) =>
+  host.trustedUserEditors(owner, sourcePath, aliases),
+);
 const transport =
   process.env.GLYPH_DESKTOP_TEST_RUNTIME === 'scripted'
     ? new ScriptedDesktopTransport(process.env.GLYPH_DESKTOP_TEST_PROVIDER_URL ?? '').fetch
     : undefined;
-const production = new OpenAIDesktopRuntimeFactory(editors, transport);
-const host = new GlyphDesktopHost(
-  process.env.GLYPH_DESKTOP_TEST_RUNTIME === 'deterministic' ? new DeterministicDesktopRuntimeFactory() : production,
+const production = new OpenAIDesktopRuntimeFactory(editors, transport, process.env.GLYPH_USER_DIRECTORY);
+const host: GlyphDesktopHost = new GlyphDesktopHost(
+  process.env.GLYPH_DESKTOP_TEST_RUNTIME === 'deterministic'
+    ? new DeterministicDesktopRuntimeFactory(production)
+    : production,
 );
 parentPort.on('message', event => {
   const payload = event.data;
@@ -76,6 +80,18 @@ parentPort.on('message', event => {
     });
     port.on('message', message => {
       const data = message.data;
+      if (
+        isRecord(data) &&
+        data.type === GlyphTransportMessageType.CHECK_EDITOR_MUTATION &&
+        typeof data.requestId === 'string' &&
+        typeof data.grantId === 'string'
+      ) {
+        const requestId = data.requestId;
+        void editors.validateMutation(connectionId, data.grantId).then(ok => {
+          if (registered) port.postMessage({ type: GlyphTransportMessageType.EDITOR_MUTATION_CHECKED, requestId, ok });
+        });
+        return;
+      }
       if (
         isRecord(data) &&
         data.type === GlyphTransportMessageType.EDITOR_RESPONSE &&

@@ -13,14 +13,10 @@ pub(crate) struct GlobResult {
     pub(crate) truncated: bool,
 }
 
-pub(crate) fn find_matches(
-    paths: &BTreeSet<String>,
+pub(crate) fn compile_matcher(
     pattern: &str,
-    target_directory: Option<&str>,
-    limit: usize,
     case_sensitive: bool,
-    index_truncated: bool,
-) -> Result<GlobResult, String> {
+) -> Result<globset::GlobMatcher, String> {
     if pattern.is_empty() {
         return Err("pattern must not be empty.".to_owned());
     }
@@ -34,12 +30,24 @@ pub(crate) fn find_matches(
     } else {
         format!("**/{pattern}")
     };
-    let matcher = GlobBuilder::new(&normalized_pattern)
+    Ok(GlobBuilder::new(&normalized_pattern)
         .literal_separator(true)
         .case_insensitive(!case_sensitive)
         .build()
         .map_err(|error| format!("pattern is not a valid glob: {error}"))?
-        .compile_matcher();
+        .compile_matcher())
+}
+
+pub(crate) fn find_matches(
+    paths: &BTreeSet<String>,
+    pattern: &str,
+    target_directory: Option<&str>,
+    root_files_only: bool,
+    limit: usize,
+    case_sensitive: bool,
+    index_truncated: bool,
+) -> Result<GlobResult, String> {
+    let matcher = compile_matcher(pattern, case_sensitive)?;
     let directory_prefix = target_directory.map(|directory| {
         let prefix = format!("{directory}/");
         if case_sensitive {
@@ -73,7 +81,7 @@ pub(crate) fn find_matches(
             }
             None => Cow::Borrowed(path.as_str()),
         };
-        if !matcher.is_match(candidate.as_ref()) {
+        if (root_files_only && candidate.contains('/')) || !matcher.is_match(candidate.as_ref()) {
             continue;
         }
         if files.len() == limit {

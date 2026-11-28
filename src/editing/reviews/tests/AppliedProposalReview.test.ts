@@ -1,13 +1,12 @@
+import { fixtureWorkspace, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
 import { ProjectToolName } from '#src/project/ProjectToolName.js';
-import { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
@@ -25,7 +24,7 @@ async function fixture(initial = 'one\nmiddle\nthree\n') {
   const root = await mkdtemp(join(tmpdir(), 'glyph-applied-'));
   directories.push(root);
   await writeFile(join(root, 'file.txt'), initial);
-  const workspace = new FileSystemWorkspaceTextStore(root);
+  const workspace = fixtureWorkspace(root);
   const store = new FileProposalReviewStore(join(root, '.reviews'));
   const manager = new ProposalReviewManager(workspace, store, new NullLogger(), 1, root, { autoApply: true });
   const service = new EditProposalService(workspace, new JsDiffTextDiffer(), {
@@ -187,7 +186,7 @@ describe('Immediate edits with Keep/Revert review', () => {
 
 it('tells the agent edits are applied and lets its next read observe them', async () => {
   const { root, workspace, service, manager } = await fixture();
-  const runtime = new ProjectToolRuntime(new ProjectAccess(root, {}, workspace), service, manager);
+  const runtime = new ProjectToolRuntime(fixtureProjectAccess(root, {}, workspace), service, manager);
   const revision = (await workspace.read('file.txt')).revision;
   const result = JSON.parse(
     await runtime.execute(

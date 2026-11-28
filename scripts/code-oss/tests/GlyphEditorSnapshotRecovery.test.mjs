@@ -3,6 +3,9 @@ import { resolve } from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { importBundle } from '#scripts/code-oss/tests/support/bundle.mjs';
 
+// The fixture host keeps its grant live while the workbench checks the document and workspace.
+const checkMutation = async () => {};
+
 /**
  * @typedef {{
  *   EditorWorkspaceTextStore: typeof import('#src/desktop/workspace/EditorWorkspaceTextStore.js').EditorWorkspaceTextStore,
@@ -53,6 +56,7 @@ beforeAll(async () => {
           builder.onResolve({ filter: /^#vs\// }, args => {
             if (
               args.path.startsWith('#vs/base/') ||
+              args.path === '#vs/platform/glyph/workspace/FilesystemNamePolicy.js' ||
               args.path.startsWith('#vs/platform/uriIdentity/') ||
               args.path === '#vs/platform/files/common/files.js' ||
               args.path === '#vs/workbench/services/textfile/common/textfiles.js'
@@ -65,7 +69,7 @@ beforeAll(async () => {
             loader: 'js',
             contents: `
               const service = () => {};
-              export { service as IModelService, service as IWorkspaceTrustManagementService,
+              export { service as IModelService, service as IWorkspaceTrustManagementService, service as IWorkingCopyService, service as IPathService,
                 service as IBulkEditService, service as ITextModelService, service as IWorkspaceContextService,
                 service as IUserDataProfileService, service as IInstantiationService };
         export const Progress = { None: {} };
@@ -132,7 +136,7 @@ describe('Editor snapshot recovery', () => {
     const workspace = new api.EditorWorkspaceTextStore('/workspace', false, {
       canonicalPath: async path => `/workspace/${path}`,
       listPaths: async () => ({ files: ['a.ts'], truncated: false }),
-      request: request => fixture.adapter.handle(request),
+      request: request => fixture.adapter.handle(request, checkMutation),
     });
     try {
       const initial = await workspace.read('a.ts');
@@ -244,18 +248,21 @@ describe('Canonical editor snapshot identities', () => {
     const fixture = editorFixture();
     try {
       const before = await fixture.adapter.read('a.ts', 4);
-      const result = await fixture.adapter.handle({
-        type: 'apply_text_mutation',
-        mutation: {
-          operationId: 'canonical-edit',
-          path: 'A.TS',
-          text: 'edited',
-          byteOrderMark: false,
-          undoGroupId: 'canonical-edit',
-          expectedContentRevision: before.contentRevision,
-          expectedToken: before.token,
+      const result = await fixture.adapter.handle(
+        {
+          type: 'apply_text_mutation',
+          mutation: {
+            operationId: 'canonical-edit',
+            path: 'A.TS',
+            text: 'edited',
+            byteOrderMark: false,
+            undoGroupId: 'canonical-edit',
+            expectedContentRevision: before.contentRevision,
+            expectedToken: before.token,
+          },
         },
-      });
+        checkMutation,
+      );
       expect(result).toMatchObject({ ok: true, snapshot: { text: 'edited' }, receipt: { state: 'applied' } });
       expect(result.snapshot.token.resource).toBe(before.token.resource);
       expect(result.snapshot.token.incarnation).toBe(before.token.incarnation);
@@ -296,18 +303,21 @@ describe('Canonical editor snapshot identities', () => {
         }
         return reference;
       });
-      const result = await fixture.adapter.handle({
-        type: 'apply_text_mutation',
-        mutation: {
-          operationId: 'other-edit',
-          path: 'A.TS',
-          text: 'edited',
-          byteOrderMark: false,
-          undoGroupId: 'other-edit',
-          expectedContentRevision: before.contentRevision,
-          expectedToken: before.token,
+      const result = await fixture.adapter.handle(
+        {
+          type: 'apply_text_mutation',
+          mutation: {
+            operationId: 'other-edit',
+            path: 'A.TS',
+            text: 'edited',
+            byteOrderMark: false,
+            undoGroupId: 'other-edit',
+            expectedContentRevision: before.contentRevision,
+            expectedToken: before.token,
+          },
         },
-      });
+        checkMutation,
+      );
       expect(result).toMatchObject({ ok: false, error: { code: 'STALE_DOCUMENT' } });
       expect(fixture.apply).not.toHaveBeenCalled();
     } finally {

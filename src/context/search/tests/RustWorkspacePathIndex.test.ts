@@ -1,3 +1,8 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+import { ProjectAccess } from '#src/project/ProjectAccess.js';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+import { fixtureWorkspace, fixtureIndex } from '#src/workspace/tests/fixtures/workspaceAccess.js';
+import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { EventEmitter, once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -5,11 +10,362 @@ import { join } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 
 describe(RustWorkspacePathIndex, () => {
+  describe('live host boundaries', () => {
+    it('carries only the editor and disk sources that supplied match text to the provider', async () => {
+      const signal = new AbortController().signal;
+      const editor = new WorkspaceDisclosure();
+      const current = vi.fn();
+      editor.retain(current);
+      let editorReceipt = true;
+      let diskIdentity: string | undefined = '1:2';
+      const match = {
+        line: 1,
+        column: 1,
+        endLine: 1,
+        endColumn: 6,
+        lineText: 'match',
+        matchedText: 'match',
+        linesBefore: [],
+        linesAfter: [],
+      };
+      const worker = new FakeWorker(request => {
+        if (request.method === 'initialize') return indexState(2);
+        if (request.method === 'shutdown') return { shutdown: true };
+        expect(request.params).toHaveProperty('includeSourceIdentity', true);
+        return {
+          outputMode: 'content',
+          matches: [
+            { path: 'open.md', ...match },
+            { path: 'disk.md', ...match, sourceIdentity: diskIdentity },
+          ],
+          searchedFiles: 2,
+          skippedFiles: 0,
+          indexTruncated: false,
+          truncated: false,
+          nextOffset: null,
+        };
+      });
+      const index = fixtureIndex(
+        {
+          binaryPath: '/bin/index',
+          root: '/project',
+          readContentOverrides: async (_signal, sources) => {
+            if (editorReceipt) sources!.retain('open.md', editor);
+            return { 'open.md': 'match' };
+          },
+        },
+        () => worker,
+      );
+      onTestFinished(() => index.dispose());
+      const pins = [{ path: '/project/disk.md', origin: 'disk route', identity: '1:2' }];
+      const authority = { capture: vi.fn(async () => pins), authorize: vi.fn(async () => () => {}) };
+      const access = new ProjectAccess(fixtureWorkspace('/project'), index, {}, undefined, authority);
+      const retain = vi.fn<NonNullable<ToolExecutionContext['retainResultAccess']>>();
+      const search = () =>
+        access.execute(
+          'search_project_contents',
+          JSON.stringify({
+            pattern: 'match',
+            pattern_kind: 'literal',
+            path: null,
+            file_glob: null,
+            file_type: null,
+            output_mode: 'content',
+            lines_before: 0,
+            lines_after: 0,
+            case_sensitive: true,
+            multiline: false,
+            limit: 10,
+            offset: 0,
+          }),
+          signal,
+          { retainResultAccess: retain },
+        );
+      const text = await search();
+      expect(JSON.parse(text)).toMatchObject({
+        matches: [
+          { path: 'open.md', ...match },
+          { path: 'disk.md', ...match },
+        ],
+      });
+      expect(authority.capture).toHaveBeenCalledWith(['/project/disk.md'], signal);
+      const authorize = retain.mock.calls[0]![1]!;
+      (await authorize(signal))();
+      expect(authority.authorize).toHaveBeenCalledWith(pins, signal);
+      current.mockImplementation(() => {
+        throw new Error('Editor closed');
+      });
+      await expect(authorize(signal)).rejects.toThrow('Editor closed');
+      editorReceipt = false;
+      expect(await search()).toContain('editor search source is unavailable');
+      editorReceipt = true;
+      diskIdentity = undefined;
+      expect(await search()).toContain('worker did not identify the matching file');
+    });
+
+    it('rebuilds cached workers and rejects old in-flight results when another profile is admitted', async () => {
+      let privatePaths = ['/private/old.json'];
+      const policy = new WorkspaceAccessPolicy({}, () => privatePaths);
+      const state = { root: '/project', fileCount: 1, fromCache: false, truncated: false, durationMilliseconds: 1 };
+      const workers: FakeWorker[] = [];
+      const index = fixtureIndex(
+        { binaryPath: '/fixture', root: '/project', accessPolicy: policy, excludedPaths: ['cache'] },
+        () => {
+          const worker = new FakeWorker(request =>
+            request.method === 'shutdown' ? { shutdown: true } : request.method === 'initialize' ? state : NO_RESPONSE,
+          );
+          workers.push(worker);
+          return worker;
+        },
+      );
+      try {
+        await index.initialize();
+        const pending = index.glob('**', { limit: 10 }).catch((error: unknown) => error);
+        privatePaths = [...privatePaths, '/project/profile/skill-state.json'];
+        const next = index.initialize();
+        await expect(pending).resolves.toMatchObject({ message: expect.stringContaining('private paths changed') });
+        await next;
+        expect(workers).toHaveLength(2);
+        expect(workers[1]!.requests[0]!.params).toMatchObject({
+          excludedPaths: ['cache', 'profile/skill-state.json'],
+          privatePaths: [...privatePaths, '/project/cache'],
+        });
+        privatePaths = ['/project'];
+        await index.initialize();
+        expect(workers[2]!.requests[0]!.params).toMatchObject({ excludeRoot: true });
+        privatePaths = [];
+        await index.refresh();
+        expect(workers[3]!.requests[0]!.params).not.toHaveProperty('excludeRoot');
+      } finally {
+        await index.dispose();
+      }
+    });
+
+    it('discards a response and editor overrides captured under a superseded policy', async () => {
+      let paths: string[] = [];
+      const state = { root: '/project', fileCount: 0, fromCache: false, truncated: false, durationMilliseconds: 1 };
+      const workers: FakeWorker[] = [];
+      const index = fixtureIndex(
+        {
+          binaryPath: '/fixture',
+          root: '/project',
+          accessPolicy: new WorkspaceAccessPolicy({}, () => paths),
+          readContentOverrides: async () => {
+            paths = ['/project/new-private'];
+            return {};
+          },
+        },
+        () => {
+          const worker = new FakeWorker(request =>
+            request.method === 'shutdown' ? { shutdown: true } : request.method === 'initialize' ? state : NO_RESPONSE,
+          );
+          workers.push(worker);
+          return worker;
+        },
+      );
+      try {
+        await index.initialize();
+        const result = index.glob('**', { limit: 10 });
+        const original = workers[0]!.requests.at(-1)!;
+        paths = ['/project/secret'];
+        workers[0]!.stdout.write(
+          JSON.stringify({ version: 1, id: original.id, result: { files: ['secret'], truncated: false } }) + '\n',
+        );
+        await expect(result).rejects.toThrow('private paths changed');
+        await expect(index.searchContents('text', { outputMode: 'content' })).rejects.toThrow(
+          'Workspace access changed',
+        );
+        expect(workers[1]!.requests.map(message => message.method)).toEqual(['initialize']);
+      } finally {
+        await index.dispose();
+      }
+    });
+
+    it.each(['initialize', 'refresh'] as const)(
+      'discards a decoded %s result if the replacement worker fails initialization',
+      async method => {
+        let paths: string[] = [];
+        const workers: FakeWorker[] = [];
+        const index = fixtureIndex(
+          { binaryPath: '/fixture', root: '/project', accessPolicy: new WorkspaceAccessPolicy({}, () => paths) },
+          () => {
+            const worker = new FakeWorker(request =>
+              request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE,
+            );
+            workers.push(worker);
+            return worker;
+          },
+        );
+        onTestFinished(() => index.dispose());
+        const reply = (worker: FakeWorker, result: Record<string, unknown>) => {
+          worker.stdout.write(JSON.stringify({ version: 1, id: worker.requests.at(-1)!.id, ...result }) + '\n');
+        };
+        if (method === 'refresh') {
+          const initial = index.initialize();
+          reply(workers[0]!, { result: indexState(1) });
+          await initial;
+        }
+        const old = index[method]();
+        reply(workers[0]!, { result: indexState(2) });
+        paths = ['/project/new'];
+        const replacement = index.initialize();
+        reply(workers[1]!, { error: { code: 'INITIALIZATION_FAILED', message: 'temporarily unavailable' } });
+        const [oldResult, replacementResult] = await Promise.allSettled([old, replacement]);
+        expect(oldResult).toMatchObject({ status: 'rejected' });
+        expect(replacementResult).toMatchObject({ status: 'rejected', reason: { message: 'temporarily unavailable' } });
+        const retry = index.initialize();
+        expect(workers[1]!.requests.map(request => request.method)).toEqual(['initialize', 'initialize']);
+        reply(workers[1]!, { result: indexState(3) });
+        await expect(retry).resolves.toEqual(indexState(3));
+      },
+    );
+
+    it('withholds a decoded result when the host reserves it before delivery', async () => {
+      let paths: string[] = [];
+      const worker = new FakeWorker(req =>
+        req.method === 'initialize' ? indexState(1) : req.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE,
+      );
+      const index = fixtureIndex(
+        { root: '/project', binaryPath: '/fixture', accessPolicy: new WorkspaceAccessPolicy({}, () => paths) },
+        () => worker,
+      );
+      onTestFinished(() => index.dispose());
+      await index.initialize();
+      const result = index.glob('**', { limit: 2 });
+      worker.stdout.write(
+        JSON.stringify({
+          version: 1,
+          id: worker.requests.at(-1)!.id,
+          result: { files: ['receipt'], truncated: false },
+        }) + '\n',
+      );
+      paths = ['/project/receipt'];
+      await expect(result).rejects.toThrow('access changed');
+    });
+
+    it('rejects a staged query if policy changes as its request parameters are read', async () => {
+      let paths: string[] = [];
+      const worker = new FakeWorker(req => (req.method === 'initialize' ? indexState(1) : { shutdown: true }));
+      const index = fixtureIndex(
+        { root: '/project', binaryPath: '/fixture', accessPolicy: new WorkspaceAccessPolicy({}, () => paths) },
+        () => worker,
+      );
+      await index.initialize();
+      await expect(
+        index.search('name', {
+          get generation() {
+            paths = ['/new'];
+            return 1;
+          },
+        }),
+      ).rejects.toThrow('private paths changed');
+      expect(worker.requests.map(r => r.method)).toEqual(['initialize']);
+      await index.dispose();
+    });
+    it('checks a newly admitted policy before caching an initialization response', async () => {
+      let paths: string[] = [];
+      const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
+      const index = fixtureIndex(
+        { binaryPath: '/fixture', root: '/project', accessPolicy: new WorkspaceAccessPolicy({}, () => paths) },
+        () => worker,
+      );
+      onTestFinished(() => index.dispose());
+      const pending = index.initialize();
+      worker.stdout.write(JSON.stringify({ version: 1, id: worker.requests[0]!.id, result: indexState(2) }) + '\n');
+      paths = ['/project/new'];
+      await expect(pending).rejects.toThrow('changed');
+    });
+
+    it('does not let a superseded initialization clear or publish its replacement', async () => {
+      let paths: string[] = [];
+      const state = { root: '/project', fileCount: 0, fromCache: false, truncated: false, durationMilliseconds: 1 };
+      const workers: FakeWorker[] = [];
+      const index = fixtureIndex(
+        { binaryPath: '/fixture', root: '/project', accessPolicy: new WorkspaceAccessPolicy({}, () => paths) },
+        () => {
+          const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
+          workers.push(worker);
+          return worker;
+        },
+      );
+      try {
+        const first = index.initialize().catch((error: unknown) => error);
+        paths = ['/project/profile'];
+        const replacement = index.initialize();
+        await expect(first).resolves.toBeInstanceOf(Error);
+        const duplicate = index.initialize();
+        expect(workers).toHaveLength(2);
+        expect(workers[1]!.requests).toHaveLength(1);
+        const request = workers[1]!.requests[0]!;
+        workers[1]!.stdout.write(JSON.stringify({ version: 1, id: request.id, result: state }) + '\n');
+        await expect(replacement).resolves.toEqual(state);
+        await expect(duplicate).resolves.toEqual(state);
+      } finally {
+        await index.dispose();
+      }
+    });
+  });
+
   describe('protocol', () => {
+    it('obtains the native filesystem case policy without starting indexing or a watcher', async () => {
+      for (const value of [false, true, null]) {
+        const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : value));
+        const result = RustWorkspacePathIndex.filesystemCaseSensitive('/fixture', '/volume', () => worker);
+        if (value === null) await expect(result).rejects.toThrow();
+        else await expect(result).resolves.toBe(value);
+        expect(worker.requests.map(request => request.method)).toEqual(['filesystemCaseSensitive', 'shutdown']);
+      }
+    });
+    it('obtains both filename policies from the native volume before indexing', async () => {
+      const value = { caseSensitive: true, foldsUnicode: false, normalizesUnicode: true };
+      const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : value));
+      await expect(RustWorkspacePathIndex.filesystemNamePolicy('/fixture', '/volume', () => worker)).resolves.toEqual(
+        value,
+      );
+      expect(worker.requests.map(request => request.method)).toEqual(['filesystemNamePolicy', 'shutdown']);
+    });
+    it('sends relative host exclusions and explicitly marks directly attached private roots', async () => {
+      for (const [root, expected] of [
+        ['/project', { excludedPaths: ['public/cache'] }],
+        ['/project/.skill-staging/backup', { excludeRoot: true, excludedPaths: ['public/cache'] }],
+      ] as const) {
+        const worker = new FakeWorker(request =>
+          request.method === 'shutdown'
+            ? { shutdown: true }
+            : {
+                root,
+                fileCount: 0,
+                fromCache: false,
+                truncated: false,
+                durationMilliseconds: 1,
+              },
+        );
+        const index = fixtureIndex(
+          {
+            root,
+            binaryPath: '/fixture',
+            caseSensitive: false,
+            excludedPaths: ['public/cache'],
+            accessPolicy: new WorkspaceAccessPolicy({}, ['/PROJECT/profile/skill-state.json']),
+          },
+          () => worker,
+        );
+        try {
+          await index.initialize();
+          expect(worker.requests[0]?.params).toMatchObject(expected);
+          expect(worker.requests[0]?.params).toMatchObject({
+            privatePaths: ['/PROJECT/profile/skill-state.json', join(root, 'public/cache')],
+          });
+        } finally {
+          await index.dispose();
+        }
+      }
+    });
     it('starts a clean response stream after a worker dies mid-message and ignores late old-worker data', async () => {
       const old = new FakeWorker(() => NO_RESPONSE);
       const next = new FakeWorker(request =>
@@ -24,7 +380,7 @@ describe(RustWorkspacePathIndex, () => {
             },
       );
       let starts = 0;
-      const index = new RustWorkspacePathIndex({ binaryPath: '/fixture', root: '/project', cachePath: '/cache' }, () =>
+      const index = fixtureIndex({ binaryPath: '/fixture', root: '/project', cachePath: '/cache' }, () =>
         starts++ === 0 ? old : next,
       );
       const initial = index.initialize().catch((error: unknown) => error);
@@ -41,10 +397,7 @@ describe(RustWorkspacePathIndex, () => {
     });
     it('consumes worker stdin errors and rejects outstanding requests instead of crashing the host', async () => {
       const worker = new FakeWorker(() => NO_RESPONSE);
-      const index = new RustWorkspacePathIndex(
-        { binaryPath: '/fixture', root: '/project', cachePath: '/cache' },
-        () => worker,
-      );
+      const index = fixtureIndex({ binaryPath: '/fixture', root: '/project', cachePath: '/cache' }, () => worker);
       const pending = index.initialize().catch((error: unknown) => error);
       try {
         expect(() => worker.stdin.emit('error', new Error('EPIPE'))).not.toThrow();
@@ -112,7 +465,7 @@ describe(RustWorkspacePathIndex, () => {
             throw new Error(`Unexpected method ${request.method}`);
         }
       });
-      const search = new RustWorkspacePathIndex(
+      const search = fixtureIndex(
         {
           binaryPath: '/bin/glyph-context-index',
           root: '/project',
@@ -173,6 +526,7 @@ describe(RustWorkspacePathIndex, () => {
               'target',
             ],
             excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
+            privatePaths: ['/project/.glyph-state', '/project/logs/provider.jsonl'],
             sensitiveFileNames: ['.git-credentials', '.netrc', '.npmrc', '.pypirc'],
             sensitiveFilePrefixes: ['.env'],
             sensitiveFileExtensions: ['.key', '.pem', '.p12', '.pfx'],
@@ -180,7 +534,7 @@ describe(RustWorkspacePathIndex, () => {
             respectGitIgnore: true,
             maxFiles: 2_000_000,
             maxContentSearchFileBytes: 9_000_000,
-            caseSensitive: process.platform !== 'darwin' && process.platform !== 'win32',
+            caseSensitive: workspaceCaseSensitivity('/project'),
           },
         },
         { version: 1, id: 2, method: 'search', params: { query: 'app', generation: 7, limit: 20 } },
@@ -222,7 +576,7 @@ describe(RustWorkspacePathIndex, () => {
         if (request.method === 'shutdown') return { shutdown: true };
         return new NativeFailure('SUPERSEDED', 'A newer generation replaced this search.');
       });
-      const search = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const search = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
 
       await expect(search.search('old', { generation: 1 })).rejects.toMatchObject({
         code: WorkspacePathIndexFailureReason.SUPERSEDED,
@@ -250,7 +604,7 @@ describe(RustWorkspacePathIndex, () => {
         if (request.method === 'shutdown') return { shutdown: true };
         throw new Error(`Unexpected method ${request.method}`);
       });
-      const search = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const search = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
 
       await search.searchContents('needle', {});
 
@@ -301,10 +655,7 @@ describe(RustWorkspacePathIndex, () => {
           if (failure === 'cancelled') controller.abort(new Error('Search stopped'));
           return { 'a.ts': failure === 'oversized' ? 'x'.repeat(900 * 1024) : 'late text' };
         });
-        const index = new RustWorkspacePathIndex(
-          { binaryPath: '/bin/index', root: '/project', readContentOverrides },
-          () => worker,
-        );
+        const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project', readContentOverrides }, () => worker);
         try {
           await expect(index.searchContents('needle', { signal: controller.signal })).rejects.toThrow(
             failure === 'unavailable'
@@ -336,7 +687,7 @@ describe(RustWorkspacePathIndex, () => {
         if (request.method === 'shutdown') return { shutdown: true };
         throw new Error(`Unexpected method ${request.method}`);
       });
-      const search = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const search = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       await search.initialize();
       const controller = new AbortController();
       const pending = search.searchContents('needle', {
@@ -372,7 +723,7 @@ describe(RustWorkspacePathIndex, () => {
   describe(RustWorkspacePathIndex.prototype.initialize, () => {
     it('shares one native initialization across concurrent callers and reuses its state afterwards', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : indexState(1)));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
 
       const [first, second] = await Promise.all([index.initialize(), index.initialize()]);
@@ -385,7 +736,7 @@ describe(RustWorkspacePathIndex, () => {
 
     it('rejects immediately with the abort reason when the signal is already aborted', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : indexState(1)));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
       const controller = new AbortController();
       controller.abort(new Error('not now'));
@@ -395,7 +746,7 @@ describe(RustWorkspacePathIndex, () => {
 
     it('rejects with the abort reason when the signal fires while the worker is still indexing', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
       const controller = new AbortController();
 
@@ -407,7 +758,7 @@ describe(RustWorkspacePathIndex, () => {
 
     it('reports a generic cancellation when the abort reason is not an error', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
       const controller = new AbortController();
 
@@ -421,7 +772,7 @@ describe(RustWorkspacePathIndex, () => {
       const worker = new FakeWorker(request =>
         request.method === 'shutdown' ? { shutdown: true } : new NativeFailure('INITIALIZATION_FAILED', 'No root.'),
       );
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
 
       await expect(index.initialize(new AbortController().signal)).rejects.toMatchObject({
@@ -433,7 +784,7 @@ describe(RustWorkspacePathIndex, () => {
     it('fails when the configured worker binary cannot be started', async () => {
       const root = await mkdtemp(join(tmpdir(), 'glyph-path-index-missing-'));
       onTestFinished(() => rm(root, { recursive: true, force: true }));
-      const index = new RustWorkspacePathIndex({ binaryPath: join(root, 'missing-binary'), root });
+      const index = fixtureIndex({ binaryPath: join(root, 'missing-binary'), root });
       onTestFinished(() => index.dispose());
 
       await expect(index.initialize()).rejects.toMatchObject({ code: 'ENOENT' });
@@ -443,7 +794,7 @@ describe(RustWorkspacePathIndex, () => {
   describe(RustWorkspacePathIndex.prototype.search, () => {
     it('rejects with a generic cancellation when its signal was already aborted without an error', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : indexState(1)));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
       await index.initialize();
       const controller = new AbortController();
@@ -461,7 +812,7 @@ describe(RustWorkspacePathIndex, () => {
         if (request.method === 'shutdown') return { shutdown: true };
         return NO_RESPONSE;
       });
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
       await index.initialize();
       const controller = new AbortController();
@@ -475,7 +826,7 @@ describe(RustWorkspacePathIndex, () => {
 
     it('rejects new searches while the index is shutting down', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : indexState(1)));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       await index.initialize();
 
       const disposal = index.dispose();
@@ -486,7 +837,7 @@ describe(RustWorkspacePathIndex, () => {
     });
 
     it('rejects searches after the index has been disposed', async () => {
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => {
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => {
         throw new Error('A disposed index must not start a worker.');
       });
       await index.dispose();
@@ -504,7 +855,7 @@ describe(RustWorkspacePathIndex, () => {
         if (request.method === 'glob') return { files: ['src/App.tsx'], truncated: false };
         return { shutdown: true };
       });
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
 
       await expect(index.glob('**/*.tsx', { limit: 10 })).resolves.toEqual({
@@ -515,6 +866,18 @@ describe(RustWorkspacePathIndex, () => {
     });
   });
 
+  it('checks replacement metadata through the initialized native authority', async () => {
+    const worker = new FakeWorker(request => {
+      if (request.method === 'initialize') return indexState(1);
+      if (request.method === 'assertReplaceableMetadata') return null;
+      return { shutdown: true };
+    });
+    const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+    onTestFinished(() => index.dispose());
+    await index.assertReplaceableMetadata('rule.mdc');
+    expect(worker.requests.at(-1)?.params).toBe('rule.mdc');
+  });
+
   describe(RustWorkspacePathIndex.prototype.filterPaths, () => {
     it('initializes once and then intersects candidate paths with the catalog', async () => {
       const worker = new FakeWorker(request => {
@@ -522,7 +885,7 @@ describe(RustWorkspacePathIndex, () => {
         if (request.method === 'filterPaths') return ['src/App.tsx'];
         return { shutdown: true };
       });
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
 
       await expect(index.filterPaths(['src/App.tsx', '.env'])).resolves.toEqual(['src/App.tsx']);
@@ -538,7 +901,7 @@ describe(RustWorkspacePathIndex, () => {
   describe(RustWorkspacePathIndex.prototype.refresh, () => {
     it('initializes instead of refreshing an index that was never initialized', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : indexState(4)));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
 
       await expect(index.refresh()).resolves.toMatchObject({ fileCount: 4 });
@@ -547,13 +910,43 @@ describe(RustWorkspacePathIndex, () => {
   });
 
   describe(RustWorkspacePathIndex.prototype.searchContents, () => {
+    it('returns file counts with a live access guard and requests no content identities', async () => {
+      const counts = {
+        outputMode: 'count',
+        counts: [{ path: 'notes.md', count: 3 }],
+        searchedFiles: 1,
+        skippedFiles: 0,
+        indexTruncated: false,
+        truncated: false,
+        nextOffset: null,
+      };
+      const worker = new FakeWorker(request => {
+        if (request.method === 'initialize') return indexState(1);
+        if (request.method === 'contentSearch') return counts;
+        return { shutdown: true };
+      });
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      onTestFinished(() => index.dispose());
+      const retainAccess = vi.fn();
+      const sourceAuthority = { capture: vi.fn(), authorize: vi.fn() };
+
+      await expect(
+        index.searchContents('value', { outputMode: 'count', retainAccess, sourceAuthority }),
+      ).resolves.toEqual(counts);
+      expect(worker.requests.find(request => request.method === 'contentSearch')?.params).not.toHaveProperty(
+        'includeSourceIdentity',
+      );
+      expect(retainAccess).toHaveBeenCalledWith(expect.any(Function));
+      expect(sourceAuthority.capture).not.toHaveBeenCalled();
+    });
+
     it('does not ask a shutting-down worker to cancel an abandoned content search', async () => {
       const worker = new FakeWorker(request => {
         if (request.method === 'initialize') return indexState(1);
         if (request.method === 'shutdown') return { shutdown: true };
         return NO_RESPONSE;
       });
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       await index.initialize();
       const controller = new AbortController();
       const pending = index.searchContents('needle', { signal: controller.signal });
@@ -576,7 +969,7 @@ describe(RustWorkspacePathIndex, () => {
         if (request.method === 'shutdown') return { shutdown: true };
         return NO_RESPONSE;
       });
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       await index.initialize();
       const controller = new AbortController();
       const pending = index.searchContents('needle', { signal: controller.signal });
@@ -600,7 +993,7 @@ describe(RustWorkspacePathIndex, () => {
   describe(RustWorkspacePathIndex.prototype.dispose, () => {
     it('resolves repeated disposal after the worker has shut down', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : indexState(1)));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       await index.initialize();
 
       await index.dispose();
@@ -614,7 +1007,7 @@ describe(RustWorkspacePathIndex, () => {
         request.method === 'shutdown' ? new NativeFailure('INTERNAL', 'Busy.') : indexState(1),
       );
       const kill = vi.spyOn(worker, 'kill');
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       await index.initialize();
 
       await expect(index.dispose()).rejects.toMatchObject({
@@ -629,7 +1022,7 @@ describe(RustWorkspacePathIndex, () => {
   describe('worker transport', () => {
     it('ignores blank lines and responses for requests it is not waiting on', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
 
       const pending = index.initialize();
@@ -650,7 +1043,7 @@ describe(RustWorkspacePathIndex, () => {
       ['malformed JSON', '{"version":', 'Invalid response from path-index worker: '],
     ])('fails outstanding requests when the worker sends %s', async (_description, line, message) => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
 
       const pending = index.initialize();
@@ -661,7 +1054,7 @@ describe(RustWorkspacePathIndex, () => {
 
     it('describes a non-error parser failure in the invalid response', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
       const parse = JSON.parse;
       const spy = vi.spyOn(JSON, 'parse').mockImplementation((text: string, reviver?: Parameters<JSON['parse']>[1]) => {
@@ -684,7 +1077,7 @@ describe(RustWorkspacePathIndex, () => {
       ['a null error payload', null],
     ])('reports a native error with %s as a generic internal failure', async (_description, error) => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
 
       const pending = index.initialize();
@@ -698,7 +1091,7 @@ describe(RustWorkspacePathIndex, () => {
 
     it('includes recent worker diagnostics when the worker exits unexpectedly', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
 
       const pending = index.initialize();
@@ -714,9 +1107,7 @@ describe(RustWorkspacePathIndex, () => {
       const old = new FakeWorker(() => NO_RESPONSE);
       const next = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : indexState(1)));
       let starts = 0;
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () =>
-        starts++ === 0 ? old : next,
-      );
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => (starts++ === 0 ? old : next));
       onTestFinished(() => index.dispose());
       const initial = index.initialize();
       old.emit('exit', 2, null);
@@ -734,7 +1125,7 @@ describe(RustWorkspacePathIndex, () => {
     it('ignores the worker exiting once the index has been disposed', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : indexState(1)));
       const kill = vi.spyOn(worker, 'kill');
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
       await index.initialize();
       (index as unknown as { disposed: boolean }).disposed = true;
@@ -747,7 +1138,7 @@ describe(RustWorkspacePathIndex, () => {
 
     it('fails outstanding requests when the current worker process reports an error', async () => {
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       onTestFinished(() => index.dispose());
 
       const pending = index.initialize();
@@ -758,7 +1149,7 @@ describe(RustWorkspacePathIndex, () => {
 
     it('rejects a request whose message cannot be written to the worker', async () => {
       const worker = new UnwritableWorker();
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
 
       const pending = index.initialize();
       worker.completeWrite(0, new Error('EPIPE'));
@@ -768,7 +1159,7 @@ describe(RustWorkspacePathIndex, () => {
 
     it('ignores a late write failure for a request that was already abandoned', async () => {
       const worker = new UnwritableWorker();
-      const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
       const initialized = index.initialize();
       worker.completeWrite(0);
       worker.stdout.write(`${JSON.stringify({ version: 1, id: 1, result: indexState(1) })}\n`);

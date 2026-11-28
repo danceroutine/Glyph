@@ -43,7 +43,7 @@ describe(OpenAIProviderFactory, () => {
         },
       });
       const token = vi.fn(async () => 'oauth-token');
-      const factory = new OpenAIProviderFactory('/unused-root', configurationProvider(), new ToolRegistry([]), client);
+      const factory = new OpenAIProviderFactory(configurationProvider(), new ToolRegistry([]), client);
 
       const provider = factory.create('model-a', token);
       await provider.send('hello', { signal: new AbortController().signal, onText: () => {} });
@@ -55,8 +55,8 @@ describe(OpenAIProviderFactory, () => {
       expect(String(requests[0]?.instructions)).toMatch(/^# Identity\n\nBe concise\.\n\n# Instructions/u);
     });
 
-    it('defaults to project tools for its root and restores saved state', () => {
-      const factory = new OpenAIProviderFactory(process.cwd(), configurationProvider());
+    it('restores saved state with the supplied tool registry', () => {
+      const factory = new OpenAIProviderFactory(configurationProvider(), new ToolRegistry([]));
       const state = {
         provider: 'openai-responses',
         version: 1,

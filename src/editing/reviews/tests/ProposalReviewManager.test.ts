@@ -1,9 +1,9 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { OverlappingWorkspaceFixture } from '#src/workspace/tests/fixtures/OverlappingWorkspaceFixture.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
@@ -144,10 +144,7 @@ describe(ProposalReviewManager, () => {
     expect(item.rejectionComment).toBeUndefined();
     expect(manager.pendingResults).toEqual([]);
     await manager.rejectInReview(proposal.id, item.id, '  Keep the existing API.  ');
-    const recovered = new ProposalReviewManager(
-      new FileSystemWorkspaceTextStore(root),
-      new FileProposalReviewStore(state),
-    );
+    const recovered = new ProposalReviewManager(fixtureWorkspace(root), new FileProposalReviewStore(state));
     await recovered.initialize();
     expect(recovered.pendingResults[0]?.items[0]).toMatchObject({
       decision: EditDecisionState.REJECTED,
@@ -789,7 +786,7 @@ describe(ProposalReviewManager, () => {
       const { root, state } = await fixture('ignored');
       await writeFile(join(root, 'a.txt'), 'a');
       await writeFile(join(root, 'b.txt'), 'b');
-      const workspace = new FileSystemWorkspaceTextStore(root);
+      const workspace = fixtureWorkspace(root);
       const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
       const manager = new ProposalReviewManager(workspace, new FileProposalReviewStore(state));
       const [a, b] = await Promise.all([workspace.read('a.txt'), workspace.read('b.txt')]);
@@ -974,10 +971,7 @@ describe(ProposalReviewManager, () => {
       });
       await writeFile(join(state, 'active-proposal-review.json'), JSON.stringify(proposal));
 
-      const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(root),
-        new FileProposalReviewStore(state),
-      );
+      const recovered = new ProposalReviewManager(fixtureWorkspace(root), new FileProposalReviewStore(state));
       await expect(recovered.initialize()).rejects.toMatchObject({ reason: EditFailureReason.PERSISTENCE });
       expect(recovered.activeReviews).toEqual([]);
     });
@@ -1024,10 +1018,7 @@ describe(ProposalReviewManager, () => {
         proposals: [{ id: first.id }, { id: second.id }],
       });
 
-      const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(root),
-        new FileProposalReviewStore(state),
-      );
+      const recovered = new ProposalReviewManager(fixtureWorkspace(root), new FileProposalReviewStore(state));
       await recovered.initialize();
 
       expect(recovered.activeReviews.map(review => review.id)).toEqual([first.id, second.id]);
@@ -1053,10 +1044,7 @@ describe(ProposalReviewManager, () => {
       if (process.platform !== 'win32') {
         expect((await stat(join(state, 'active-proposal-review.json'))).mode & 0o777).toBe(0o600);
       }
-      const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(root),
-        new FileProposalReviewStore(state),
-      );
+      const recovered = new ProposalReviewManager(fixtureWorkspace(root), new FileProposalReviewStore(state));
       await recovered.initialize();
       expect(recovered.active?.id).toBe(proposal.id);
       expect(recovered.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
@@ -1091,10 +1079,7 @@ describe(ProposalReviewManager, () => {
       });
       await manager.stage(proposal);
       await manager.accept(proposal.files[0]!.items[0]!.id);
-      const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(root),
-        new FileProposalReviewStore(state),
-      );
+      const recovered = new ProposalReviewManager(fixtureWorkspace(root), new FileProposalReviewStore(state));
       await recovered.initialize();
 
       expect(recovered.active?.files[0]?.items.map(item => item.decision)).toEqual([
@@ -1138,10 +1123,7 @@ describe(ProposalReviewManager, () => {
       await new FileProposalReviewStore(state).save([proposal], root);
       await workspace.replace('file.txt', base.revision, 'ONE\nmiddle\nthree\n', false);
 
-      const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(root),
-        new FileProposalReviewStore(state),
-      );
+      const recovered = new ProposalReviewManager(fixtureWorkspace(root), new FileProposalReviewStore(state));
       await recovered.initialize();
 
       expect(recovered.active?.files[0]?.items.map(item => item.decision)).toEqual([
@@ -2397,7 +2379,7 @@ async function reviewFixture(
   const root = await mkdtemp(join(tmpdir(), 'proposal-review-manager-'));
   directories.push(root);
   for (const [path, content] of Object.entries(files)) await writeFile(join(root, path), content);
-  const workspace = new FileSystemWorkspaceTextStore(root);
+  const workspace = fixtureWorkspace(root);
   const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
   const store = new MemoryProposalReviewStore();
   const manager = new ProposalReviewManager(workspace, store, new NullLogger(), 8, root, options);
@@ -2492,7 +2474,7 @@ async function fixture(text: string, maxActiveReviews = 8, workspaceOptions: { c
   const state = await mkdtemp(join(tmpdir(), 'edit-session-state-'));
   directories.push(root, state);
   if (text !== '') await writeFile(join(root, 'file.txt'), text);
-  const workspace = new FileSystemWorkspaceTextStore(root, workspaceOptions);
+  const workspace = fixtureWorkspace(root, workspaceOptions);
   const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
   const manager = new ProposalReviewManager(
     workspace,

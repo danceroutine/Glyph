@@ -36,6 +36,7 @@ describe('glyph command line', () => {
   });
 
   it('runs a folder project with runtime paths excluded from the workspace', async () => {
+    vi.stubEnv('GLYPH_USER_DIRECTORY', '/home/test/.glyph');
     const root = repositoryRoot;
     const stateDirectory = join(root, '.glyph', 'state');
     const traceFile = '/var/log/glyph/trace.log';
@@ -48,19 +49,25 @@ describe('glyph command line', () => {
     expect(cli.resolveProject).toHaveBeenCalledWith({ currentDirectory: process.cwd() });
     expect(cli.assertPathIsolation).toHaveBeenCalledWith([root], stateDirectory, traceFile);
     const excludedPaths = ['.glyph/state', 'target/release/glyph-context-index', 'target/release/glyph-shell-sandbox'];
-    const [workspace] = cli.instances('FileSystemWorkspaceTextStore');
-    const [accessPolicy] = cli.instances('WorkspaceAccessPolicy');
-    expect(workspace?.args).toEqual([root, { excludedPaths, accessPolicy }]);
+    const [workspace, selectedFiles] = cli.instances('FileSystemWorkspaceTextStore');
+    const bound = (
+      workspace!.args[1] as { access: import('#src/workspace/policy/WorkspaceRootAccess.js').WorkspaceRootAccess }
+    ).access;
+    const selected = (selectedFiles!.args[1] as { access: typeof bound }).access;
+    expect(bound.beginOperation().excludedPaths).toEqual(excludedPaths);
+    expect(bound.policy.privatePaths).toContain(join(process.env.GLYPH_USER_DIRECTORY!, 'rules'));
+    expect(selected.policy.privatePaths).not.toContain(join(process.env.GLYPH_USER_DIRECTORY!, 'rules'));
+    expect(workspace?.args).toEqual([
+      root,
+      { access: bound, physicalAccess: cli.instances('NativeFilesystemMetadata')[0] },
+    ]);
     const cacheName = createHash('sha256').update(`${context.id}\0Repository\0${root}`).digest('hex');
     const [pathIndex] = cli.instances('RustWorkspacePathIndex');
     expect(pathIndex?.args).toEqual([
       {
         binaryPath: join(root, 'target', 'release', 'glyph-context-index'),
-        root,
+        access: bound,
         cachePath: join(stateDirectory, `context-index-${cacheName}.bin`),
-        excludedPaths,
-        accessPolicy,
-        caseSensitive: true,
       },
     ]);
     expect(cli.instances('MultiRootWorkspaceTextStore')).toEqual([]);
@@ -73,6 +80,7 @@ describe('glyph command line', () => {
     expect(launcher?.args).toEqual([
       {
         binaryPath: join(root, 'target', 'release', 'glyph-shell-sandbox'),
+        verifyWorkspaceRoot: expect.any(Function),
         workspaceRoots: [root],
         stateDirectory,
         protectedPaths: [
@@ -80,7 +88,13 @@ describe('glyph command line', () => {
           join(root, 'target', 'release', 'glyph-context-index'),
           join(root, 'target', 'release', 'glyph-shell-sandbox'),
         ],
-        accessPolicy,
+        accessPolicy: expect.objectContaining({
+          privatePaths: expect.arrayContaining([
+            stateDirectory,
+            traceFile,
+            join(process.env.GLYPH_USER_DIRECTORY!, 'rules'),
+          ]),
+        }),
       },
     ]);
     const [registry] = cli.instances('ToolRegistry');
@@ -150,9 +164,9 @@ describe('glyph command line', () => {
       currentDirectory: process.cwd(),
       workspaceFile: 'project.code-workspace',
     });
-    const [appStore, docsStore] = cli.instances('FileSystemWorkspaceTextStore');
-    expect(appStore?.args[1]).toMatchObject({ excludedPaths: ['.state'] });
-    expect(docsStore?.args[1]).toMatchObject({ excludedPaths: [] });
+    const [appStore, , docsStore] = cli.instances('FileSystemWorkspaceTextStore');
+    expect(appStore?.args[1]).toMatchObject({ access: { root: '/work/app' } });
+    expect(docsStore?.args[1]).toMatchObject({ access: { root: '/work/docs' } });
     const [appIndex, docsIndex] = cli.instances('RustWorkspacePathIndex');
     const [workspace] = cli.instances('MultiRootWorkspaceTextStore');
     expect(workspace?.args).toEqual([
@@ -178,6 +192,10 @@ describe('glyph command line', () => {
   });
 
   it('accepts a workspace file written as a single argument', async () => {
+    vi.stubEnv('GLYPH_USER_DIRECTORY', undefined);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const cli = prepareCli({ argv: ['--workspace=team.code-workspace'] });
 
     await cli.start();
@@ -232,7 +250,9 @@ describe('glyph command line', () => {
     await cli.finished;
 
     const [workspace] = cli.instances('FileSystemWorkspaceTextStore');
-    const options = workspace?.args[1] as { excludedPaths: readonly string[] };
+    const options = (
+      workspace!.args[1] as { access: import('#src/workspace/policy/WorkspaceRootAccess.js').WorkspaceRootAccess }
+    ).access.beginOperation();
     expect(options.excludedPaths).toContain('logs/trace.log');
     expect(options.excludedPaths.some(path => path.includes('glyph') && path.includes('state'))).toBe(false);
     const [pathIndex] = cli.instances('RustWorkspacePathIndex');
@@ -273,6 +293,9 @@ describe('glyph command line', () => {
       });
       expect(shutdown.aborted).toBe(true);
       expect(cli.active.signal.aborted).toBe(true);
+      const [project] = cli.instances('ProjectAccess');
+      const sources = project!.args[4] as import('#src/workspace/PinnedSourceAuthority.js').PinnedSourceAuthority;
+      await expect(sources.capture(['src/main.ts'])).rejects.toBe(shutdown.reason);
       cli.shutdownOptions()?.shutdown(ShutdownSignal.SIGINT);
       return 0;
     });
@@ -371,6 +394,25 @@ function prepareCli({
     mocked.push(path);
     vi.doMock(path, factory);
   };
+  mock('#src/workspace/WorkspaceRootSelections.js', () => ({
+    WorkspaceRootSelections: class {
+      assertCurrent() {}
+      select(path: string) {
+        return { path, assertCurrent: () => {} };
+      }
+      [Symbol.dispose]() {}
+    },
+  }));
+  mock('#src/workspace/policy/StartupUserProfile.js', () => ({
+    StartupUserProfile: class {
+      readonly path: string;
+      constructor(path: string) {
+        this.path = path;
+      }
+      verify() {}
+      [Symbol.dispose]() {}
+    },
+  }));
   const recordedModules: Record<string, string> = {
     '#src/web/WebToolRuntime.js': 'WebToolRuntime',
     '#src/web/WebHttpClient.js': 'WebHttpClient',
@@ -381,7 +423,6 @@ function prepareCli({
     '#src/chat/sessions/SqliteChatSessionStore.js': 'SqliteChatSessionStore',
     '#src/context/attachments/ContextAttachmentService.js': 'ContextAttachmentService',
     '#src/context/search/MultiRootWorkspacePathIndex.js': 'MultiRootWorkspacePathIndex',
-    '#src/context/search/RustWorkspacePathIndex.js': 'RustWorkspacePathIndex',
     '#src/editing/proposals/EditProposalService.js': 'EditProposalService',
     '#src/editing/reviews/ProposalReviewManager.js': 'ProposalReviewManager',
     '#src/editing/reviews/persistence/FileProposalReviewStore.js': 'FileProposalReviewStore',
@@ -400,8 +441,8 @@ function prepareCli({
     '#src/terminal/ui/proposal/TerminalEditReviewer.js': 'TerminalEditReviewer',
     '#src/tools/ToolRegistry.js': 'ToolRegistry',
     '#src/workspace/FileSystemWorkspaceTextStore.js': 'FileSystemWorkspaceTextStore',
+    '#src/workspace/NativeFilesystemMetadata.js': 'NativeFilesystemMetadata',
     '#src/workspace/MultiRootWorkspaceTextStore.js': 'MultiRootWorkspaceTextStore',
-    '#src/workspace/policy/WorkspaceAccessPolicy.js': 'WorkspaceAccessPolicy',
     '#src/shell/FileShellPermissionStore.js': 'FileShellPermissionStore',
     '#src/shell/NativeShellSandboxLauncher.js': 'NativeShellSandboxLauncher',
     '#src/shell/ShellCommandAuthorizer.js': 'ShellCommandAuthorizer',
@@ -411,6 +452,13 @@ function prepareCli({
   };
   for (const [path, name] of Object.entries(recordedModules)) mock(path, () => ({ [name]: record(name) }));
 
+  mock('#src/context/search/RustWorkspacePathIndex.js', () => ({
+    RustWorkspacePathIndex: class extends record('RustWorkspacePathIndex') {
+      static async filesystemCaseSensitive() {
+        return true;
+      }
+    },
+  }));
   const settings = {
     stateDirectory: configuration.stateDirectory ?? '/state/glyph',
     traceFile: configuration.traceFile ?? '/state/glyph/trace.log',

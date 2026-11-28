@@ -20,6 +20,7 @@ describe(GlyphContextPicker, () => {
       <Anchor>
         <GlyphContextPicker
           id="picker"
+          mode="context"
           candidates={[
             { uri: 'file:///w/src/main.ts', path: 'src/main.ts' },
             { uri: 'file:///w/README.md', path: 'README.md' },
@@ -51,6 +52,7 @@ describe(GlyphContextPicker, () => {
       <Anchor>
         <GlyphContextPicker
           id="picker"
+          mode="context"
           candidates={[{ uri: 'file:///w/docs/guide/intro.md', path: 'docs/guide/intro.md' }]}
           selected={0}
           searching={false}
@@ -71,6 +73,7 @@ describe(GlyphContextPicker, () => {
       <Anchor>
         <GlyphContextPicker
           id="picker"
+          mode="context"
           candidates={[
             {
               uri: 'file:///w/a/b/c/d/e/f/g/h',
@@ -103,6 +106,7 @@ describe(GlyphContextPicker, () => {
       <Anchor>
         <GlyphContextPicker
           id="picker"
+          mode="context"
           candidates={[{ uri: 'file:///w/notes.txt', path: 'notes.txt' }]}
           selected={0}
           searching
@@ -122,6 +126,7 @@ describe(GlyphContextPicker, () => {
       <Anchor>
         <GlyphContextPicker
           id="picker"
+          mode="context"
           candidates={[]}
           selected={0}
           searching={false}
@@ -140,6 +145,7 @@ describe(GlyphContextPicker, () => {
       <Anchor>
         <GlyphContextPicker
           id="picker"
+          mode="context"
           candidates={[
             { uri: 'file:///w/app.tsx', path: 'app.tsx' },
             { uri: 'file:///w/notes.log', path: 'notes.log' },
@@ -158,5 +164,38 @@ describe(GlyphContextPicker, () => {
     expect(icon('app.tsx')).toContain('file-code');
     expect(icon('notes.log')).toContain('file-text');
     expect(icon('photo.png')).toMatch(/lucide-file(?!-)/u);
+  });
+
+  it('renders rule candidates with rule metadata in the list and preview', () => {
+    render(
+      <Anchor>
+        <GlyphContextPicker
+          id="picker"
+          mode="rules"
+          candidates={[
+            {
+              uri: 'glyph-rule:typescript',
+              path: 'TypeScript',
+              name: 'TypeScript safety',
+              detail: 'Use for strict TypeScript work',
+              kind: GlyphContextCandidateKind.RULE,
+              ruleId: 'rule-id',
+            },
+          ]}
+          selected={0}
+          searching={false}
+          disabled={false}
+          highlight={vi.fn()}
+          choose={vi.fn()}
+        />
+      </Anchor>,
+    );
+
+    expect(screen.getByRole('listbox', { name: 'Rules to invoke' })).toBeTruthy();
+    expect(screen.getByText('Rules')).toBeTruthy();
+    const option = screen.getByRole('option', { name: 'TypeScript' });
+    expect(option.textContent).toContain('TypeScript safety');
+    expect(option.querySelector('svg')).toBeTruthy();
+    expect(screen.getByText('Use for strict TypeScript work')).toBeTruthy();
   });
 });

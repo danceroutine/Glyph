@@ -266,6 +266,24 @@ it('validates capture paths and does not admit duplicate file identities', async
 });
 
 describe(AgentReviewService, () => {
+  describe(AgentReviewService.prototype.start, () => {
+    it('interrupts a review when its owner disconnects while admission is being saved', async () => {
+      const owner = new AbortController();
+      const store = memoryStore();
+      const save = store.save.bind(store);
+      vi.spyOn(store, 'save').mockImplementation(async review => {
+        if (review.status === Status.RUNNING) owner.abort(new Error('Window disconnected'));
+        await save(review);
+      });
+      const run = vi.fn<AgentReviewExecutor['run']>();
+      const service = await fixture(run, store);
+      await service.start(input(), model, owner.signal);
+      await vi.waitFor(() => {
+        expect(service.reviews[0]?.status).toBe(Status.INTERRUPTED);
+      });
+      expect(run).not.toHaveBeenCalled();
+    });
+  });
   describe(AgentReviewService.prototype.onDidChange, () => {
     it('notifies subscribers of each change until they unsubscribe', async () => {
       const service = await fixture(async (_, emit) => {

@@ -1,5 +1,6 @@
 import type { GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
+import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
 
 /**
  * Keeps the workspace adapter independent of MessagePort details. Only the
@@ -8,10 +9,16 @@ import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEdit
 export interface EditorWorkspaceClient {
   /** Resolves physical path aliases through the host's metadata-only workspace policy. */
   canonicalPath(path: string): Promise<string>;
-  request(request: GlyphEditorRequest, signal?: AbortSignal): Promise<GlyphEditorResponse>;
+  request(
+    request: GlyphEditorRequest,
+    signal?: AbortSignal,
+    retainAccess?: (check: () => void) => void,
+    source?: WorkspaceReadOptions['source'],
+  ): Promise<GlyphEditorResponse>;
   listPaths(
     maxFiles: number,
     globPattern?: string,
     targetDirectory?: string,
+    signal?: AbortSignal,
   ): Promise<{ files: string[]; truncated: boolean }>;
 }

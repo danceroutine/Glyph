@@ -30,10 +30,14 @@ import {
 } from 'prosemirror-commands';
 import { h, render } from 'preact';
 import type { GlyphPromptDocument } from '#src/desktop/workbench/GlyphPromptDocument.js';
-import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import {
+  GlyphContextAttachmentKind,
+  type GlyphContextAttachment,
+} from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { GlyphContextBadge } from '#code-oss/ui/GlyphContextBadge/GlyphContextBadge.presentational.tsx';
 
 export interface GlyphPromptQuery {
+  readonly trigger: '@' | '/';
   readonly text: string;
   readonly from: number;
   readonly to: number;
@@ -88,7 +92,7 @@ export class GlyphPromptEditor {
         'aria-label': 'Message Glyph',
         'aria-multiline': 'true',
         'aria-autocomplete': 'list',
-        'data-placeholder': 'Plan, build, @ for context',
+        'data-placeholder': 'Plan, build, / for rules, @ for context',
       },
       nodeViews: {
         attachment: node => {
@@ -119,10 +123,21 @@ export class GlyphPromptEditor {
             h(GlyphContextBadge, {
               label: `${attachment.path.split('/').at(-1)}${range}${attachment.unavailable !== undefined && attachment.unavailable !== '' ? ' (unavailable)' : ''}`,
               title,
-              actionLabel: ['file', 'selection', 'folder'].includes(attachment.kind) ? 'Preview' : 'Open',
-              onClick: () => {
-                callbacks.preview(attachment);
-              },
+              skill: attachment.kind === GlyphContextAttachmentKind.RULE,
+              actionLabel: [
+                GlyphContextAttachmentKind.FILE,
+                GlyphContextAttachmentKind.SELECTION,
+                GlyphContextAttachmentKind.FOLDER,
+              ].includes(attachment.kind)
+                ? 'Preview'
+                : 'Open',
+              ...(attachment.kind === GlyphContextAttachmentKind.RULE
+                ? {}
+                : {
+                    onClick: () => {
+                      callbacks.preview(attachment);
+                    },
+                  }),
             }),
             dom,
           );
@@ -193,9 +208,18 @@ export class GlyphPromptEditor {
     const before = selection.empty
       ? selection.$from.parent.textBetween(0, selection.$from.parentOffset, '', '\uFFFC')
       : '';
-    const match = /(?:^|\s)@([^\s@\uFFFC]*)$/u.exec(before);
+    const rule = /(?:^|\s)\/([^\s/@\uFFFC]*)$/u.exec(before);
+    const context = /(?:^|\s)@([^\s@\uFFFC]*)$/u.exec(before);
+    const match = rule ?? context;
     this.callbacks.query(
-      match ? { text: match[1]!, from: selection.from - match[1]!.length - 1, to: selection.from } : undefined,
+      match
+        ? {
+            trigger: rule ? '/' : '@',
+            text: match[1]!,
+            from: selection.from - match[1]!.length - 1,
+            to: selection.from,
+          }
+        : undefined,
     );
   }
   setEditable(editable: boolean): void {

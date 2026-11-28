@@ -142,3 +142,259 @@ fn fails_to_start_when_the_service_thread_cannot_be_created() {
     assert_eq!(code, Some(1));
     assert!(stderr.starts_with("glyph-context-index: could not start the context index service:"));
 }
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn verifies_metadata_for_inherited_descriptors() {
+    use std::process::{Command, Stdio};
+    let fixture = tempfile::NamedTempFile::new().unwrap();
+    for argument in ["--assert-access-metadata", "--assert-replaceable-metadata"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_glyph-context-index"))
+            .arg(argument)
+            .stdin(Stdio::from(fixture.reopen().unwrap()))
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"verified\n");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn admits_a_workspace_path_and_rechecks_its_opened_identity() {
+    use std::os::unix::fs::MetadataExt;
+    let root = tempfile::tempdir().unwrap();
+    let ordinary = root.path().join("document");
+    fs::write(&ordinary, "example").unwrap();
+    let meta = fs::metadata(&ordinary).unwrap();
+    let request = serde_json::json!({
+        "path":ordinary, "privatePaths":[root.path().join("preferences")],
+        "identity":[meta.dev().to_string(),meta.ino().to_string()]
+    });
+    let check = |request: &Value| {
+        run_with_input(&request.to_string(), |cmd| {
+            cmd.arg("--assert-workspace-path");
+        })
+    };
+    assert_eq!(check(&request).stdout, b"verified\n");
+    let mut stale = request;
+    stale["identity"] = serde_json::json!(["0", "0"]);
+    assert!(!check(&stale).status.success());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reports_the_visible_routes_of_an_editor_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().canonicalize().unwrap();
+    let request = serde_json::json!([path, true]);
+    let result = run_with_input(&request.to_string(), |cmd| {
+        cmd.arg("--source-path-aliases");
+    });
+    assert!(result.status.success());
+    let aliases: Vec<std::path::PathBuf> = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(aliases.contains(&path));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an unprivileged Linux user and mount namespace"]
+fn checks_bound_private_and_ordinary_trees_through_the_cli() {
+    const INSIDE: &str = "GLYPH_PRIVATE_MOUNT_CLI_FIXTURE";
+    if std::env::var_os(INSIDE).is_none() {
+        let output = Command::new("unshare")
+            .arg("-Urm")
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "checks_bound_private_and_ordinary_trees_through_the_cli",
+                "--ignored",
+            ])
+            .env(INSIDE, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed")
+        );
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    for (source, view, admitted) in [
+        (".skill-staging", "first", false),
+        ("ordinary", "second", true),
+    ] {
+        let source = base.join(source);
+        let view = base.join(view);
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&view).unwrap();
+        fs::write(source.join("data"), "fixture").unwrap();
+        assert!(Command::new("mount")
+            .args(["-o", "bind"])
+            .arg(&source)
+            .arg(&view)
+            .status()
+            .unwrap()
+            .success());
+        let request = serde_json::json!({"path": view.join("data"), "privatePaths": []});
+        let result = run_with_input(&request.to_string(), |cmd| {
+            cmd.arg("--assert-workspace-path");
+        });
+        assert_eq!(result.status.success(), admitted);
+        let sources =
+            serde_json::json!({"paths": [view.join("data")], "privatePaths":[]}).to_string();
+        let inspect_origins = || {
+            run_with_input(&sources, |cmd| {
+                cmd.arg("--source-origins");
+            })
+        };
+        let original = inspect_origins();
+        assert_eq!(original.status.success(), admitted);
+        if admitted {
+            // The same directory and file inode exposed through a replacement mount is a new route.
+            let original: Value = serde_json::from_slice(&original.stdout).unwrap();
+            assert!(Command::new("mount")
+                .args(["-o", "bind"])
+                .arg(&source)
+                .arg(&view)
+                .status()
+                .unwrap()
+                .success());
+            let replacement = inspect_origins();
+            assert!(replacement.status.success());
+            let replacement: Value = serde_json::from_slice(&replacement.stdout).unwrap();
+            assert_eq!(original[0]["identity"], replacement[0]["identity"]);
+            assert_ne!(original[0]["origin"], replacement[0]["origin"]);
+            assert!(Command::new("umount")
+                .arg(&view)
+                .status()
+                .unwrap()
+                .success());
+        }
+
+        assert!(Command::new("umount")
+            .arg(&view)
+            .status()
+            .unwrap()
+            .success());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn reports_individual_source_availability_only_on_request() {
+    let project = tempfile::tempdir().unwrap();
+    let root = project.path();
+    let file = root.join("available.md");
+    let private = root.join("reserved.md");
+    fs::write(&file, "source").unwrap();
+    fs::write(&private, "reserved").unwrap();
+    let request = serde_json::json!({
+        "paths": [root.join("missing"), &file, &private, root, &file],
+        "privatePaths": [&private],
+    });
+    let inspect = |request: &Value| {
+        run_with_input(&request.to_string(), |cmd| {
+            cmd.arg("--source-origins");
+        })
+    };
+    let strict = inspect(&request);
+    assert!(!strict.status.success());
+    assert!(strict.stdout.is_empty());
+
+    let mut available = request;
+    available["allowUnavailable"] = Value::Bool(true);
+    let result = inspect(&available);
+    assert!(result.status.success());
+    let origins: Vec<Value> = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(origins.len(), 5);
+    assert!(origins[0].is_null() && origins[2].is_null() && origins[3].is_null());
+    assert!(origins[1]["identity"].is_string());
+    assert_eq!(origins[1], origins[4]);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn reports_a_source_whose_parent_creation_time_cannot_be_fingerprinted() {
+    use std::os::macos::fs::FileTimesExt;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let root = tempfile::tempdir().unwrap();
+    let historical = root.path().join("historical");
+    fs::create_dir(&historical).unwrap();
+    let source = historical.join("AGENTS.md");
+    let healthy = root.path().join("AGENTS.md");
+    fs::write(&source, "old").unwrap();
+    fs::write(&healthy, "current").unwrap();
+    fs::File::open(&historical)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_created(UNIX_EPOCH - Duration::from_secs(1)))
+        .unwrap();
+
+    let inspect = |optional| {
+        run_with_input(
+            &serde_json::json!({
+                "paths": [&source, &healthy], "privatePaths": [], "allowUnavailable": optional
+            })
+            .to_string(),
+            |cmd| {
+                cmd.arg("--source-origins");
+            },
+        )
+    };
+    assert!(!inspect(false).status.success());
+    let output = inspect(true);
+    assert!(output.status.success());
+    let origins: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(origins.len(), 2);
+    assert_eq!(origins[0], Value::Null);
+    assert!(origins[1]["origin"].is_string());
+}
+
+#[cfg(unix)]
+#[test]
+fn pins_source_locations_across_regular_saves_and_checks_current_reservations() {
+    use std::os::unix::fs::symlink;
+    let project = tempfile::tempdir().unwrap();
+    let rules = project.path().join("rules");
+    fs::create_dir(&rules).unwrap();
+    let file = rules.join("one.md");
+    let other = rules.join("two.md");
+    fs::write(&file, "one").unwrap();
+    fs::write(&other, "two").unwrap();
+    let inspect = |paths: &[&std::path::Path], private: &[&std::path::Path]| {
+        run_with_input(
+            &serde_json::json!({"paths":paths,"privatePaths":private}).to_string(),
+            |cmd| {
+                cmd.arg("--source-origins");
+            },
+        )
+    };
+    let pins = |paths: &[&std::path::Path]| {
+        let output = inspect(paths, &[]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let original = pins(&[&file, &other]);
+    assert_ne!(original[0]["origin"], original[1]["origin"]);
+    fs::rename(&other, &file).unwrap();
+    let saved = pins(&[&file]);
+    assert_eq!(original[0]["origin"], saved[0]["origin"]);
+    assert_ne!(original[0]["identity"], saved[0]["identity"]);
+    assert!(!inspect(&[&file], &[&rules]).status.success());
+    fs::rename(&rules, project.path().join("old")).unwrap();
+    fs::create_dir(&rules).unwrap();
+    fs::write(&file, "new").unwrap();
+    assert_ne!(original[0]["origin"], pins(&[&file])[0]["origin"]);
+    assert!(!inspect(&[&rules], &[]).status.success());
+    assert!(!inspect(&[&other], &[]).status.success());
+    symlink(&file, &other).unwrap();
+    assert!(!inspect(&[&other], &[]).status.success());
+    fs::remove_file(&other).unwrap();
+    fs::hard_link(&file, &other).unwrap();
+    assert!(!inspect(&[&file], &[]).status.success());
+}

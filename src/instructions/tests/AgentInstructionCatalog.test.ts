@@ -1,8 +1,8 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
 import {
@@ -25,61 +25,68 @@ async function fixture() {
   await writeFile(join(root, 'AGENTS.md'), 'root guidance');
   await writeFile(join(root, 'src', 'AGENTS.md'), 'source guidance');
   await writeFile(join(root, 'docs', 'AGENTS.md'), 'docs guidance');
-  const catalog = new AgentInstructionCatalog([
-    new AgentsMdInstructionProvider(new FileSystemWorkspaceTextStore(root)),
-  ]);
+  const catalog = new AgentInstructionCatalog([new AgentsMdInstructionProvider(fixtureWorkspace(root))]);
   return { root, catalog };
 }
 
 describe(AgentInstructionCatalog, () => {
+  it('retains each indeterminate root while reading the healthy source', async () => {
+    const provider = new AgentsMdInstructionProvider(
+      {
+        normalizePath: (path: string) => path,
+        read: async () => ({ text: 'healthy', revision: '1', byteLength: 7 }),
+      } as never,
+      {},
+      async () => ({
+        files: ['one/AGENTS.md'],
+        truncated: false,
+        failures: [{ path: 'two/AGENTS.md', message: 'Unknown index state' }],
+      }),
+    );
+    expect(await provider.discover()).toEqual([
+      expect.objectContaining({ path: 'one/AGENTS.md', content: 'healthy' }),
+      expect.objectContaining({ path: 'two/AGENTS.md', scope: 'two', status: 'error', message: 'Unknown index state' }),
+    ]);
+  });
+  it('spends the read budget on each root before nested guidance', async () => {
+    const workspace = {
+      normalizePath: (path: string) => path,
+      read: async (path: string) => ({ text: path.includes('nested') ? 'xx' : 'x', revision: 'r' }),
+    } as WorkspaceTextStore;
+    const provider = new AgentsMdInstructionProvider(workspace, { maxDiscoveryBytes: 2 }, async () => ({
+      files: ['a/AGENTS.md', 'a/nested/AGENTS.md', 'b/AGENTS.md'],
+      truncated: false,
+    }));
+    expect((await provider.discover()).map(s => [s.path, s.status])).toEqual([
+      ['a/AGENTS.md', 'active'],
+      ['b/AGENTS.md', 'active'],
+      ['a/nested/AGENTS.md', 'error'],
+    ]);
+  });
+  it('places ancestor instructions before nearer rules regardless of source family', async () => {
+    const root = instructionSource('AGENTS.md', '.');
+    const nested = {
+      ...instructionSource('src/.glyph/rules/typescript.mdc', 'src'),
+      kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+    };
+    const catalog = new AgentInstructionCatalog([{ discover: async () => [nested, root] }]);
+
+    expect(await catalog.refresh()).toEqual([root, nested]);
+    expect(catalog.resolve('src/app.ts')).toEqual([root, nested]);
+    // A caller can resolve a retained snapshot independently of the current catalog.
+    expect(catalog.resolve('src/app.ts', [root])).toEqual([root]);
+  });
+
   it('discovers Markdown instructions without frontmatter and resolves only the target ancestor chain', async () => {
     const { catalog } = await fixture();
-    const context = await catalog.context();
-
-    expect(context.schema).toBe('glyph.agent-instructions.v1');
-    expect(context.sources.map(source => [source.path, source.scope, source.content])).toEqual([
+    const sources = await catalog.refresh();
+    expect(sources.map(source => [source.path, source.scope, source.content])).toEqual([
       ['AGENTS.md', '.', 'root guidance'],
       ['docs/AGENTS.md', 'docs', 'docs guidance'],
       ['src/AGENTS.md', 'src', 'source guidance'],
     ]);
     expect(catalog.resolve('src/feature/file.ts').map(source => source.path)).toEqual(['AGENTS.md', 'src/AGENTS.md']);
     expect(catalog.resolve('docs/readme.md').map(source => source.path)).toEqual(['AGENTS.md', 'docs/AGENTS.md']);
-  });
-
-  it('freezes a turn, discloses only roots up front, and reveals nested scopes once on demand', async () => {
-    const { root, catalog } = await fixture();
-
-    await expect(catalog.beginTurn('turn-1', [])).resolves.toMatchObject({
-      sources: [{ path: 'AGENTS.md', scope: '.' }],
-    });
-    expect(catalog.disclose('turn-1', ['src/feature/file.ts'])?.sources.map(source => source.path)).toEqual([
-      'src/AGENTS.md',
-    ]);
-    expect(catalog.disclose('turn-1', ['src/other.ts'])).toBeUndefined();
-    expect(catalog.disclose('turn-1', ['docs/readme.md'])?.sources.map(source => source.path)).toEqual([
-      'docs/AGENTS.md',
-    ]);
-    expect(catalog.disclose('unknown-turn', ['src/file.ts'])).toBeUndefined();
-
-    await writeFile(join(root, 'src', 'AGENTS.md'), 'later revision');
-    expect(catalog.resolve('src/file.ts').at(-1)?.content).toBe('source guidance');
-    await catalog.beginTurn('turn-2', []);
-    expect(catalog.disclose('turn-2', ['src/file.ts'])?.sources.at(-1)?.content).toBe('later revision');
-  });
-
-  it('includes the scoped chain for attached files in initial turn context', async () => {
-    const { catalog } = await fixture();
-    const context = await catalog.beginTurn('attached', ['src/feature/file.ts']);
-    expect(context.sources.map(source => source.path)).toEqual(['AGENTS.md', 'src/AGENTS.md']);
-    expect(catalog.disclose('attached', ['src/other.ts'])).toBeUndefined();
-  });
-
-  it('bounds frozen turn snapshots and evicts the oldest turn', async () => {
-    const { catalog } = await fixture();
-    for (let index = 0; index < 33; index++) await catalog.beginTurn(`turn-${index}`, []);
-
-    expect(catalog.disclose('turn-0', ['src/file.ts'])).toBeUndefined();
-    expect(catalog.disclose('turn-32', ['src/file.ts'])?.sources.map(source => source.path)).toEqual(['src/AGENTS.md']);
   });
 
   it('refreshes created, edited, and deleted instruction files and emits only changed snapshots', async () => {
@@ -112,7 +119,7 @@ describe(AgentInstructionCatalog, () => {
     await writeFile(join(root, 'outside.md'), 'outside');
     await symlink(join(root, 'outside.md'), join(root, 'linked', 'AGENTS.md'));
     const catalog = new AgentInstructionCatalog([
-      new AgentsMdInstructionProvider(new FileSystemWorkspaceTextStore(root), { maxBytes: 3 }),
+      new AgentsMdInstructionProvider(fixtureWorkspace(root), { maxBytes: 3 }),
     ]);
 
     expect((await catalog.refresh()).map(source => source.path)).toEqual(['AGENTS.md']);
@@ -163,6 +170,19 @@ describe(AgentInstructionCatalog, () => {
     ]);
   });
 
+  it('bounds directory guidance reads across a discovery', async () => {
+    const read = vi.fn(async () => ({ text: 'rule', byteLength: 4, revision: 'revision' }));
+    const provider = new AgentsMdInstructionProvider(
+      { normalizePath: (path: string) => path, read } as never,
+      { maxDiscoveryBytes: 4 },
+      async () => ({ files: ['AGENTS.md', 'sub/AGENTS.md'], truncated: false }),
+    );
+    const [root, nested] = await provider.discover();
+    expect(root?.content).toBe('rule');
+    expect(nested?.message).toContain('budget');
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it('uses fallback messages for non-Error discovery and read failures', async () => {
     const discovery = new AgentsMdInstructionProvider({} as WorkspaceTextStore, {}, async () => {
       throw 'untyped discovery failure';
@@ -203,6 +223,58 @@ describe(AgentInstructionCatalog, () => {
     });
 
     await expect(provider.discover(controller.signal)).rejects.toBe(cancelled);
+  });
+
+  it('keeps a newer published result when an earlier discovery finishes last', async () => {
+    let resolveEarlier!: (sources: readonly AgentInstructionSource[]) => void;
+    const earlier = new Promise<readonly AgentInstructionSource[]>(resolve => {
+      resolveEarlier = resolve;
+    });
+    const discover = vi
+      .fn<() => Promise<readonly AgentInstructionSource[]>>()
+      .mockReturnValueOnce(earlier)
+      .mockResolvedValueOnce([instructionSource('New/AGENTS.md', 'New')]);
+    const catalog = new AgentInstructionCatalog([{ discover }]);
+    const changed = vi.fn();
+    catalog.onDidChange(changed);
+    const old = catalog.refresh();
+    const published = await catalog.refresh();
+    resolveEarlier([instructionSource('Old/AGENTS.md', 'Old')]);
+    expect(await old).toBe(published);
+    expect(catalog.sources).toBe(published);
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+  it('orders source families and suppresses a Cursor rule shadowed by a native rule', async () => {
+    const source = (kind: AgentInstructionSourceKind, path: string, name?: string): AgentInstructionSource => ({
+      id: `${kind}:${path}`,
+      kind,
+      label: kind,
+      path,
+      scope: '.',
+      status: AgentInstructionSourceStatus.ACTIVE,
+      ...(name ? { name } : {}),
+    });
+    const catalog = new AgentInstructionCatalog([
+      {
+        discover: async () => [
+          source(AgentInstructionSourceKind.AGENTS_MD, 'AGENTS.md'),
+          source(AgentInstructionSourceKind.GLYPH_PROJECT_RULE, '.glyph/rules/shared.mdc', 'Shared'),
+          source(AgentInstructionSourceKind.GLYPH_PROJECT_RULE, '.glyph/rules/native.mdc'),
+          source(AgentInstructionSourceKind.CURSOR_PROJECT_RULE, '.cursor/rules/shared.mdc', 'Shared'),
+          source(AgentInstructionSourceKind.CURSOR_PROJECT_RULE, '.cursor/rules/cursor.mdc'),
+          source(AgentInstructionSourceKind.GLYPH_USER_RULE, '~/.glyph/rules/user.mdc'),
+        ],
+      },
+    ]);
+
+    expect((await catalog.refresh()).map(value => value.kind)).toEqual([
+      AgentInstructionSourceKind.GLYPH_USER_RULE,
+      AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
+      AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      AgentInstructionSourceKind.AGENTS_MD,
+    ]);
+    expect(catalog.sources.map(value => value.path)).not.toContain('.cursor/rules/shared.mdc');
   });
 });
 

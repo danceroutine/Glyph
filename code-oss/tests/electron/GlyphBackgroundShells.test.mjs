@@ -52,7 +52,7 @@ async function start(glyph, provider, command, wake = 'READY') {
   await glyph.send('Start a background command.');
   await glyph.page
     .getByRole('region', { name: 'Command approval' })
-    .getByRole('button', { name: 'Run', exact: true })
+    .getByRole('button', { name: 'Allow once', exact: true })
     .click();
   await finished(glyph);
   await expect(drawer(glyph)).toContainText('1 background terminal');

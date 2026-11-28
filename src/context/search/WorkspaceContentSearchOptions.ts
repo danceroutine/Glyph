@@ -1,3 +1,4 @@
+import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
 import { z } from 'zod';
 
 export const workspaceContentSearchOptionsSchema = z
@@ -23,5 +24,8 @@ export const workspaceContentSearchOptionsSchema = z
 
 /** Serializable content-search inputs plus host-local cancellation. */
 export type WorkspaceContentSearchOptions = z.input<typeof workspaceContentSearchOptionsSchema> & {
+  /** Request host-only read identities for matches that may enter a provider request. */
+  readonly sourceAuthority?: PinnedSourceAuthority;
+  readonly retainAccess?: (check: () => void) => void;
   readonly signal?: AbortSignal | undefined;
 };

@@ -5,7 +5,8 @@ import { Emitter } from '#vs/base/common/event.js';
 import { Selection } from '#vs/editor/common/core/selection.js';
 import { EditorType } from '#vs/editor/common/editorCommon.js';
 import { QueryType } from '#vs/workbench/services/search/common/search.js';
-import { formatFolderContextOutline } from '#glyph/workbench/formatFolderContextOutline.js';
+import { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
+import { formatFolderAttachment, formatFolderContextOutline } from '#glyph/workbench/formatFolderContextOutline.js';
 import { GlyphContextCandidateKind } from '#glyph/workbench/GlyphContextActions.js';
 import {
   GlyphContextAttachmentKind,
@@ -20,6 +21,7 @@ interface Folder {
 }
 
 interface Stat {
+  isFile?: boolean;
   isDirectory?: boolean;
   isSymbolicLink?: boolean;
   size?: number;
@@ -28,9 +30,10 @@ interface Stat {
 
 function codeEditor(model: { uri: URI } | null, selections: Selection[] | null = [new Selection(1, 1, 1, 5)]) {
   const focus = new Emitter<void>();
+  const document = model && { getVersionId: () => 1, isDisposed: () => false, ...model };
   return {
     getEditorType: () => EditorType.ICodeEditor,
-    getModel: () => model,
+    getModel: () => document,
     getSelections: () => selections,
     onDidFocusEditorText: focus.event,
     focus: () => {
@@ -51,6 +54,10 @@ function controllerServices() {
   const folders: Folder[] = [{ name: 'workspace', uri: URI.file('/workspace') }];
   const models: { uri: URI }[] = [];
   const stats = new Map<string, Stat>();
+  const fileChanges = new Emitter<readonly { resource: URI; type: number }[]>();
+  const registrations = new Emitter<{ scheme: string }>();
+  const modelAdded = new Emitter<{ uri: URI }>();
+  const modelRemoved = new Emitter<{ uri: URI }>();
   const editorAdded = new Emitter<ReturnType<typeof codeEditor>>();
   const folderOf = (uri: URI) =>
     folders.find(folder => uri.path === folder.uri.path || uri.path.startsWith(`${folder.uri.path}/`));
@@ -64,10 +71,34 @@ function controllerServices() {
   const composer = { insertAttachments: vi.fn((_attachments: { side?: string }[]) => undefined) };
   const services = {
     folders,
+    fileChanges,
+    registrations,
+    modelAdded,
+    modelRemoved,
     models,
     stats,
     editorAdded,
     composer,
+    resolveAttachment: vi.fn(async (): Promise<{ files: string[]; truncated: boolean } | undefined> => ({
+      files: [],
+      truncated: false,
+    })),
+    instructionSources: [] as {
+      id: string;
+      path: string;
+      activation?: string;
+      status: string;
+      enabled?: boolean;
+      name?: string;
+      description?: string;
+      revision?: string;
+      managementRevision?: string;
+      caseSensitive?: boolean;
+      references?: readonly string[];
+      referenceResources?: readonly { uri: string; caseSensitive: boolean }[];
+      uri?: string;
+      kind?: string;
+    }[],
     codeEditorList: [] as ReturnType<typeof codeEditor>[],
     adapter: {
       contextPath,
@@ -96,6 +127,8 @@ function controllerServices() {
     },
     editors: { activeTextEditorControl: undefined as unknown, openEditor: vi.fn(async () => undefined) },
     modelService: {
+      onModelAdded: modelAdded.event,
+      onModelRemoved: modelRemoved.event,
       getModels: () => models,
       getModel: (uri: URI) => models.find(model => model.uri.toString() === uri.toString()) ?? null,
     },
@@ -112,6 +145,11 @@ function controllerServices() {
       fileSearch: vi.fn(async (): Promise<{ results: { resource: URI }[]; limitHit?: boolean }> => ({ results: [] })),
     },
     files: {
+      realpath: vi.fn(async (uri: URI): Promise<URI | undefined> => uri),
+      hasCapability: vi.fn(() => true),
+      getProvider: vi.fn(() => ({ onDidChangeFile: fileChanges.event })),
+      onDidChangeFileSystemProviderRegistrations: registrations.event,
+      watch: vi.fn(() => ({ dispose: vi.fn() })),
       resolve: vi.fn(async (uri: URI): Promise<Stat> => stats.get(uri.path) ?? { children: [] }),
       stat: vi.fn(async (uri: URI): Promise<Stat> => stats.get(uri.path) ?? { isDirectory: false, size: 4 }),
       exists: vi.fn(async (_uri: URI) => true),
@@ -128,6 +166,8 @@ function createController(services: ControllerServices) {
   return new GlyphContextController(
     services.adapter as never,
     () => services.composer as never,
+    () => services.instructionSources as never,
+    services.resolveAttachment,
     services.editors as never,
     { listCodeEditors: () => services.codeEditorList, onCodeEditorAdd: services.editorAdded.event } as never,
     services.modelService as never,
@@ -143,6 +183,285 @@ function createController(services: ControllerServices) {
 }
 
 describe(GlyphContextController, () => {
+  it.each([
+    '/workspace/src/AGENTS.md',
+    '/workspace/.glyph/rules/new.mdc',
+    '/workspace/.cursor/rules/new.mdc',
+    '/workspace/reference.md',
+    '/custom/references/note.md',
+  ])('refreshes instruction discovery after a relevant file or dirty-model change at %s', async path => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    services.instructionSources.push(
+      {
+        id: 'project',
+        status: 'active',
+        path: '.glyph/rules/project.mdc',
+        uri: 'file:///workspace/.glyph/rules/project.mdc',
+        references: ['reference.md'],
+      },
+      {
+        id: 'user',
+        kind: 'glyph_user_rule',
+        status: 'active',
+        path: '~/.glyph/rules/user.mdc',
+        uri: 'file:///custom/rules/user.mdc',
+        references: ['references/note.md'],
+      },
+    );
+    const edits = new Emitter<void>();
+    const model = { uri: URI.file(path), onDidChangeContent: edits.event };
+    services.models.push(model);
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    try {
+      controller.setInstructionRefresh(refresh, () => ['file:///custom/rules']);
+      controller.notifyInstructionsChanged();
+      expect(services.files.watch).toHaveBeenCalledWith(URI.file('/custom/references/note.md'), {
+        recursive: false,
+        excludes: [],
+      });
+      services.fileChanges.fire([{ resource: model.uri, type: 1 }]);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).toHaveBeenCalledOnce();
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+  it('stops scheduling refreshes when an open model loses its last rule reference', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const edits = new Emitter<void>();
+    const uri = URI.file('/workspace/former-reference.md');
+    services.models.push({ uri, onDidChangeContent: edits.event } as never);
+    services.instructionSources.push({
+      id: 'project',
+      path: '.glyph/rules/old.mdc',
+      status: 'active',
+      referenceResources: [{ uri: uri.toString(), caseSensitive: true }],
+    });
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    try {
+      controller.setInstructionRefresh(refresh);
+      controller.notifyInstructionsChanged();
+      services.instructionSources.length = 0;
+      controller.notifyInstructionsChanged();
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(refresh).not.toHaveBeenCalled();
+      services.instructionSources.push({
+        id: 'new',
+        path: '.glyph/rules/new.mdc',
+        status: 'active',
+        referenceResources: [{ uri: uri.toString(), caseSensitive: true }],
+      });
+      controller.notifyInstructionsChanged();
+      services.modelRemoved.fire(services.models[0]);
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(refresh).not.toHaveBeenCalled();
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+  it('watches profile skill enablement on disk and in dirty models', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    const edits = new Emitter<void>();
+    const uri = URI.file('/profile/.glyph/skill-state.json');
+    services.models.push({ uri, onDidChangeContent: edits.event } as never);
+    try {
+      controller.setInstructionRefresh(refresh, () => [uri.toString()]);
+      controller.notifyInstructionsChanged();
+      expect(services.files.watch).toHaveBeenCalledWith(expect.objectContaining({ path: uri.path }), {
+        recursive: false,
+        excludes: [],
+      });
+      services.fileChanges.fire([{ resource: uri, type: 1 }]);
+      await vi.advanceTimersByTimeAsync(1300);
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(1300);
+      expect(refresh.mock.calls).toEqual([[true], [true], [true], [true]]);
+    } finally {
+      controller.dispose();
+      edits.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('refreshes a repaired reference through its attached nested alias or physical URI', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    try {
+      services.instructionSources.push({
+        id: 'rule',
+        path: 'Outer/.glyph/rules/r.mdc',
+        status: 'error',
+        references: ['Outer/sub/shared.md'],
+        referenceResources: [
+          { uri: 'file:///alias/shared.md', caseSensitive: false },
+          { uri: 'file:///volume/sub/shared.md', caseSensitive: true },
+        ],
+      });
+      controller.setInstructionRefresh(refresh);
+      controller.notifyInstructionsChanged();
+      for (const path of ['/alias/SHARED.md', '/volume/sub/shared.md']) {
+        services.fileChanges.fire([{ resource: URI.file(path), type: 1 }]);
+        await vi.advanceTimersByTimeAsync(1300);
+      }
+      expect(refresh).toHaveBeenCalledTimes(4);
+      expect(services.files.watch).toHaveBeenCalledTimes(2);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+  it('observes differently cased reference creations on insensitive roots without conflating root IDs', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    try {
+      services.instructionSources.push({
+        id: 'rule',
+        kind: 'glyph_project_rule',
+        path: '.glyph/rules/r.mdc',
+        status: 'error',
+        references: ['docs/missing.md'],
+      });
+      controller.setInstructionRefresh(refresh);
+      const changed = async (path: string) => {
+        services.fileChanges.fire([{ resource: URI.file(path), type: 1 }]);
+        await vi.advanceTimersByTimeAsync(1300);
+      };
+      await changed('/workspace/docs/MISSING.md');
+      expect(refresh).not.toHaveBeenCalled();
+      services.files.hasCapability.mockReturnValue(false);
+      await changed('/workspace/docs/MISSING.md');
+      expect(refresh).toHaveBeenCalledTimes(2);
+      refresh.mockClear();
+      services.folders.push({ name: 'Workspace', uri: URI.file('/other') });
+      services.instructionSources[0].references = ['Workspace/docs/missing.md'];
+      await changed('/workspace/docs/MISSING.md');
+      expect(refresh).not.toHaveBeenCalled();
+      await changed('/other/docs/MISSING.md');
+      expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps watching after an invalidated catalog or its delayed follow-up fails', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const controller = createController(services);
+    const refresh = vi.fn().mockRejectedValue(new Error('Catalog not ready'));
+    try {
+      controller.setInstructionRefresh(refresh);
+      services.fileChanges.fire([{ resource: URI.file('/workspace/AGENTS.md'), type: 1 }]);
+      await vi.advanceTimersByTimeAsync(1300);
+      expect(refresh.mock.calls).toEqual([[true], [true]]);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconciles trusted user watch roots and notifies slash search once per catalog change', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    const changed = vi.fn();
+    const disposeWatch = vi.fn();
+    services.files.watch.mockReturnValueOnce({ dispose: disposeWatch });
+    const unsubscribe = controller.onDidChangeInstructions(changed);
+    const source = { id: 'linked', path: 'direct.mdc', status: 'active', uri: 'file:///workspace/direct.mdc' };
+    services.instructionSources.push(source, {
+      id: 'unknown-location',
+      kind: 'glyph_user_rule',
+      path: 'user.mdc',
+      status: 'active',
+      uri: 'file:///other/rules/user.mdc',
+      references: ['references/guide.md'],
+    });
+    try {
+      controller.setInstructionRefresh(refresh, () => ['file:///custom/rules']);
+      controller.notifyInstructionsChanged();
+      controller.notifyInstructionsChanged();
+      expect(services.files.watch).toHaveBeenCalledOnce();
+      expect(changed).toHaveBeenCalledOnce();
+      services.fileChanges.fire([{ resource: URI.file('/workspace/unrelated.ts'), type: 1 }]);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).not.toHaveBeenCalled();
+      services.fileChanges.fire([{ resource: URI.parse(source.uri), type: 1 }]);
+      await vi.advanceTimersByTimeAsync(1300);
+      expect(refresh).toHaveBeenCalledTimes(2);
+      services.trust.isWorkspaceTrusted.mockReturnValue(false);
+      controller.notifyInstructionsChanged();
+      expect(disposeWatch).toHaveBeenCalledOnce();
+      unsubscribe();
+      services.instructionSources.splice(0);
+      controller.notifyInstructionsChanged();
+      expect(changed).toHaveBeenCalledOnce();
+      controller.setInstructionRefresh();
+      services.fileChanges.fire([{ resource: URI.file('/workspace/AGENTS.md'), type: 1 }]);
+      await vi.advanceTimersByTimeAsync(1300);
+      expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('refreshes saved and unsaved rule metadata, reconnects provider listeners, and suppresses refresh when trust is lost', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const edits = new Emitter<void>();
+    const model = { uri: URI.file('/workspace/.glyph/rules/example.mdc'), onDidChangeContent: edits.event };
+    services.models.push(model, { uri: URI.file('/workspace/source.ts') });
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    try {
+      controller.notifyInstructionsChanged();
+      controller.setInstructionRefresh(refresh);
+      controller.notifyInstructionsChanged();
+      services.fileChanges.fire([{ resource: URI.file('/workspace/source.ts'), type: 1 }]);
+      services.registrations.fire({ scheme: 'git' });
+      services.files.getProvider.mockReturnValueOnce(undefined as never);
+      services.registrations.fire({ scheme: 'file' });
+      services.registrations.fire({ scheme: 'file' });
+      services.modelAdded.fire({
+        uri: URI.file('/workspace/.cursor/rules/other.mdc'),
+        onDidChangeContent: edits.event,
+      });
+      services.trust.isWorkspaceTrusted.mockReturnValue(false);
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).not.toHaveBeenCalled();
+      services.trust.isWorkspaceTrusted.mockReturnValue(true);
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).toHaveBeenCalledOnce();
+      services.trust.isWorkspaceTrusted.mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(refresh).toHaveBeenCalledOnce();
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
   describe(GlyphContextController.prototype.selectIdeContext, () => {
     it('asks for IDE context from the focused side of a diff editor', async () => {
       const services = controllerServices();
@@ -219,6 +538,47 @@ describe(GlyphContextController, () => {
       ]);
     });
 
+    it('preserves the original selection version while waiting for host authorization', async () => {
+      const services = controllerServices();
+      let version = 1;
+      const model = { uri: URI.file('/workspace/a.ts'), getVersionId: () => version };
+      services.editors.activeTextEditorControl = codeEditor(model);
+      services.resolveAttachment.mockImplementationOnce(async () => {
+        version++;
+        return undefined;
+      });
+      await expect(createController(services).attachSelection()).rejects.toMatchObject({
+        code: GlyphDesktopErrorCode.STALE_DOCUMENT,
+      });
+      expect(services.adapter.captureContext).not.toHaveBeenCalled();
+      expect(services.composer.insertAttachments).not.toHaveBeenCalled();
+    });
+
+    it('checks the file before reading a selection and again before adding the snapshot to the composer', async () => {
+      const services = controllerServices();
+      services.editors.activeTextEditorControl = codeEditor({ uri: URI.file('/workspace/a.ts') }, [
+        new Selection(1, 1, 1, 3),
+      ]);
+      services.resolveAttachment.mockRejectedValueOnce(new Error('private file'));
+      const controller = createController(services);
+      await expect(controller.attachSelection()).rejects.toThrow('private file');
+      expect(services.adapter.captureContext).not.toHaveBeenCalled();
+      services.resolveAttachment.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('access changed'));
+      await expect(controller.attachSelection()).rejects.toThrow('access changed');
+      expect(services.adapter.captureContext).toHaveBeenCalledOnce();
+      expect(services.composer.insertAttachments).not.toHaveBeenCalled();
+    });
+
+    it('attaches an untitled selection from its editor without requesting a disk resource', async () => {
+      const services = controllerServices();
+      services.editors.activeTextEditorControl = codeEditor({ uri: URI.parse('untitled:Draft') });
+      await createController(services).attachSelection();
+      expect(services.composer.insertAttachments).toHaveBeenCalledWith([
+        expect.objectContaining({ uri: 'untitled:Draft', kind: GlyphContextAttachmentKind.SELECTION }),
+      ]);
+      expect(services.resolveAttachment).not.toHaveBeenCalled();
+    });
+
     it('attaches every highlighted range of a plain editor', async () => {
       const services = controllerServices();
       services.editors.activeTextEditorControl = codeEditor({ uri: URI.file('/workspace/a.ts') }, [
@@ -256,7 +616,11 @@ describe(GlyphContextController, () => {
     it('refuses to search in an untrusted workspace', async () => {
       const services = controllerServices();
       services.trust.isWorkspaceTrusted.mockReturnValue(false);
-      await expect(createController(services).searchFiles('')).rejects.toMatchObject({
+      const controller = createController(services);
+      await expect(controller.searchFiles('')).rejects.toMatchObject({
+        code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
+      });
+      await expect(controller.searchRules('')).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
       });
     });
@@ -331,6 +695,50 @@ describe(GlyphContextController, () => {
         'src/Deep/a.ts',
         'src/Deep/',
       ]);
+    });
+
+    it('offers only enabled active manual rules with bounded metadata', async () => {
+      const services = controllerServices();
+      services.instructionSources.push(
+        {
+          id: 'manual',
+          path: '.glyph/rules/typescript.mdc',
+          activation: 'manual',
+          status: 'active',
+          name: 'TypeScript',
+          description: 'Strict project types',
+          revision: 'one',
+        },
+        { id: 'path-name', path: '.glyph/rules/accessibility.mdc', activation: 'manual', status: 'active' },
+        { id: 'always', path: '.glyph/rules/always.mdc', activation: 'always', status: 'active' },
+        { id: 'failed', path: '.glyph/rules/failed.mdc', activation: 'manual', status: 'error' },
+        { id: 'disabled', path: '.glyph/rules/disabled.mdc', activation: 'manual', status: 'active', enabled: false },
+      );
+
+      const controller = createController(services);
+      expect(await controller.searchRules('type')).toEqual([
+        {
+          uri: 'glyph-rule:manual',
+          path: 'TypeScript',
+          name: 'TypeScript',
+          detail: 'Strict project types · .glyph/rules/typescript.mdc',
+          kind: GlyphContextCandidateKind.RULE,
+          ruleId: 'manual',
+          revision: 'one',
+        },
+      ]);
+      expect(await controller.searchRules('access')).toEqual([
+        {
+          uri: 'glyph-rule:path-name',
+          path: 'accessibility.mdc',
+          name: 'accessibility.mdc',
+          detail: '.glyph/rules/accessibility.mdc',
+          kind: GlyphContextCandidateKind.RULE,
+          ruleId: 'path-name',
+        },
+      ]);
+      expect(await controller.searchRules('missing')).toEqual([]);
+      expect(services.search.fileSearch).not.toHaveBeenCalled();
     });
 
     it('searches only the root named by the query in a multi-root workspace', async () => {
@@ -478,16 +886,22 @@ describe(GlyphContextController, () => {
   });
 
   describe(GlyphContextController.prototype.captureFolder, () => {
+    it('reports an unavailable folder listing separately from an empty folder', async () => {
+      const services = controllerServices();
+      const uri = URI.file('/workspace');
+      services.stats.set(uri.path, { isDirectory: true });
+      services.resolveAttachment.mockResolvedValueOnce(undefined);
+      await expect(createController(services).captureFolder(uri.toString())).rejects.toThrow(
+        'Folder context is unavailable.',
+      );
+    });
+
     it('captures the search-visible outline of a nested folder', async () => {
       const services = controllerServices();
       services.stats.set('/workspace/src/deep', { isDirectory: true });
-      services.search.fileSearch.mockResolvedValue({
-        results: [
-          { resource: URI.file('/workspace/src/deep/a.ts') },
-          { resource: URI.file('/workspace/src/deep/inner/b.ts') },
-          { resource: URI.file('/workspace/src/deeper.ts') },
-        ],
-        limitHit: true,
+      services.resolveAttachment.mockResolvedValue({
+        files: ['a.ts', 'inner/b.ts'],
+        truncated: true,
       });
       const attachment = await createController(services).captureFolder('file:///workspace/src/deep');
       expect(attachment).toMatchObject({
@@ -496,6 +910,12 @@ describe(GlyphContextController, () => {
         path: 'src/deep',
         text: `Directory tree: src/deep\n(Search-visible paths; file contents are not included.)\n\n${formatFolderContextOutline(['a.ts', 'inner/b.ts'], true)}`,
       });
+      expect(services.resolveAttachment).toHaveBeenCalledWith({
+        uri: 'file:///workspace/src/deep',
+        path: 'src/deep',
+        folder: true,
+      });
+      expect(services.search.fileSearch).not.toHaveBeenCalled();
       expect(services.files.stat.mock.calls.map(([uri]) => uri.path)).toEqual([
         '/workspace/src/deep',
         '/workspace/src',
@@ -503,10 +923,45 @@ describe(GlyphContextController, () => {
       ]);
     });
 
-    it('names a workspace root after its folder', async () => {
+    it('uses the root scope when capturing or rebinding a named workspace folder', async () => {
       const services = controllerServices();
       services.stats.set('/workspace', { isDirectory: true });
-      expect(await createController(services).captureFolder('file:///workspace')).toMatchObject({ path: 'workspace' });
+      const controller = createController(services);
+      const capture = await controller.captureFolder('file:///workspace');
+      expect(capture.path).toBe('.');
+      expect((await controller.rebindAttachment(capture)).path).toBe('.');
+    });
+
+    it('sends the captured folder listing from drafts and queued messages after its workspace route changes', async () => {
+      const services = controllerServices();
+      const controller = createController(services);
+      const composer = new GlyphComposerState();
+      const uri = 'file:///workspace/src';
+      const listing = { files: ['nested/note.md'], truncated: true };
+      services.stats.set('/workspace/src', { isDirectory: true });
+      services.resolveAttachment.mockResolvedValueOnce(listing);
+      const capture = await controller.captureFolder(uri);
+      composer.insertAttachments([capture]);
+      composer.enqueueDraft();
+      // Older captures retain the rendered outline and may already have a separate source revision.
+      const { folderListing: _listing, ...legacy } = capture;
+      composer.insertAttachments([{ ...legacy, sourceRevision: 'original revision' }]);
+      services.folders.push({ name: 'other', uri: URI.file('/other') });
+      await composer.mapAttachments(value => controller.rebindAttachment(value));
+      services.folders[0].name = 'project';
+      await composer.mapAttachments(value => controller.rebindAttachment(value));
+      const send = vi.fn(async (_text: string, _attachments: readonly GlyphContextAttachment[]) => {});
+      await composer.submit(send);
+      await composer.sendQueued(composer.snapshot.queued[0].id, send);
+      const text = formatFolderAttachment('project/src', listing.files, true);
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+      const contentRevision = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+      const expected = { ...legacy, path: 'project/src', text, contentRevision };
+      expect(send.mock.calls.map(([prompt, attachments]) => [prompt, attachments])).toEqual([
+        ['@project/src', [{ ...expected, sourceRevision: 'original revision' }]],
+        ['@project/src', [{ ...expected, folderListing: listing, sourceRevision: capture.contentRevision }]],
+      ]);
+      expect(services.resolveAttachment).toHaveBeenCalledTimes(1);
     });
 
     it('names an unnamed workspace root as the current folder', async () => {
@@ -514,6 +969,21 @@ describe(GlyphContextController, () => {
       services.folders.splice(0, 1, { name: '', uri: URI.file('/workspace') });
       services.stats.set('/workspace', { isDirectory: true });
       expect(await createController(services).captureFolder('file:///workspace')).toMatchObject({ path: '.' });
+    });
+
+    it('routes the selected multi-root folder by its root ID, including a workspace selected through a symlink', async () => {
+      const services = controllerServices();
+      services.folders.push({ name: 'other', uri: URI.file('/other') });
+      const root = services.folders[0];
+      services.stats.set(root.uri.path, { isDirectory: true, isSymbolicLink: true });
+      services.resolveAttachment.mockResolvedValueOnce({ files: ['a.ts'], truncated: false });
+      const capture = await createController(services).captureFolder(root.uri.toString());
+      expect(services.resolveAttachment).toHaveBeenCalledWith({
+        uri: root.uri.toString(),
+        path: root.name,
+        folder: true,
+      });
+      expect(capture).toMatchObject({ path: root.name, folderListing: { files: ['a.ts'], truncated: false } });
     });
 
     it('refuses folders that are not on disk', async () => {
@@ -574,10 +1044,9 @@ describe(GlyphContextController, () => {
     it('refuses an outline larger than the attachment limit', async () => {
       const services = controllerServices();
       services.stats.set('/workspace/src', { isDirectory: true });
-      services.search.fileSearch.mockResolvedValue({
-        results: Array.from({ length: 1000 }, (_, index) => ({
-          resource: URI.file(`/workspace/src/${String(index).padStart(600, '0')}.ts`),
-        })),
+      services.resolveAttachment.mockResolvedValue({
+        files: Array.from({ length: 1000 }, (_, index) => String(index).padStart(600, '0') + '.ts'),
+        truncated: false,
       });
       await expect(createController(services).captureFolder('file:///workspace/src')).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED,
@@ -587,9 +1056,9 @@ describe(GlyphContextController, () => {
     it('refuses a capture whose workspace path changed meanwhile', async () => {
       const services = controllerServices();
       services.stats.set('/workspace/src', { isDirectory: true });
-      services.search.fileSearch.mockImplementation(async () => {
+      services.resolveAttachment.mockImplementation(async () => {
         services.folders.splice(0, 1, { name: 'other', uri: URI.file('/workspace/src') });
-        return { results: [] };
+        return { files: [], truncated: false };
       });
       await expect(createController(services).captureFolder('file:///workspace/src')).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.STALE_DOCUMENT,
@@ -599,9 +1068,9 @@ describe(GlyphContextController, () => {
     it('refuses a capture whose workspace folder disappeared meanwhile', async () => {
       const services = controllerServices();
       services.stats.set('/workspace/src', { isDirectory: true });
-      services.search.fileSearch.mockImplementation(async () => {
+      services.resolveAttachment.mockImplementation(async () => {
         services.folders.splice(0);
-        return { results: [] };
+        return { files: [], truncated: false };
       });
 
       await expect(createController(services).captureFolder('file:///workspace/src')).rejects.toMatchObject({
@@ -790,9 +1259,9 @@ describe(GlyphContextController, () => {
       unavailable: 'Earlier problem.',
     };
 
-    it('keeps untitled captures without their token', () => {
+    it('keeps untitled captures without their token', async () => {
       expect(
-        createController(controllerServices()).rebindAttachment({ ...attachment, uri: 'untitled:Untitled-1' }),
+        await createController(controllerServices()).rebindAttachment({ ...attachment, uri: 'untitled:Untitled-1' }),
       ).toEqual({
         kind: GlyphContextAttachmentKind.FILE,
         uri: 'untitled:Untitled-1',
@@ -802,25 +1271,25 @@ describe(GlyphContextController, () => {
       });
     });
 
-    it('marks captures of other resources unavailable', () => {
+    it('marks captures of other resources unavailable', async () => {
       expect(
-        createController(controllerServices()).rebindAttachment({
+        await createController(controllerServices()).rebindAttachment({
           ...attachment,
           uri: 'vscode-test-data://results/run',
         }),
       ).toMatchObject({ unavailable: 'Workspace changed. Capture this context again before sending.' });
     });
 
-    it('marks captures outside of the workspace unavailable', () => {
+    it('marks captures outside of the workspace unavailable', async () => {
       expect(
-        createController(controllerServices()).rebindAttachment({ ...attachment, uri: 'file:///elsewhere/a.ts' }),
+        await createController(controllerServices()).rebindAttachment({ ...attachment, uri: 'file:///elsewhere/a.ts' }),
       ).toMatchObject({
         unavailable: 'Source folder was removed. Remove this attachment or add its folder again before sending.',
       });
     });
 
-    it('renames workspace captures to their current path', () => {
-      const rebound = createController(controllerServices()).rebindAttachment({
+    it('renames workspace captures to their current path', async () => {
+      const rebound = await createController(controllerServices()).rebindAttachment({
         ...attachment,
         uri: 'file:///workspace/a.ts',
       });
@@ -832,6 +1301,162 @@ describe(GlyphContextController, () => {
         contentRevision: 'revision',
       });
     });
+  });
+
+  it('rechecks manual eligibility for restored badges and refreshes their catalog revision', async () => {
+    const services = controllerServices();
+    const controller = createController(services);
+    const attachment: GlyphContextAttachment = {
+      kind: GlyphContextAttachmentKind.RULE,
+      ruleId: 'r',
+      uri: 'glyph-rule:r',
+      text: '',
+      path: 'rule',
+      contentRevision: 'old',
+    };
+    const rule = {
+      id: 'r',
+      path: 'rules/r.mdc',
+      status: 'active',
+      activation: 'manual',
+      name: 'New name',
+      revision: 'new',
+    };
+    const refresh = vi.fn(async () => {});
+    controller.setInstructionRefresh(refresh);
+    expect(await controller.checkAttachment(attachment)).toContain('unavailable');
+    await expect(controller.refreshAttachment(attachment)).rejects.toThrow('unavailable');
+    services.instructionSources.push(rule);
+    const { ruleId: _ruleId, ...legacy } = attachment;
+    expect(await controller.checkAttachment(legacy)).toContain('instructions changed');
+    expect((await controller.refreshAttachment(legacy)).contentRevision).toBe('new');
+    expect(await controller.rebindAttachment({ ...attachment, unavailable: 'previous root' })).toEqual(attachment);
+    expect(await controller.checkAttachment(attachment)).toContain('instructions changed');
+    const current = await controller.refreshAttachment({ ...attachment, unavailable: 'previously disabled' });
+    expect(current).toMatchObject({ path: 'New name', contentRevision: 'new' });
+    expect(current.unavailable).toBeUndefined();
+    expect(await controller.checkAttachment(current)).toBeUndefined();
+    services.instructionSources[0] = { ...rule, name: undefined, revision: undefined };
+    expect(await controller.refreshAttachment(attachment)).toMatchObject({ path: 'rule', contentRevision: 'r' });
+    expect(await controller.checkAttachment(attachment)).toBeUndefined();
+    rule.activation = 'always';
+    services.instructionSources[0] = rule;
+    expect(await controller.checkAttachment(attachment)).toContain('unavailable');
+    await expect(controller.refreshAttachment(attachment)).rejects.toThrow('unavailable');
+  });
+
+  it('opens a registered alias through the logical editor URI only while its physical file still matches', async () => {
+    const services = controllerServices();
+    const controller = createController(services);
+    const physical = URI.file('/actual/AGENTS.md');
+    const source = { id: 'guidance', path: 'AGENTS.md', status: 'active', uri: physical.toString() };
+    services.instructionSources.push(source);
+    services.files.stat.mockImplementation(async uri => ({
+      isFile: uri.path.endsWith('.md'),
+      isDirectory: !uri.path.endsWith('.md'),
+      isSymbolicLink: uri.path === '/workspace',
+    }));
+    services.files.realpath.mockResolvedValue(physical);
+    const history = vi.fn(async (id: string) => (id === 'old' ? 'guidance' : undefined));
+    controller.setInstructionRefresh(undefined, undefined, history);
+    await controller.openInstruction('old');
+    await expect(controller.openInstruction('gone')).rejects.toThrow('unavailable');
+    await controller.openInstruction('guidance');
+    expect(history.mock.calls).toEqual([['old'], ['gone']]);
+    expect(services.editors.openEditor).toHaveBeenCalledWith({
+      resource: expect.objectContaining({ path: '/workspace/AGENTS.md' }),
+      options: { pinned: true },
+    });
+    services.files.realpath.mockResolvedValue(URI.file('/actual/agents.md'));
+    services.instructionSources[0] = { ...source, caseSensitive: false };
+    await controller.openInstruction('guidance');
+    services.instructionSources[0] = { ...source, caseSensitive: true };
+    await expect(controller.openInstruction('guidance')).rejects.toThrow('unavailable');
+    services.files.realpath.mockResolvedValue(undefined);
+    await expect(controller.openInstruction('guidance')).rejects.toThrow('unavailable');
+    services.files.stat.mockResolvedValueOnce({ isFile: true, isSymbolicLink: true });
+    await expect(controller.openInstruction('guidance')).rejects.toThrow('unavailable');
+  });
+  it('opens only currently authorized instruction files through their owning root', async () => {
+    const services = controllerServices();
+    const controller = createController(services);
+    const project = { id: 'r', path: '.glyph/rules/r.mdc', status: 'error', revision: 'source' };
+    const user = {
+      id: 'u',
+      path: '~/.glyph/rules/u.mdc',
+      status: 'active',
+      kind: 'glyph_user_rule',
+      uri: 'file:///profile/.glyph/rules/u.mdc',
+    };
+    services.instructionSources.push(project, user);
+    controller.setInstructionRefresh(
+      vi.fn(async () => {}),
+      () => ['file:///profile/.glyph/rules'],
+    );
+    services.files.stat.mockImplementation(async uri =>
+      uri.path.endsWith('.mdc') ? { isFile: true } : { isDirectory: true },
+    );
+    await controller.openAttachment({ path: 'r', uri: 'glyph-rule:r' });
+    await controller.openInstruction('u');
+    expect(services.editors.openEditor).toHaveBeenCalledWith({
+      resource: expect.objectContaining({ path: '/workspace/.glyph/rules/r.mdc' }),
+      options: { pinned: true },
+    });
+    expect(services.editors.openEditor).toHaveBeenCalledWith({
+      resource: expect.objectContaining({ path: '/profile/.glyph/rules/u.mdc' }),
+      options: { pinned: true },
+    });
+
+    services.folders.push({ name: 'other', uri: URI.file('/other') });
+    project.path = 'other/r.mdc';
+    await controller.openInstruction('r');
+    expect(services.editors.openEditor).toHaveBeenCalledWith({
+      resource: expect.objectContaining({ path: '/other/r.mdc' }),
+      options: { pinned: true },
+    });
+    for (const path of [
+      'missing/r.mdc',
+      'other',
+      'other/../r.mdc',
+      'other/./r.mdc',
+      'other//r.mdc',
+      'other/a\\r.mdc',
+    ]) {
+      project.path = path;
+      await expect(controller.openInstruction('r')).rejects.toThrow('unavailable');
+    }
+    for (const uri of ['', 'file:///other/u.mdc', 'untitled:/profile/.glyph/rules/u.mdc']) {
+      user.uri = uri;
+      await expect(controller.openInstruction('u')).rejects.toThrow('unavailable');
+    }
+    project.path = 'other/r.mdc';
+    for (const denied of [{ isSymbolicLink: true }, { isDirectory: true }]) {
+      services.files.stat.mockResolvedValueOnce(denied);
+      await expect(controller.openInstruction('r')).rejects.toThrow('unavailable');
+    }
+    services.files.stat
+      .mockResolvedValueOnce({ isFile: true })
+      .mockResolvedValueOnce({ isDirectory: true, isSymbolicLink: true });
+    await expect(controller.openInstruction('r')).rejects.toThrow('unavailable');
+    services.files.stat.mockResolvedValueOnce({ isFile: true }).mockResolvedValueOnce({ isFile: true });
+    await expect(controller.openInstruction('r')).rejects.toThrow('unavailable');
+    services.files.stat.mockImplementationOnce(async () => {
+      services.instructionSources.shift();
+      return { isFile: true };
+    });
+    await expect(controller.openInstruction('r')).rejects.toThrow('unavailable');
+    await expect(controller.openInstruction('missing')).rejects.toThrow('unavailable');
+    services.instructionSources.push({ ...project, revision: undefined });
+    await expect(controller.openInstruction('r')).rejects.toThrow('unavailable');
+    services.instructionSources[1].managementRevision = 'source';
+    await controller.openInstruction('r');
+    services.files.stat.mockImplementationOnce(async () => {
+      services.folders.pop();
+      return { isFile: true };
+    });
+    await expect(controller.openInstruction('r')).rejects.toThrow('unavailable');
+    services.trust.isWorkspaceTrusted.mockReturnValue(false);
+    await expect(controller.openInstruction('r')).rejects.toThrow('Trust this workspace');
   });
 
   describe(GlyphContextController.prototype.openAttachment, () => {

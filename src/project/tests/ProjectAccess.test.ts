@@ -1,3 +1,8 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+import { fixtureWorkspace, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
+import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleInstructionProvider.js';
+import { AgentInstructionSourceKind } from '#src/instructions/AgentInstructionSource.js';
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +13,6 @@ import type { AgentInstructionContext } from '#src/instructions/AgentInstruction
 import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { ProjectAccess } from '#src/project/ProjectAccess.js';
 
@@ -34,12 +38,94 @@ async function fixture(): Promise<{ access: ProjectAccess; root: string }> {
   await writeFile(join(root, 'src', 'app.ts'), ['one', 'two', 'three', 'four'].join('\n'));
   await writeFile(join(root, 'node_modules', 'dependency.js'), 'ignored');
   await writeFile(join(root, 'target', 'native-artifact'), 'ignored');
-  return { access: new ProjectAccess(root), root };
+  return { access: fixtureProjectAccess(root), root };
 }
 
 describe(ProjectAccess, () => {
+  it('rejects conflicting or incomplete search identities and skips an empty batch', async () => {
+    const disclosure = new WorkspaceDisclosure();
+    const authority = { capture: vi.fn(async () => []), authorize: vi.fn() };
+    await disclosure.retainFiles(authority, []);
+    expect(authority.capture).not.toHaveBeenCalled();
+    const file = { path: '/project/source', identity: '1:1' };
+    await expect(disclosure.retainFiles(authority, [file, { ...file, identity: '1:2' }])).rejects.toThrow(
+      'source changed',
+    );
+    await expect(disclosure.retainFiles(authority, [file, file])).rejects.toThrow('source changed');
+    expect(authority.capture).toHaveBeenCalledOnce();
+    expect(disclosure.hasValidators).toBe(false);
+  });
+
+  it('withholds match text when an index cannot identify the selected sources', async () => {
+    const match = {
+      path: 'one.js',
+      line: 1,
+      column: 1,
+      endLine: 1,
+      endColumn: 2,
+      lineText: 'x',
+      matchedText: 'x',
+      linesBefore: [],
+      linesAfter: [],
+    };
+    const index = {
+      glob: vi.fn(),
+      searchContents: async () => ({
+        outputMode: 'content' as const,
+        matches: [match],
+        searchedFiles: 1,
+        skippedFiles: 0,
+        truncated: false,
+        indexTruncated: false,
+        nextOffset: null,
+      }),
+    };
+    const access = new ProjectAccess(fixtureWorkspace('/project'), index, {}, undefined, {
+      capture: vi.fn(),
+      authorize: vi.fn(),
+    });
+    const result = await access.execute(
+      'search_project_contents',
+      JSON.stringify({
+        pattern: 'x',
+        pattern_kind: 'literal',
+        path: null,
+        file_glob: null,
+        file_type: null,
+        output_mode: 'content',
+        lines_before: 0,
+        lines_after: 0,
+        case_sensitive: true,
+        multiline: false,
+        limit: 10,
+        offset: 0,
+      }),
+    );
+    expect(JSON.parse(result)).toMatchObject({
+      error: { message: expect.stringContaining('source of a search match is unavailable') },
+    });
+  });
+
+  it('withholds disk bytes if the file observed during source enrollment differs from the read descriptor', async () => {
+    const { root } = await fixture();
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const authority = {
+      capture: async (paths: readonly string[]) =>
+        paths.map(path => ({ path, origin: 'route', identity: 'other file' })),
+      authorize: vi.fn(),
+    };
+    const access = new ProjectAccess(fixtureWorkspace(root), { glob: vi.fn() }, {}, undefined, authority);
+    const result = await access.execute(
+      'read_project_file',
+      JSON.stringify({ path: 'README.md', start_line: null, end_line: null }),
+    );
+    expect(result).toContain('source changed while reading');
+    expect(result).not.toContain('# Sample');
+    expect(authority.authorize).not.toHaveBeenCalled();
+  });
+
   it('counts escaped and multibyte text in the read-result budget', async () => {
-    const workspace = new FileSystemWorkspaceTextStore('/fixture');
+    const workspace = fixtureWorkspace('/fixture');
     const text = '😀\t"\\\n'.repeat(30_000);
     vi.spyOn(workspace, 'read').mockResolvedValue({
       path: 'escaped.txt',
@@ -50,7 +136,7 @@ describe(ProjectAccess, () => {
       revision: 'revision',
       byteLength: Buffer.byteLength(text),
     });
-    const result = await new ProjectAccess('/fixture', {}, workspace).execute(
+    const result = await fixtureProjectAccess('/fixture', {}, workspace).execute(
       'read_project_file',
       JSON.stringify({ path: 'escaped.txt', start_line: null, end_line: null }),
     );
@@ -61,7 +147,7 @@ describe(ProjectAccess, () => {
   });
 
   it('bounds serialized line metadata and numbered content and exposes the next unread line', async () => {
-    const workspace = new FileSystemWorkspaceTextStore('/fixture');
+    const workspace = fixtureWorkspace('/fixture');
     vi.spyOn(workspace, 'read').mockResolvedValue({
       path: 'many-lines.txt',
       text: '\n'.repeat(512 * 1024),
@@ -71,7 +157,7 @@ describe(ProjectAccess, () => {
       revision: 'revision',
       byteLength: 512 * 1024,
     });
-    const access = new ProjectAccess('/fixture', {}, workspace);
+    const access = fixtureProjectAccess('/fixture', {}, workspace);
     const read = (start_line: number) =>
       access.execute('read_project_file', JSON.stringify({ path: 'many-lines.txt', start_line, end_line: null }));
     const result = await read(1);
@@ -85,7 +171,7 @@ describe(ProjectAccess, () => {
   });
 
   it('attaches newly applicable scoped instructions to reads only once per turn', async () => {
-    const workspace = new FileSystemWorkspaceTextStore('/fixture');
+    const workspace = fixtureWorkspace('/fixture');
     vi.spyOn(workspace, 'read').mockResolvedValue({
       path: 'src/app.ts',
       text: 'content',
@@ -95,11 +181,13 @@ describe(ProjectAccess, () => {
       revision: 'revision',
       byteLength: 7,
     });
-    const disclose = vi
+    const disclosePaths = vi
       .fn()
       .mockReturnValueOnce({ schema: 'glyph.agent-instructions.v1', sources: [{ path: 'src/AGENTS.md' }] })
       .mockReturnValueOnce(undefined);
-    const access = new ProjectAccess('/fixture', {}, workspace, undefined, { disclose });
+    const access = fixtureProjectAccess('/fixture', {}, workspace, undefined, {
+      withPathInstructions: async (turnId, paths, deliver, signal) => deliver(disclosePaths(turnId, paths, signal)),
+    });
     const input = JSON.stringify({ path: 'src/app.ts', start_line: null, end_line: null });
 
     expect(JSON.parse(await access.execute('read_project_file', input, undefined, { turnId: 'turn' }))).toMatchObject({
@@ -108,7 +196,7 @@ describe(ProjectAccess, () => {
     expect(
       JSON.parse(await access.execute('read_project_file', input, undefined, { turnId: 'turn' })),
     ).not.toHaveProperty('instructionContext');
-    expect(disclose).toHaveBeenNthCalledWith(1, 'turn', ['src/app.ts']);
+    expect(disclosePaths).toHaveBeenNthCalledWith(1, 'turn', ['src/app.ts'], undefined);
   });
 
   it.each([
@@ -124,11 +212,27 @@ describe(ProjectAccess, () => {
         await mkdir(join(root, directory));
         await writeFile(join(root, directory, 'AGENTS.md'), `${directory} guidance`);
         await writeFile(join(root, directory, 'file.ts'), 'content');
+        await mkdir(join(root, directory, '.glyph', 'rules'), { recursive: true });
+        await writeFile(
+          join(root, directory, '.glyph', 'rules', 'files.mdc'),
+          '---\nglobs: ["**/*.ts"]\n---\nTypeScript guidance',
+        );
+        await writeFile(
+          join(root, directory, '.glyph', 'rules', 'model.mdc'),
+          '---\ndescription: Scoped review workflow\n---\nModel guidance',
+        );
       }
-      const workspace = new FileSystemWorkspaceTextStore(root);
-      const instructions = new AgentInstructionCatalog([new AgentsMdInstructionProvider(workspace)]);
-      await instructions.beginTurn('turn', []);
-      const access = new ProjectAccess(root, {}, workspace, undefined, instructions);
+      const workspace = fixtureWorkspace(root);
+      const instructions = new AgentInstructionCatalog([
+        new AgentsMdInstructionProvider(workspace),
+        new AgentRuleInstructionProvider(workspace, {
+          kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+          directory: '.glyph',
+        }),
+      ]);
+      const coordinator = new TurnContextCoordinator(instructions);
+      await coordinator.beginTurn({ turnId: 'turn', attachmentPaths: [] });
+      const access = fixtureProjectAccess(root, {}, workspace, undefined, coordinator);
       const result = JSON.parse(
         await access.execute(
           'read_project_file',
@@ -142,7 +246,14 @@ describe(ProjectAccess, () => {
         ),
       ) as { path: string; instructionContext?: AgentInstructionContext };
       expect(result.path).toBe(normalized);
-      expect(result.instructionContext?.sources.map(source => source.path)).toEqual([instruction]);
+      const scope = normalized.split('/')[0]!;
+      expect(result.instructionContext?.sources.map(source => source.path)).toEqual([
+        `${scope}/.glyph/rules/files.mdc`,
+        instruction,
+      ]);
+      expect(result.instructionContext?.candidates?.map(source => source.id)).toEqual([
+        `glyph_project_rule:${scope}/.glyph/rules/model.mdc`,
+      ]);
     },
   );
 
@@ -163,7 +274,7 @@ describe(ProjectAccess, () => {
           );
         }),
     );
-    const access = new ProjectAccess('/fixture', {}, undefined, { glob });
+    const access = fixtureProjectAccess('/fixture', {}, undefined, { glob });
     const controller = new AbortController();
     let outcome: unknown;
     const listing = access
@@ -229,7 +340,7 @@ describe(ProjectAccess, () => {
     it('applies its result limit to glob matches instead of unrelated files encountered first', async () => {
       const { root } = await fixture();
       await writeFile(join(root, 'src', 'second.ts'), 'export {}');
-      const access = new ProjectAccess(root, { maxFiles: 1 });
+      const access = fixtureProjectAccess(root, { maxFiles: 1 });
 
       const result = JSON.parse(
         await access.execute('list_project_files', JSON.stringify({ glob_pattern: '*.ts', target_directory: 'src' })),
@@ -240,21 +351,25 @@ describe(ProjectAccess, () => {
 
     it('delegates glob discovery to the shared path index when one is available', async () => {
       const { root } = await fixture();
-      const workspace = new FileSystemWorkspaceTextStore(root);
+      const workspace = fixtureWorkspace(root);
       const glob = vi.fn(async () => ({ files: ['src/app.ts'], truncated: false }));
-      const access = new ProjectAccess(root, { maxFiles: 37 }, workspace, { glob });
+      const access = fixtureProjectAccess(root, { maxFiles: 37 }, workspace, { glob });
 
       const result = JSON.parse(
         await access.execute('list_project_files', JSON.stringify({ glob_pattern: '*.ts', target_directory: 'src' })),
       ) as ProjectOutput;
 
       expect(result).toEqual({ files: ['src/app.ts'], truncated: false });
-      expect(glob).toHaveBeenCalledWith('*.ts', { targetDirectory: 'src', limit: 37 });
+      expect(glob).toHaveBeenCalledWith('*.ts', {
+        targetDirectory: 'src',
+        limit: 37,
+        retainAccess: expect.any(Function),
+      });
     });
 
     it('exposes structured native content search with readable filters and pagination', async () => {
       const { root } = await fixture();
-      const workspace = new FileSystemWorkspaceTextStore(root);
+      const workspace = fixtureWorkspace(root);
       const searchContents = vi.fn(async () => ({
         outputMode: 'content' as const,
         matches: [
@@ -276,7 +391,7 @@ describe(ProjectAccess, () => {
         truncated: false,
         nextOffset: null,
       }));
-      const access = new ProjectAccess(root, {}, workspace, {
+      const access = fixtureProjectAccess(root, {}, workspace, {
         glob: async () => ({ files: [], truncated: false }),
         searchContents,
       });
@@ -324,6 +439,7 @@ describe(ProjectAccess, () => {
       });
       expect(result.matches).toEqual([expect.objectContaining({ path: 'src/app.ts', matchedText: 'two' })]);
       expect(searchContents).toHaveBeenCalledWith('two', {
+        retainAccess: expect.any(Function),
         patternKind: 'literal',
         path: 'src',
         fileGlob: '*.ts',
@@ -339,12 +455,95 @@ describe(ProjectAccess, () => {
       });
     });
 
+    it.each(['read_project_file', 'search_project_contents'] as const)(
+      'makes nested guidance available again after %s loses its result authority',
+      async name => {
+        const { root } = await fixture();
+        await writeFile(join(root, 'src', 'AGENTS.md'), 'Use sentence case.');
+        const workspace = fixtureWorkspace(root);
+        const turns = new TurnContextCoordinator(
+          new AgentInstructionCatalog([new AgentsMdInstructionProvider(workspace)]),
+        );
+        const turn = await turns.beginTurn({ turnId: 'turn', attachmentPaths: [] });
+        const read = workspace.read.bind(workspace);
+        let current = true;
+        const assertCurrent = () => {
+          if (!current) throw new Error('The selected workspace folder changed.');
+        };
+        vi.spyOn(workspace, 'read').mockImplementation(async (path, options) => {
+          options?.retainAccess?.(assertCurrent);
+          return read(path, options);
+        });
+        const access = new ProjectAccess(
+          workspace,
+          {
+            glob: async () => ({ files: [], truncated: false }),
+            searchContents: async (_pattern, options) => {
+              options.retainAccess?.(assertCurrent);
+              return {
+                outputMode: 'count',
+                counts: [{ path: 'src/app.ts', count: 1 }],
+                searchedFiles: 1,
+                skippedFiles: 0,
+                indexTruncated: false,
+                truncated: false,
+                nextOffset: null,
+              };
+            },
+          },
+          {},
+          {
+            withPathInstructions: (id, paths, deliver, signal) =>
+              turns.withPathInstructions(
+                id,
+                paths,
+                instructions => {
+                  expect(instructions?.sources[0]?.content).toBe('Use sentence case.');
+                  return deliver(instructions);
+                },
+                signal,
+              ),
+          },
+        );
+        const input =
+          name === 'read_project_file'
+            ? { path: 'src/app.ts', start_line: null, end_line: null }
+            : {
+                pattern: 'one',
+                pattern_kind: 'literal',
+                path: null,
+                file_glob: null,
+                file_type: null,
+                output_mode: 'count',
+                lines_before: 0,
+                lines_after: 0,
+                case_sensitive: true,
+                multiline: false,
+                limit: 10,
+                offset: 0,
+              };
+        const execute = async () =>
+          JSON.parse(await access.execute(name, JSON.stringify(input), undefined, { turnId: 'turn' })) as {
+            error?: { message: string };
+            instructionContext?: AgentInstructionContext;
+          };
+        current = false;
+        expect(await execute()).toEqual({
+          error: { code: 'PROJECT_ACCESS_FAILED', message: 'The selected workspace folder changed.' },
+        });
+        expect(turn.snapshot().sources).toEqual([]);
+        current = true;
+        expect((await execute()).instructionContext?.sources[0]?.content).toBe('Use sentence case.');
+        expect(turn.snapshot().sources[0]?.content).toBe('Use sentence case.');
+      },
+    );
+
     it('discloses scoped instructions for files returned by count searches', async () => {
-      const disclose = vi.fn().mockReturnValue({
+      const disclosePaths = vi.fn().mockReturnValue({
         schema: 'glyph.agent-instructions.v1',
         sources: [{ path: 'src/AGENTS.md' }],
       });
-      const access = new ProjectAccess(
+      const access = fixtureProjectAccess(
         tmpdir(),
         {},
         undefined,
@@ -360,7 +559,9 @@ describe(ProjectAccess, () => {
             nextOffset: null,
           }),
         },
-        { disclose },
+        {
+          withPathInstructions: async (turnId, paths, deliver, signal) => deliver(disclosePaths(turnId, paths, signal)),
+        },
       );
 
       const result = JSON.parse(
@@ -386,13 +587,13 @@ describe(ProjectAccess, () => {
       ) as { instructionContext: { sources: { path: string }[] } };
 
       expect(result.instructionContext.sources).toEqual([{ path: 'src/AGENTS.md' }]);
-      expect(disclose).toHaveBeenCalledWith('turn', ['src/app.ts']);
+      expect(disclosePaths).toHaveBeenCalledWith('turn', ['src/app.ts'], undefined);
     });
 
     it('returns malformed tool output when the native index rejects a glob pattern', async () => {
       const { root } = await fixture();
-      const workspace = new FileSystemWorkspaceTextStore(root);
-      const access = new ProjectAccess(root, {}, workspace, {
+      const workspace = fixtureWorkspace(root);
+      const access = fixtureProjectAccess(root, {}, workspace, {
         glob: async () => {
           throw new WorkspacePathIndexError(
             WorkspacePathIndexFailureReason.INVALID_REQUEST,
@@ -445,7 +646,7 @@ describe(ProjectAccess, () => {
 
     it('accepts project-specific discovery and exclusion limits', async () => {
       const { root } = await fixture();
-      const access = new ProjectAccess(root, {
+      const access = fixtureProjectAccess(root, {
         maxFiles: 1,
         accessPolicy: new WorkspaceAccessPolicy({ sensitiveFilePrefixes: [] }),
       });
@@ -498,7 +699,7 @@ describe(ProjectAccess, () => {
 
     it('passes exact file and subtree exclusions through to its workspace adapter', async () => {
       const { root } = await fixture();
-      const access = new ProjectAccess(root, { excludedPaths: ['README.md', 'src'] });
+      const access = fixtureProjectAccess(root, { excludedPaths: ['README.md', 'src'] });
 
       const listed = JSON.parse(
         await access.execute(
@@ -568,7 +769,7 @@ describe(ProjectAccess, () => {
     });
 
     it('reports an unknown tool as a project access failure', async () => {
-      const access = new ProjectAccess(tmpdir());
+      const access = fixtureProjectAccess(tmpdir());
 
       const result = JSON.parse(await access.execute('unknown_tool', '{}')) as ProjectOutput;
 
@@ -578,7 +779,7 @@ describe(ProjectAccess, () => {
     });
 
     it('reports a failure that is not an error object generically', async () => {
-      const access = new ProjectAccess(tmpdir(), {}, undefined, {
+      const access = fixtureProjectAccess(tmpdir(), {}, undefined, {
         glob: async () => {
           throw 'index crashed';
         },
@@ -601,7 +802,7 @@ describe(ProjectAccess, () => {
         throwIfAborted: () => {},
       } as unknown as AbortSignal;
       const failure = new Error('listing interrupted');
-      const access = new ProjectAccess(tmpdir(), {}, undefined, {
+      const access = fixtureProjectAccess(tmpdir(), {}, undefined, {
         glob: async () => {
           aborted = true;
           throw failure;
@@ -614,7 +815,7 @@ describe(ProjectAccess, () => {
     });
 
     it('reports content search as unavailable without a native index', async () => {
-      const access = new ProjectAccess(tmpdir());
+      const access = fixtureProjectAccess(tmpdir());
 
       const result = JSON.parse(
         await access.execute(
@@ -651,7 +852,7 @@ describe(ProjectAccess, () => {
         truncated: false,
         nextOffset: null,
       }));
-      const access = new ProjectAccess(tmpdir(), {}, undefined, {
+      const access = fixtureProjectAccess(tmpdir(), {}, undefined, {
         glob: async () => ({ files: [], truncated: false }),
         searchContents,
       });
@@ -681,7 +882,7 @@ describe(ProjectAccess, () => {
     });
 
     it('rejects a snapshot larger than the configured read limit', async () => {
-      const workspace = new FileSystemWorkspaceTextStore('/fixture');
+      const workspace = fixtureWorkspace('/fixture');
       vi.spyOn(workspace, 'read').mockResolvedValue({
         path: 'large.txt',
         text: 'x'.repeat(20),
@@ -691,7 +892,7 @@ describe(ProjectAccess, () => {
         revision: 'revision',
         byteLength: 20,
       });
-      const access = new ProjectAccess('/fixture', { maxFileBytes: 10 }, workspace);
+      const access = fixtureProjectAccess('/fixture', { maxFileBytes: 10 }, workspace);
 
       const result = JSON.parse(
         await access.execute(
@@ -716,7 +917,7 @@ describe(ProjectAccess, () => {
     });
 
     it('rejects a single line that cannot fit in one read result', async () => {
-      const workspace = new FileSystemWorkspaceTextStore('/fixture');
+      const workspace = fixtureWorkspace('/fixture');
       const text = 'x'.repeat(600 * 1024);
       vi.spyOn(workspace, 'read').mockResolvedValue({
         path: 'long-line.txt',
@@ -727,7 +928,7 @@ describe(ProjectAccess, () => {
         revision: 'revision',
         byteLength: text.length,
       });
-      const access = new ProjectAccess('/fixture', { maxFileBytes: 1024 * 1024 }, workspace);
+      const access = fixtureProjectAccess('/fixture', { maxFileBytes: 1024 * 1024 }, workspace);
 
       const result = JSON.parse(
         await access.execute(
@@ -780,13 +981,13 @@ describe(ProjectAccess, () => {
 
   describe('tools', () => {
     it('offers listing and reading without a native content index', () => {
-      const access = new ProjectAccess(tmpdir());
+      const access = fixtureProjectAccess(tmpdir());
 
       expect(access.tools.map(tool => tool.name)).toEqual(['list_project_files', 'read_project_file']);
     });
 
     it('offers content search with a native content index', () => {
-      const access = new ProjectAccess(tmpdir(), {}, undefined, {
+      const access = fixtureProjectAccess(tmpdir(), {}, undefined, {
         glob: async () => ({ files: [], truncated: false }),
         searchContents: async () => ({
           outputMode: 'count',
@@ -828,7 +1029,7 @@ describe(ProjectAccess, () => {
         { pattern: 'needle' },
       ],
     ])('validates %s arguments and executes through project access', async (name, valid, invalid) => {
-      const access = new ProjectAccess(tmpdir(), {}, undefined, {
+      const access = fixtureProjectAccess(tmpdir(), {}, undefined, {
         glob: async () => ({ files: [], truncated: false }),
         searchContents: async () => ({
           outputMode: 'count',

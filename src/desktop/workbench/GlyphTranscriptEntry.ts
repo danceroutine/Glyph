@@ -4,6 +4,7 @@ import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
 import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { GlyphAttachmentPreview } from '#src/desktop/protocol/events/GlyphAttachmentPreview.js';
 import type { GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
+import type { GlyphTurnContext } from '#src/desktop/protocol/events/GlyphTurnContext.js';
 
 export enum GlyphTranscriptRole {
   USER = 'user',
@@ -26,4 +27,5 @@ export interface GlyphTranscriptEntry {
   readonly options?: GlyphTurnOptions;
   readonly attachments?: readonly GlyphAttachmentPreview[];
   readonly progress?: Pick<GlyphRunProjection, 'reasoning' | 'tools' | 'status'>;
+  readonly context?: GlyphTurnContext;
 }

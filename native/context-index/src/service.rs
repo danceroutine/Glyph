@@ -1,3 +1,4 @@
+use glyph_filesystem_metadata::workspace_paths::WorkspacePaths;
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -49,12 +50,16 @@ pub(crate) struct InitializeParams {
     pub(crate) allowed_file_names: Vec<String>,
     #[serde(default)]
     pub(crate) excluded_paths: Vec<String>,
+    #[serde(default)]
+    pub(crate) private_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub(crate) exclude_root: bool,
     #[serde(default = "default_true")]
     pub(crate) respect_git_ignore: bool,
     #[serde(default = "default_max_files")]
     pub(crate) max_files: u32,
-    #[serde(default = "default_case_sensitive")]
-    pub(crate) case_sensitive: bool,
+    #[serde(default)]
+    pub(crate) case_sensitive: Option<bool>,
     #[serde(default = "default_max_content_search_file_bytes")]
     pub(crate) max_content_search_file_bytes: u64,
 }
@@ -62,26 +67,30 @@ pub(crate) struct InitializeParams {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IndexPolicy {
+    #[serde(skip)]
+    root: PathBuf,
     ignored_directories: Vec<String>,
     sensitive_file_names: Vec<String>,
     sensitive_file_prefixes: Vec<String>,
     sensitive_file_extensions: Vec<String>,
     allowed_file_names: Vec<String>,
     excluded_paths: Vec<String>,
+    private_paths: Vec<PathBuf>,
+    exclude_root: bool,
     respect_git_ignore: bool,
     max_files: u32,
     case_sensitive: bool,
 }
 
-impl From<&InitializeParams> for IndexPolicy {
-    fn from(params: &InitializeParams) -> Self {
+impl IndexPolicy {
+    fn new(params: &InitializeParams, case_sensitive: bool, root: &Path) -> Self {
         // Normalize policy and candidates alike; walking, watch updates, and
         // cache validation must agree with the workspace reader's case policy.
         let normalize = |values: &[String]| -> Vec<String> {
             values
                 .iter()
                 .map(|value| {
-                    if params.case_sensitive {
+                    if case_sensitive {
                         value.clone()
                     } else {
                         value.to_lowercase()
@@ -90,20 +99,34 @@ impl From<&InitializeParams> for IndexPolicy {
                 .collect()
         };
         Self {
+            root: root.to_owned(),
             ignored_directories: normalize(&params.ignored_directories),
             sensitive_file_names: normalize(&params.sensitive_file_names),
             sensitive_file_prefixes: normalize(&params.sensitive_file_prefixes),
             sensitive_file_extensions: normalize(&params.sensitive_file_extensions),
             allowed_file_names: normalize(&params.allowed_file_names),
-            excluded_paths: normalize(&params.excluded_paths),
+            excluded_paths: params.excluded_paths.clone(),
+            private_paths: params
+                .private_paths
+                .iter()
+                .cloned()
+                .chain(params.excluded_paths.iter().map(|p| root.join(p)))
+                .collect(),
+            exclude_root: params.exclude_root || root.ancestors().any(private_alias),
             respect_git_ignore: params.respect_git_ignore,
             max_files: params.max_files,
-            case_sensitive: params.case_sensitive,
+            case_sensitive,
         }
     }
 }
 
 impl IndexPolicy {
+    fn physical(&self) -> Result<WorkspacePaths, ServiceError> {
+        WorkspacePaths::current(&self.private_paths).map_err(|error| {
+            ServiceError::internal(format!("Could not verify workspace access: {error}"))
+        })
+    }
+
     fn validate(&self) -> Result<(), ServiceError> {
         if self.max_files == 0 {
             return Err(ServiceError::invalid_request("maxFiles must be positive."));
@@ -137,13 +160,9 @@ impl IndexPolicy {
     }
 
     fn excludes(&self, relative_path: &str) -> bool {
-        let folded;
-        let relative_path = if self.case_sensitive {
-            relative_path
-        } else {
-            folded = relative_path.to_lowercase();
-            &folded
-        };
+        if self.exclude_root || self.root.join(relative_path).ancestors().any(private_alias) {
+            return true;
+        }
         if self
             .excluded_paths
             .iter()
@@ -151,6 +170,13 @@ impl IndexPolicy {
         {
             return true;
         }
+        let folded;
+        let relative_path = if self.case_sensitive {
+            relative_path
+        } else {
+            folded = relative_path.to_lowercase();
+            &folded
+        };
         let name = relative_path
             .rsplit_once('/')
             .map_or(relative_path, |(_, name)| name);
@@ -217,6 +243,8 @@ pub(crate) struct SearchParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct GlobParams {
+    #[serde(default)]
+    pub(crate) root_files_only: bool,
     pub(crate) pattern: String,
     #[serde(default)]
     pub(crate) target_directory: Option<String>,
@@ -363,8 +391,6 @@ impl ContextIndexService {
             ));
         }
         let started = Instant::now();
-        let policy = IndexPolicy::from(&params);
-        policy.validate()?;
         if params.max_content_search_file_bytes == 0 {
             return Err(ServiceError::invalid_request(
                 "maxContentSearchFileBytes must be positive.",
@@ -380,6 +406,12 @@ impl ContextIndexService {
             path: root,
             text: root_text,
         } = ProjectRoot::resolve(root_input)?;
+        let case_sensitive = match params.case_sensitive {
+            Some(value) => value,
+            None => filesystem_case_sensitive(&root)?,
+        };
+        let policy = IndexPolicy::new(&params, case_sensitive, &root);
+        policy.validate()?;
         if params
             .cache_path
             .as_ref()
@@ -393,7 +425,11 @@ impl ContextIndexService {
             cache::policy_fingerprint(&policy).map_err(ServiceError::initialization)?;
         // Install the watcher before reading the cache or walking the tree. Events
         // that race with initial indexing are buffered and handled by the monitor.
-        let watcher = start_watcher(&root);
+        let watcher = if policy.exclude_root {
+            None
+        } else {
+            start_watcher(&root)
+        };
 
         let cached = params.cache_path.as_deref().and_then(|path| {
             match cache::load(path, &root_text, &policy_hash, policy.max_files as usize) {
@@ -451,25 +487,26 @@ impl ContextIndexService {
             && watcher
                 .as_ref()
                 .is_none_or(|watcher| watcher.started_at.elapsed() < WATCH_BACKEND_WARMUP);
-        let monitor = spawn_monitor(
-            MonitorState {
-                root,
-                root_text: root_text.clone(),
-                policy,
-                policy_hash,
-                cache_path: params.cache_path,
-                index: shared,
-                known_paths,
-                truncated: truncated_state,
-                stop: Arc::clone(&self.stop),
-                reconcile_immediately: from_cache,
-                reconcile_after_startup_delay,
-            },
-            watcher,
-            workers,
-        )?;
+        if !policy.exclude_root {
+            self.monitor = Some(spawn_monitor(
+                MonitorState {
+                    root,
+                    root_text: root_text.clone(),
+                    policy,
+                    policy_hash,
+                    cache_path: params.cache_path,
+                    index: shared,
+                    known_paths,
+                    truncated: truncated_state,
+                    stop: Arc::clone(&self.stop),
+                    reconcile_immediately: from_cache,
+                    reconcile_after_startup_delay,
+                },
+                watcher,
+                workers,
+            )?);
+        }
         self.initialized = Some(initialized);
-        self.monitor = Some(monitor);
 
         Ok(IndexStatus {
             root: root_text,
@@ -503,7 +540,8 @@ impl ContextIndexService {
             .index
             .lock()
             .map_err(|_| ServiceError::internal("The file index lock is poisoned."))?;
-        index
+        let physical = initialized.policy.physical()?;
+        let mut result = index
             .search(
                 params.query,
                 params.limit as usize,
@@ -512,7 +550,11 @@ impl ContextIndexService {
             )
             .map_err(|failure| match failure {
                 SearchFailure::Superseded => ServiceError::superseded(),
-            })
+            })?;
+        result
+            .matches
+            .retain(|entry| !physical.excludes(&initialized.root.join(&entry.path)));
+        stable_result(&physical, result)
     }
 
     pub(crate) fn content_search_context(&self) -> Result<ContentSearchContext, ServiceError> {
@@ -526,7 +568,40 @@ impl ContextIndexService {
             Arc::clone(&initialized.truncated),
             initialized.policy.case_sensitive,
             initialized.max_content_search_file_bytes,
-        ))
+        )
+        .with_access(initialized.policy.physical()?))
+    }
+
+    /// The initialized authority is a single user-rule directory; only its immediate files can be replaced.
+    pub(crate) fn assert_replaceable_metadata(&self, name: String) -> Result<(), ServiceError> {
+        let initialized = self
+            .initialized
+            .as_ref()
+            .ok_or_else(ServiceError::not_initialized)?;
+        if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+            return Err(ServiceError::invalid_request(
+                "Expected one direct filename.",
+            ));
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+                .open(&initialized.root)
+                .and_then(|parent| {
+                    glyph_filesystem_metadata::assert_child_replaceable(&parent, &name)
+                })
+                .map_err(|error| ServiceError::internal(error.to_string()))
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = initialized;
+            Err(ServiceError::internal(
+                "Access-control metadata inspection is unavailable.",
+            ))
+        }
     }
 
     pub(crate) fn filter_paths(&self, paths: Vec<String>) -> Result<Vec<String>, ServiceError> {
@@ -565,7 +640,14 @@ impl ContextIndexService {
                 }
             }
         }
-        Ok(selected.into_iter().collect())
+        let physical = initialized.policy.physical()?;
+        stable_result(
+            &physical,
+            selected
+                .into_iter()
+                .filter(|path| !physical.excludes(&initialized.root.join(path)))
+                .collect(),
+        )
     }
 
     pub(crate) fn glob(&self, params: GlobParams) -> Result<GlobResult, ServiceError> {
@@ -587,19 +669,49 @@ impl ContextIndexService {
             .initialized
             .as_ref()
             .ok_or_else(ServiceError::not_initialized)?;
+        if params.root_files_only && params.target_directory.is_none() {
+            return glob_root_files(initialized, &params);
+        }
         let paths = initialized
             .known_paths
             .read()
             .map_err(|_| ServiceError::internal("The known-path set lock is poisoned."))?;
-        find_matches(
+        let physical = initialized.policy.physical()?;
+        if let Some(query) = crate::catalog_names::InstructionQuery::from_pattern(&params.pattern)
+            .filter(|_| params.target_directory.is_none())
+        {
+            let mut names = crate::catalog_names::CatalogNames::new(&initialized.root);
+            let mut matches = paths.iter().filter(|path| {
+                !physical.excludes(&initialized.root.join(path)) && query.matches(&mut names, path)
+            });
+            let files = matches
+                .by_ref()
+                .take(params.limit as usize)
+                .cloned()
+                .collect();
+            return stable_result(
+                &physical,
+                GlobResult {
+                    files,
+                    truncated: initialized.truncated.load(Ordering::Acquire)
+                        || matches.next().is_some(),
+                },
+            );
+        }
+        let mut result = find_matches(
             &paths,
             &params.pattern,
             params.target_directory.as_deref(),
+            params.root_files_only,
             params.limit as usize,
             initialized.policy.case_sensitive,
             initialized.truncated.load(Ordering::Acquire),
         )
-        .map_err(ServiceError::invalid_request)
+        .map_err(ServiceError::invalid_request)?;
+        result
+            .files
+            .retain(|path| !physical.excludes(&initialized.root.join(path)));
+        stable_result(&physical, result)
     }
 
     pub(crate) fn refresh(&mut self) -> Result<IndexStatus, ServiceError> {
@@ -962,15 +1074,29 @@ fn is_cache_artifact(path: &Path, cache_path: &Path) -> bool {
             })
 }
 
-fn scan_paths(
+fn private_alias(path: &Path) -> bool {
+    glyph_filesystem_metadata::workspace_paths::private_name(path)
+}
+
+/// Share ignore-file, directory exclusion, and link semantics with the resident catalog.
+fn stable_result<T>(physical: &WorkspacePaths, result: T) -> Result<T, ServiceError> {
+    if physical.current_at_completion() {
+        Ok(result)
+    } else {
+        Err(ServiceError::internal(
+            "Workspace access boundaries changed during lookup.",
+        ))
+    }
+}
+
+fn workspace_walk(
     root: &Path,
     policy: &IndexPolicy,
-    cache_path: Option<&Path>,
-    stop: &AtomicBool,
-) -> Result<ScanResult, ServiceError> {
+) -> Result<(WalkBuilder, WorkspacePaths), ServiceError> {
+    let physical = policy.physical()?;
+    let walk_policy = physical.clone();
     let ignored: HashSet<_> = policy.ignored_directories.iter().cloned().collect();
-    let excluded_paths = policy.excluded_paths.clone();
-    let filter_root = root.to_path_buf();
+    let case_sensitive = policy.case_sensitive;
     let mut builder = WalkBuilder::new(root);
     builder
         .hidden(false)
@@ -981,23 +1107,91 @@ fn scan_paths(
         .ignore(policy.respect_git_ignore)
         .parents(policy.respect_git_ignore)
         .filter_entry(move |entry| {
+            if walk_policy.excludes(entry.path()) {
+                return false;
+            }
             let is_directory = entry.file_type().is_some_and(|kind| kind.is_dir());
             if !is_directory {
                 return true;
             }
-            if entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| ignored.contains(name))
+            if private_alias(entry.path())
+                || entry.file_name().to_str().is_some_and(|name| {
+                    if case_sensitive {
+                        ignored.contains(name)
+                    } else {
+                        ignored.contains(&name.to_lowercase())
+                    }
+                })
             {
                 return false;
             }
-            normalize_relative_path(&filter_root, entry.path()).is_none_or(|relative| {
-                !excluded_paths
-                    .iter()
-                    .any(|excluded| path_is_excluded(&relative, excluded))
-            })
+            true
         });
+
+    Ok((builder, physical))
+}
+
+/// Read only direct children, independently of watcher lag, warm caches and nested index limits.
+fn glob_root_files(
+    initialized: &InitializedIndex,
+    params: &GlobParams,
+) -> Result<GlobResult, ServiceError> {
+    let matcher =
+        crate::path_glob::compile_matcher(&params.pattern, initialized.policy.case_sensitive)
+            .map_err(ServiceError::invalid_request)?;
+    let mut names = crate::catalog_names::CatalogNames::new(&initialized.root);
+    let query = crate::catalog_names::InstructionQuery::from_pattern(&params.pattern);
+    let mut files = BTreeSet::new();
+    let mut truncated = false;
+    if !initialized.policy.exclude_root {
+        let (mut walk, physical) = workspace_walk(&initialized.root, &initialized.policy)?;
+        for entry in walk.max_depth(Some(1)).build() {
+            let entry = entry.map_err(|error| ServiceError::internal(error.to_string()))?;
+            if let Some(error) = entry.error() {
+                return Err(ServiceError::internal(error.to_string()));
+            }
+            if !entry.file_type().is_some_and(|kind| kind.is_file())
+                || initialized
+                    .cache_path
+                    .as_deref()
+                    .is_some_and(|path| is_cache_artifact(entry.path(), path))
+            {
+                continue;
+            }
+            if let Some(name) = entry.file_name().to_str().filter(|name| {
+                !initialized.policy.excludes(name)
+                    && query
+                        .as_ref()
+                        .map_or_else(|| matcher.is_match(name), |q| q.matches(&mut names, name))
+            }) {
+                files.insert(name.to_owned());
+                if files.len() > params.limit as usize {
+                    files.pop_last();
+                    truncated = true;
+                }
+            }
+        }
+        stable_result(&physical, ())?;
+    }
+    Ok(GlobResult {
+        files: files.into_iter().collect(),
+        truncated,
+    })
+}
+
+fn scan_paths(
+    root: &Path,
+    policy: &IndexPolicy,
+    cache_path: Option<&Path>,
+    stop: &AtomicBool,
+) -> Result<ScanResult, ServiceError> {
+    if policy.exclude_root {
+        return Ok(ScanResult {
+            paths: Vec::new(),
+            truncated: false,
+        });
+    }
+    let (builder, physical) = workspace_walk(root, policy)?;
 
     // WalkParallel::run joins its visitors before returning. Borrow the local
     // accumulator so no shared owner or fallible ownership recovery is needed.
@@ -1060,10 +1254,13 @@ fn scan_paths(
         .expect("scan accumulator cannot be poisoned");
     paths.sort_unstable();
     paths.dedup();
-    Ok(ScanResult {
-        paths,
-        truncated: truncated.load(Ordering::Acquire),
-    })
+    stable_result(
+        &physical,
+        ScanResult {
+            paths,
+            truncated: truncated.load(Ordering::Acquire),
+        },
+    )
 }
 
 fn normalize_relative_path(root: &Path, path: &Path) -> Option<String> {
@@ -1079,7 +1276,12 @@ fn normalize_relative_path(root: &Path, path: &Path) -> Option<String> {
 }
 
 fn cached_paths_are_allowed(cached: &CachedPaths, policy: &IndexPolicy) -> bool {
-    cached.paths.iter().all(|path| !policy.excludes(path))
+    policy.physical().is_ok_and(|physical| {
+        cached
+            .paths
+            .iter()
+            .all(|path| !policy.excludes(path) && !physical.excludes(&policy.root.join(path)))
+    })
 }
 
 fn elapsed_millis(started: Instant) -> u64 {
@@ -1134,9 +1336,39 @@ fn default_glob_limit() -> u32 {
     DEFAULT_GLOB_LIMIT
 }
 
-fn default_case_sensitive() -> bool {
-    !cfg!(any(target_os = "windows", target_os = "macos"))
+/// Read the attached filesystem's policy without creating probe files. The caller may explicitly override it.
+pub(crate) fn filesystem_case_sensitive(path: &Path) -> Result<bool, ServiceError> {
+    filesystem_casing::detect(path).map_err(|error| {
+        ServiceError::initialization(format!(
+            "Could not inspect filesystem case sensitivity: {error}"
+        ))
+    })
 }
+
+/// Identify the name comparisons implemented by the attached filesystem.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FilesystemNamePolicy {
+    pub case_sensitive: bool,
+    pub normalizes_unicode: bool,
+    pub folds_unicode: bool,
+}
+
+pub(crate) fn filesystem_name_policy(path: &Path) -> Result<FilesystemNamePolicy, ServiceError> {
+    let inspect = |error| {
+        ServiceError::initialization(format!("Could not inspect filesystem name policy: {error}"))
+    };
+    let (normalizes_unicode, full_fold) =
+        filesystem_casing::unicode_policy(path).map_err(inspect)?;
+    let case_sensitive = filesystem_casing::detect(path).map_err(inspect)?;
+    Ok(FilesystemNamePolicy {
+        case_sensitive,
+        normalizes_unicode,
+        folds_unicode: full_fold && !case_sensitive,
+    })
+}
+
+use glyph_filesystem_metadata::filesystem_casing;
 
 fn default_max_content_search_file_bytes() -> u64 {
     DEFAULT_MAX_CONTENT_SEARCH_FILE_BYTES

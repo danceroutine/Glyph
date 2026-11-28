@@ -25,6 +25,8 @@ async function attach(glyph, file) {
   await expect(glyph.page.locator('.editor-instance .monaco-editor').first()).toBeVisible();
   await glyph.page.keyboard.press('ControlOrMeta+a');
   await glyph.page.keyboard.press('ControlOrMeta+l');
+  await expect(glyph.composer.getByRole('button', { name: /^Preview /u })).toBeVisible();
+  await expect(glyph.composer).toBeFocused();
 }
 /**
  * @param {GlyphWorkbench} glyph
@@ -171,7 +173,7 @@ it.describe('managed processes', () => {
     await glyph.send('Start the background process.');
     await glyph.page
       .getByRole('region', { name: 'Command approval' })
-      .getByRole('button', { name: 'Run', exact: true })
+      .getByRole('button', { name: 'Allow once', exact: true })
       .click();
     await expect.poll(() => provider.requests.length).toBe(2);
     await expect(glyph.sendButton).toHaveText('Send (Enter)');

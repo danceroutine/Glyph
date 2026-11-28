@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { Deferred } from '#src/shared/Deferred.js';
 import { GlyphTransportMessageType } from '#src/desktop/protocol/connection/GlyphTransportMessage.js';
 
 function messagePort() {
@@ -11,18 +12,33 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   const parent = new EventEmitter();
   const host = {
     constructed: vi.fn(),
+    trustedUserEditors: vi.fn(() => []),
     connect: vi.fn(),
     receive: vi.fn(async (_connectionId: string, _envelope: unknown) => {}),
     disconnect: vi.fn(async (_connectionId: string) => {}),
     dispose: vi.fn(async () => {}),
   };
-  const editors = { constructed: vi.fn(), connect: vi.fn(), receive: vi.fn(), disconnect: vi.fn() };
+  const editors = {
+    constructed:
+      vi.fn<
+        ({
+          trustedUserEditors,
+        }: {
+          trustedUserEditors: (identity: unknown, sourcePath: string, aliases?: readonly string[]) => unknown;
+        }) => void
+      >(),
+    connect: vi.fn(),
+    receive: vi.fn(),
+    validateMutation: vi.fn(async () => true),
+    disconnect: vi.fn(),
+  };
   const openai = { constructed: vi.fn(), dispose: vi.fn(async () => {}) };
   const deterministic = { constructed: vi.fn() };
   const scripted = { constructed: vi.fn(), fetch: vi.fn() };
   vi.doMock('#src/desktop/host/GlyphDesktopHost.js', () => ({
     GlyphDesktopHost: class {
       readonly generation = 'generation';
+      readonly trustedUserEditors = host.trustedUserEditors;
       constructor(factory: unknown) {
         host.constructed(factory);
       }
@@ -42,7 +58,10 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   }));
   vi.doMock('#src/desktop/workspace/EditorRpcRouter.js', () => ({
     EditorRpcRouter: class {
-      constructor() {
+      readonly validateMutation = editors.validateMutation;
+      constructor(
+        readonly trustedUserEditors: (identity: unknown, sourcePath: string, aliases?: readonly string[]) => unknown,
+      ) {
         editors.constructed(this);
       }
       connect(...arguments_: unknown[]): unknown {
@@ -181,9 +200,20 @@ describe('utilityMain', () => {
   it('serves workspaces through the OpenAI runtime by default', async () => {
     const { loaded, host, editors, openai, scripted, deterministic } = startUtilityHost();
     await loaded;
-    const router = editors.constructed.mock.calls[0]?.[0];
+    const router = editors.constructed.mock.calls[0]![0];
+    expect(
+      router.trustedUserEditors({ windowId: 'owner' }, '/profile/rules/example.mdc', ['/mounted/example.mdc']),
+    ).toEqual([]);
+    expect(host.trustedUserEditors).toHaveBeenCalledWith({ windowId: 'owner' }, '/profile/rules/example.mdc', [
+      '/mounted/example.mdc',
+    ]);
     const factory = openai.constructed.mock.calls[0]?.[0];
-    expect(openai.constructed).toHaveBeenCalledExactlyOnceWith(factory, router, undefined);
+    expect(openai.constructed).toHaveBeenCalledExactlyOnceWith(
+      factory,
+      router,
+      undefined,
+      process.env.GLYPH_USER_DIRECTORY,
+    );
     expect(host.constructed).toHaveBeenCalledExactlyOnceWith(factory);
     expect(scripted.constructed).not.toHaveBeenCalled();
     expect(deterministic.constructed).not.toHaveBeenCalled();
@@ -278,6 +308,25 @@ describe('utilityMain', () => {
     expect(port.postMessage).toHaveBeenNthCalledWith(3, 'editor request');
   });
 
+  it('drops the result of an editor grant check when its port closes during validation', async () => {
+    const { loaded, parent, editors } = startUtilityHost();
+    await loaded;
+    const port = messagePort();
+    parent.emit('message', {
+      data: { type: GlyphTransportMessageType.CONNECTION, connectionId: 'connection', identity },
+      ports: [port],
+    });
+    const check = new Deferred<boolean>();
+    editors.validateMutation.mockReturnValueOnce(check.promise);
+    port.emit('message', {
+      data: { type: GlyphTransportMessageType.CHECK_EDITOR_MUTATION, requestId: 'check', grantId: 'grant' },
+    });
+    port.emit('close');
+    check.resolve(false);
+    await check.promise;
+    expect(port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ requestId: 'check' }));
+  });
+
   it('routes editor responses to the editor and every other message to the host', async () => {
     const { loaded, parent, host, editors } = startUtilityHost();
     await loaded;
@@ -285,6 +334,16 @@ describe('utilityMain', () => {
     parent.emit('message', {
       data: { type: GlyphTransportMessageType.CONNECTION, connectionId: 'connection', identity },
       ports: [port],
+    });
+    port.emit('message', {
+      data: { type: GlyphTransportMessageType.CHECK_EDITOR_MUTATION, requestId: 'check', grantId: 'grant' },
+    });
+    expect(editors.validateMutation).toHaveBeenCalledWith('connection', 'grant');
+    await Promise.resolve();
+    expect(port.postMessage).toHaveBeenCalledWith({
+      type: GlyphTransportMessageType.EDITOR_MUTATION_CHECKED,
+      requestId: 'check',
+      ok: true,
     });
     const response = { operationId: 'op', ok: true };
     port.emit('message', { data: { type: GlyphTransportMessageType.EDITOR_RESPONSE, response } });

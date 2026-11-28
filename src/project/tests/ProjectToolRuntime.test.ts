@@ -77,7 +77,7 @@ describe(ProjectToolRuntime, () => {
         ],
       });
       const stage = vi.fn(async () => {});
-      const disclose = vi
+      const disclosePaths = vi
         .fn()
         .mockReturnValueOnce({
           schema: 'glyph.agent-instructions.v1',
@@ -92,7 +92,7 @@ describe(ProjectToolRuntime, () => {
         } as unknown as EditProposalService,
         { stage, activeReviews: [] } as unknown as ProposalReviewManager,
         new NullLogger(),
-        { disclose },
+        { disclosePaths },
       );
       const context = { turnId: 'turn-1' };
 
@@ -102,7 +102,7 @@ describe(ProjectToolRuntime, () => {
       expect(stage).not.toHaveBeenCalled();
       await runtime.execute(ProjectToolName.PROPOSE_PATCH, 'patch', undefined, context);
       expect(stage).toHaveBeenCalledOnce();
-      expect(disclose).toHaveBeenCalledWith('turn-1', ['src/new.ts']);
+      expect(disclosePaths).toHaveBeenCalledWith('turn-1', ['src/new.ts'], undefined);
     });
 
     it('reports an unknown tool as a failed tool call', async () => {
@@ -197,6 +197,11 @@ describe(ProjectToolRuntime, () => {
       );
 
       const tools = runtime.tools;
+      const presentation = tools.find(
+        tool => tool.name === (ProjectToolName.PROPOSE_EDITS as string),
+      )?.activityPresentation;
+      expect(presentation?.show('{"status":"INSTRUCTION_CONTEXT_REQUIRED"}')).toBe(false);
+      expect(presentation?.show('{"status":"PROPOSED"}')).toBe(true);
 
       expect(tools.map(tool => tool.name)).toEqual([
         ProjectToolName.LIST_FILES,
@@ -204,6 +209,7 @@ describe(ProjectToolRuntime, () => {
         ProjectToolName.PROPOSE_EDITS,
       ]);
       expect(tools[0]).toBe(accessTool);
+      expect(tools.slice(1).every(tool => tool.requiresExclusiveRound)).toBe(true);
       expect(tools[2]?.parameters).toMatchObject({ type: 'object', required: ['files'] });
       expect(tools[2]?.parameters).not.toHaveProperty('$schema');
     });

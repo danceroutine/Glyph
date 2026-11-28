@@ -1,0 +1,153 @@
+import { z } from 'zod';
+import { AgentInstructionActivationMode } from '#src/instructions/AgentInstructionSource.js';
+import type { AgentRuleFile } from './AgentRuleFile.ts';
+import { ruleFrontmatter } from './ruleFrontmatter.ts';
+import { globExpression } from './matchesAgentRulePath.ts';
+
+export const MAX_AGENT_RULE_BYTES = 64 * 1024;
+const quotedString = z.string();
+const MAX_DESCRIPTION_LENGTH = 2_000;
+const ACTIVATION_MODES: Readonly<Record<string, AgentInstructionActivationMode>> = {
+  always: AgentInstructionActivationMode.ALWAYS,
+  file_pattern: AgentInstructionActivationMode.FILE_PATTERN,
+  model: AgentInstructionActivationMode.MODEL,
+  manual: AgentInstructionActivationMode.MANUAL,
+};
+
+/** Parse the intentionally small YAML-compatible frontmatter supported by Glyph rules. */
+export function parseAgentRuleFile(text: string): AgentRuleFile {
+  const frontmatter = ruleFrontmatter(text);
+  if (!frontmatter) return { globs: [], enabled: true, references: [], body: text };
+  const metadata = parseMetadata(frontmatter.metadata.replaceAll('\r\n', '\n'));
+  const description = optionalString(metadata.description, 'description');
+  if (description && description.length > MAX_DESCRIPTION_LENGTH)
+    throw new Error(`Rule description exceeds ${MAX_DESCRIPTION_LENGTH} characters.`);
+  const globs = stringList(metadata.globs, 'globs');
+  if (globs.length > 64) throw new Error('A rule can specify at most 64 globs.');
+  for (const glob of globs) globExpression(glob);
+  const references = stringList(metadata.references, 'references');
+  const activationValue = optionalString(metadata.activation, 'activation');
+  const activation = activationValue ? activationMode(activationValue) : undefined;
+  const alwaysApply = optionalBoolean(metadata.alwaysApply, 'alwaysApply');
+  const enabled = optionalBoolean(metadata.enabled, 'enabled') ?? true;
+  const name = optionalString(metadata.name, 'name');
+  return {
+    ...(name ? { name } : {}),
+    ...(description ? { description } : {}),
+    ...(activation ? { activation } : {}),
+    globs,
+    ...(alwaysApply === undefined ? {} : { alwaysApply }),
+    enabled,
+    references,
+    body: frontmatter.body,
+  };
+}
+
+type MetadataValue = string | boolean | null | readonly string[];
+
+function parseMetadata(frontmatter: string): Readonly<Record<string, MetadataValue>> {
+  const result: Record<string, MetadataValue> = {};
+  let activeList: string[] | undefined;
+  let activeListKey: string | undefined;
+  for (const rawLine of frontmatter.split('\n')) {
+    if (rawLine.trim() === '' || rawLine.trimStart().startsWith('#')) continue;
+    const item = /^\s+-\s+(.+)$/u.exec(rawLine);
+    if (item) {
+      if (!activeList) throw new Error('Rule frontmatter list item has no property.');
+      const value = item[1]!;
+      activeList.push(scalarString(withoutComment(value)));
+      result[activeListKey!] = activeList;
+      continue;
+    }
+    const property = /^([A-Za-z][A-Za-z0-9]*):(?:\s*(.*))$/u.exec(rawLine);
+    if (!property) throw new Error(`Invalid rule frontmatter line: ${rawLine}`);
+    const key = property[1]!;
+    const rawValue = property[2]!;
+    if (Object.hasOwn(result, key)) throw new Error(`Duplicate rule frontmatter property: ${key}`);
+    activeList = undefined;
+    activeListKey = undefined;
+    const value = withoutComment(rawValue);
+    if (value === '') {
+      const values: string[] = [];
+      result[key] = null;
+      activeList = values;
+      activeListKey = key;
+    } else if (value.startsWith('[')) result[key] = inlineList(value);
+    else if (value === 'true' || value === 'false') result[key] = value === 'true';
+    else result[key] = scalarString(value);
+  }
+  return result;
+}
+
+function inlineList(value: string): readonly string[] {
+  if (!value.endsWith(']')) throw new Error('Rule frontmatter inline list is missing ].');
+  const body = value.slice(1, -1).trim();
+  if (!body) return [];
+  const parts: string[] = [];
+  let start = 0;
+  for (const comma of separators(body, ',')) {
+    parts.push(scalarString(body.slice(start, comma).trim()));
+    start = comma + 1;
+  }
+  parts.push(scalarString(body.slice(start).trim()));
+  return parts;
+}
+
+/** Scan only unquoted separators. Quotes in the middle of a plain scalar are ordinary text. */
+function* separators(value: string, separator: ',' | '#'): Generator<number> {
+  const list = separator === ',' || value.trimStart().startsWith('[');
+  let scalarStart = true;
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index]!;
+    if (/\s/u.test(char)) continue;
+    if (scalarStart && (char === '"' || char === "'")) {
+      const quoted = /"(?:\\.|[^"\\])*"|'(?:''|[^'])*'/uy;
+      quoted.lastIndex = index;
+      if (!quoted.test(value)) throw new Error('Rule frontmatter has an unterminated quoted string.');
+      index = quoted.lastIndex - 1;
+    } else if (char === separator && (char === ',' || index === 0 || /\s/u.test(value[index - 1]!))) {
+      yield index;
+    }
+    scalarStart = list && (char === '[' || char === ',');
+  }
+}
+
+function withoutComment(raw: string): string {
+  const end = separators(raw, '#').next();
+  return (end.done ? raw : raw.slice(0, end.value)).trim();
+}
+
+function scalarString(value: string): string {
+  if (value.startsWith('"')) return quotedString.parse(JSON.parse(value));
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1).replaceAll("''", "'");
+  return value;
+}
+
+function optionalString(value: MetadataValue | undefined, key: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new Error(`Rule frontmatter property ${key} must be a string.`);
+  return value.trim() || undefined;
+}
+
+function optionalBoolean(value: MetadataValue | undefined, key: string): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'boolean') throw new Error(`Rule frontmatter property ${key} must be true or false.`);
+  return value;
+}
+
+function stringList(value: MetadataValue | undefined, key: string): readonly string[] {
+  if (value === undefined || value === null) return [];
+  if (typeof value === 'string') return value === '' ? [] : [value];
+  if (!isStringArray(value)) throw new Error(`Rule frontmatter property ${key} must be a string or list.`);
+  return value;
+}
+
+function activationMode(value: string): AgentInstructionActivationMode {
+  const normalized = value.replaceAll('-', '_');
+  if (!Object.hasOwn(ACTIVATION_MODES, normalized)) throw new Error(`Unknown rule activation mode: ${value}`);
+  return ACTIVATION_MODES[normalized]!;
+}
+
+function isStringArray(value: MetadataValue | undefined): value is readonly string[] {
+  return Array.isArray(value) && value.every(item => typeof item === 'string');
+}

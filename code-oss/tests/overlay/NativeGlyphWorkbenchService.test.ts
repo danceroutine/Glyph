@@ -1,6 +1,11 @@
 import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
+import type { GlyphDesktopClient } from '#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js';
+import { GlyphEditorRequestType } from '#glyph/protocol/editor/GlyphEditorRequest.js';
 import { AgentModeID } from '#glyph/protocol/index.js';
-import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
+import {
+  GlyphContextAttachmentKind,
+  type GlyphContextAttachment,
+} from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import { GlyphDesktopErrorCode } from '#glyph/protocol/GlyphDesktopError.js';
 import type { GlyphAnnotation } from '#glyph/protocol/events/GlyphAnnotation.js';
 import type { GlyphChatSummary } from '#glyph/protocol/events/GlyphChatSummary.js';
@@ -30,6 +35,7 @@ import { aGlyphRunProjection } from '#src/desktop/tests/fixtures/aGlyphRunProjec
 
 type Command = GlyphWorkbenchCommand & Record<string, unknown>;
 type Handler = (command: Command, host: FakeHost) => unknown;
+type EditorRequestHandler = ConstructorParameters<typeof GlyphDesktopClient>[0];
 
 interface FakeHost {
   state: GlyphDesktopSnapshot;
@@ -45,7 +51,7 @@ interface FakeHost {
   readonly request: Mock;
   readonly detachWorkspace: Mock;
   readonly dispose: Mock;
-  readonly handleEditorRequest: unknown;
+  readonly handleEditorRequest: EditorRequestHandler;
 }
 
 const doubles = vi.hoisted(() => ({ hosts: [] as unknown[] }));
@@ -91,7 +97,7 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
       this.attachment = undefined;
     });
     readonly dispose = vi.fn();
-    constructor(readonly handleEditorRequest: unknown) {
+    constructor(readonly handleEditorRequest: EditorRequestHandler) {
       doubles.hosts.push(this);
     }
     snapshot() {
@@ -113,6 +119,9 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
               { slug: 'model', name: 'Model' },
             ],
           } as never;
+          return;
+        case WorkbenchCommandType.REFRESH_CONTEXT_CATALOGS:
+          this.emit({ type: HostEventType.INSTRUCTION_SOURCES_CHANGED, sources: this.snapshot().instructionSources });
           return;
         case WorkbenchCommandType.REQUEST_SNAPSHOT:
           this.emit({ type: HostEventType.INITIAL_STATE, state: this.snapshot() });
@@ -153,6 +162,9 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js', () => ({
 }));
 vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => ({
   GlyphContextController: class {
+    readonly openInstruction = vi.fn(async () => {});
+    readonly setInstructionRefresh = vi.fn();
+    readonly notifyInstructionsChanged = vi.fn();
     readonly ide = { terminal: vi.fn() };
     readonly selectIdeContext = vi.fn(async () => [] as unknown[]);
     readonly attachSelection = vi.fn(async () => {});
@@ -162,6 +174,12 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => (
     constructor(
       readonly editor: unknown,
       readonly composer: () => unknown,
+      readonly instructionSources: () => unknown,
+      readonly resolveAttachmentResource: (resource: {
+        uri: string;
+        path: string;
+        folder: boolean;
+      }) => Promise<unknown>,
     ) {}
   },
 }));
@@ -418,6 +436,30 @@ describe(NativeGlyphWorkbenchService, () => {
     ]);
   });
 
+  it('sends a leading selected goal rule as a reference and recognizes a typed command before a later badge', async () => {
+    const { service, commands } = await workbench();
+    const reference = { kind: 'rule' as const, sourceId: 'manual', label: 'goal', revision: 'one', from: 0, to: 5 };
+    const options = { manualRuleIds: ['manual'], referenceSpans: [reference] };
+    await service.send('  /goal Ship the feature', [], options);
+    expect(commands()).toContainEqual(
+      expect.objectContaining({ type: GlyphWorkbenchCommandType.SEND, options: expect.objectContaining(options) }),
+    );
+    const later = await workbench();
+    await later.service.send('/goal use /goal', [], {
+      ...options,
+      referenceSpans: [{ ...reference, from: 10, to: 15 }],
+    });
+    expect(later.types()).toContain(GlyphWorkbenchCommandType.CREATE_GOAL);
+    const truncated = await workbench();
+    await expect(
+      truncated.service.send('/goal', [], { ...options, referenceSpans: [{ ...reference, to: 50 }] }),
+    ).rejects.toThrow('Usage:');
+    const stale = await workbench();
+    await expect(
+      stale.service.send('/goal', [], { ...options, referenceSpans: [{ ...reference, label: 'other' }] }),
+    ).rejects.toThrow('Usage:');
+  });
+
   it('continues an active goal after a terminal failure and reports a rejected continuation once', async () => {
     const goal = {
       id: 'goal',
@@ -445,16 +487,69 @@ describe(NativeGlyphWorkbenchService, () => {
   });
   it('wires editor and composer context callbacks into the desktop adapters', async () => {
     const { service, host, editor, context } = await workbench();
-    const request = { requestId: 'read', type: 'read' };
+    const request = { operationId: 'read', type: GlyphEditorRequestType.READ_SNAPSHOT, path: 'notes.md' } as const;
+    const checkMutation = vi.fn(async () => {});
 
-    await (host.handleEditorRequest as (value: unknown) => Promise<unknown>)(request);
+    await host.handleEditorRequest(request, checkMutation);
 
-    expect(editor.handle).toHaveBeenCalledWith(request);
+    expect(editor.handle).toHaveBeenCalledWith(request, checkMutation);
     expect((context.composer as unknown as () => unknown)()).toBe(service.composer);
     expect(service.ideContext).toBe((context as unknown as { ide: unknown }).ide);
   });
 
   describe('host events', () => {
+    it('accepts a folder listing only for its lookup and attached workspace', async () => {
+      const { service, host, changeFolders } = await workbench();
+      const context = service.context as unknown as {
+        resolveAttachmentResource(resource: { uri: string; path: string; folder: boolean }): Promise<unknown>;
+      };
+      const lookup = () => context.resolveAttachmentResource({ uri: 'file:///project', path: '.', folder: true });
+      const listener = vi.fn();
+      service.onDidChangeState(listener);
+      host.handler = command => {
+        if (command.type !== GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE) return;
+        emit(host, {
+          type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED,
+          lookupId: 'unrelated',
+          listing: { files: ['other'], truncated: false },
+        });
+      };
+      await expect(lookup()).rejects.toThrow('could not resolve');
+      host.handler = command => {
+        if (command.type === GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE)
+          emit(host, {
+            type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED,
+            lookupId: command.lookupId,
+            listing: { files: ['selected'], truncated: false },
+          });
+      };
+      await expect(lookup()).resolves.toEqual({ files: ['selected'], truncated: false });
+      expect(listener).not.toHaveBeenCalled();
+      host.handler = () => {
+        changeFolders([folder('other')]);
+      };
+      await expect(lookup()).rejects.toThrow();
+    });
+
+    it('correlates a targeted historical rule lookup with the attached workspace generation', async () => {
+      const { host, context, changeFolders } = await workbench();
+      const resolve = context.setInstructionRefresh.mock.calls[0][2] as (id: string) => Promise<string | undefined>;
+      host.handler = command => {
+        if (command.type !== GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE) return;
+        emit(host, { type: GlyphHostEventType.RULE_REFERENCE_RESOLVED, lookupId: 'unrelated', ruleId: 'wrong' });
+        emit(host, {
+          type: GlyphHostEventType.RULE_REFERENCE_RESOLVED,
+          lookupId: command.lookupId,
+          ruleId: 'canonical',
+        });
+      };
+      await expect(resolve('old')).resolves.toBe('canonical');
+      host.handler = () => {
+        changeFolders([folder('other')]);
+      };
+      await expect(resolve('old')).rejects.toThrow();
+    });
+
     it('forwards proposal previews to the review editor without changing state', async () => {
       const { service, host, proposals } = await workbench();
       const listener = vi.fn();
@@ -508,6 +603,69 @@ describe(NativeGlyphWorkbenchService, () => {
       expect(service.composer.snapshot.document.options?.mode).toBe(AgentModeID.PLAN);
     });
 
+    it('shares pending catalog refreshes, preserves the active chat, and reports failed refreshes', async () => {
+      const { service, host, context } = await workbench({ extra: { instructionWatchRoots: ['file:///user/rules'] } });
+      host.request.mockClear();
+      const activeComposer = service.composer;
+      const [refresh, roots] = context.setInstructionRefresh.mock.calls[0];
+      expect(roots()).toEqual(['file:///user/rules']);
+      await Promise.all([service.refreshInstructionSources(), refresh()]);
+      expect(host.request).toHaveBeenCalledExactlyOnceWith({
+        type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS,
+      });
+      expect(service.composer).toBe(activeComposer);
+      host.request.mockRejectedValueOnce(new Error('Refresh failed'));
+      await expect(refresh()).rejects.toThrow('Refresh failed');
+      await refresh();
+      expect(host.request).toHaveBeenCalledTimes(3);
+    });
+
+    it.each([false, true])(
+      'drains invalidations arriving during a pending catalog request (failure %s)',
+      async failed => {
+        const { service, host, context } = await workbench();
+        const [invalidate] = context.setInstructionRefresh.mock.calls[0];
+        let release!: () => void;
+        host.request.mockClear().mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              release = () => {
+                if (failed) reject(new Error('old refresh'));
+                else resolve();
+              };
+            }),
+        );
+        const pending = service.refreshInstructionSources();
+        await vi.waitFor(() => {
+          expect(release).toBeTypeOf('function');
+        });
+        void invalidate(true);
+        void invalidate(true);
+        release();
+        await pending;
+        expect(host.request).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it('restores an unavailable rule badge before catalog roots have been announced', async () => {
+      const { service, host, context } = await workbench();
+      const [, watchRoots] = context.setInstructionRefresh.mock.calls[0];
+      expect(watchRoots()).toEqual([]);
+      const composer = service.composer;
+      emit(host, {
+        type: GlyphHostEventType.CHAT_RESTORED,
+        chatId: 'alpha',
+        runs: [],
+        draft: { text: '/missing', attachments: [], options: { manualRuleIds: ['missing'] } },
+      });
+      expect(composer.snapshot.document.parts).toContainEqual(
+        expect.objectContaining({
+          type: 'attachment',
+          attachment: expect.objectContaining({ ruleId: 'missing', text: '' }),
+        }),
+      );
+    });
+
     it('restores a chat draft with its captures and places the caret at its end', async () => {
       const { service, host } = await workbench();
       const composer = service.composer;
@@ -531,6 +689,57 @@ describe(NativeGlyphWorkbenchService, () => {
         from: 11,
         to: 11,
         options: { mode: AgentModeID.PLAN },
+      });
+    });
+
+    it('restores legacy selected rules as removable badges using the catalog, including missing sources', async () => {
+      const { service, host } = await workbench({
+        extra: {
+          instructionSources: [
+            {
+              id: 'named',
+              kind: 'glyph_project_rule',
+              label: 'Project rule',
+              path: '.glyph/rules/named.mdc',
+              scope: '.',
+              status: 'active',
+              name: 'Named',
+              revision: 'revision',
+            },
+            {
+              id: 'file',
+              kind: 'glyph_project_rule',
+              label: 'Project rule',
+              path: '.glyph/rules/file.mdc',
+              scope: '.',
+              status: 'active',
+            },
+          ],
+        },
+      });
+      const composer = service.composer;
+      emit(host, {
+        type: GlyphHostEventType.CHAT_RESTORED,
+        chatId: 'alpha',
+        runs: [],
+        draft: {
+          text: 'Try /Named and /file.mdc',
+          attachments: [],
+          options: { manualRuleIds: ['named', 'file', 'missing'] },
+        },
+      });
+      const badges = composer.snapshot.document.parts.flatMap(part =>
+        part.type === 'attachment' ? [part.attachment] : [],
+      );
+      expect(badges.map(badge => [badge.ruleId, badge.path, badge.contentRevision])).toEqual([
+        ['named', 'Named', 'revision'],
+        ['file', 'file.mdc', 'file'],
+        ['missing', 'missing', 'missing'],
+      ]);
+      composer.setDraft('A replacement');
+      await composer.submit(async (_text, files, options) => {
+        expect(files).toEqual([]);
+        expect(options?.manualRuleIds).toBeUndefined();
       });
     });
 
@@ -613,7 +822,10 @@ describe(NativeGlyphWorkbenchService, () => {
             checkpointTurnId: 'checkpoint',
             options: { turnId: 'turn-1' },
             attachments: [preview],
-            steering: [{ id: 'steer', text: 'Faster' }] as never,
+            steering: [
+              { id: 'steer', text: 'Faster', rejection: 'Rule unavailable' },
+              { id: 'accepted', text: 'Continue' },
+            ] as never,
             modeSwaps: modeSwaps as never,
             questionResponses: questionResponses as never,
             usage: usage as never,
@@ -638,7 +850,15 @@ describe(NativeGlyphWorkbenchService, () => {
           options: { turnId: 'turn-1' },
           attachments: [preview],
         },
-        { id: 'steer', text: 'Faster', role: GlyphTranscriptRole.USER, steering: true },
+        {
+          id: 'steer',
+          text: 'Faster',
+          rejection: 'Rule unavailable',
+          attachmentError: 'Rule unavailable',
+          role: GlyphTranscriptRole.USER,
+          steering: true,
+        },
+        { id: 'accepted', text: 'Continue', role: GlyphTranscriptRole.USER, steering: true },
         {
           id: 'turn-1',
           role: GlyphTranscriptRole.ASSISTANT,
@@ -863,6 +1083,12 @@ describe(NativeGlyphWorkbenchService, () => {
   });
 
   describe(NativeGlyphWorkbenchService.prototype.openLink, () => {
+    it('routes instruction links through the checked catalog navigation', async () => {
+      const { service, context } = await workbench();
+      await service.openLink('glyph-instruction:rules%3Atest');
+      expect(context.openInstruction).toHaveBeenCalledExactlyOnceWith('rules:test');
+    });
+
     it('opens web links externally by default', async () => {
       const { service, opener, editors } = await workbench();
 
@@ -924,6 +1150,89 @@ describe(NativeGlyphWorkbenchService, () => {
 
       await expect(service.openLink('src/a.ts')).rejects.toThrow('This link is not a workspace path.');
     });
+  });
+
+  describe('user rule management', () => {
+    const managed = {
+      id: 'user',
+      kind: 'glyph_user_rule',
+      label: 'Glyph user rule',
+      path: '~/.glyph/rules/user.mdc',
+      managementPath: 'rules/user.mdc',
+      managementRevision: 'source-one',
+      scope: '.',
+      status: 'active' as const,
+      activation: 'manual' as const,
+      revision: 'one',
+    };
+
+    it('passes the selected file glob to a newly created user rule', async () => {
+      const { service, commands } = await workbench();
+      await service.createUserRule('Typescript', 'file_pattern', '**/*.ts');
+      expect(commands().at(-1)).toEqual({
+        type: GlyphWorkbenchCommandType.CREATE_USER_RULE,
+        name: 'Typescript',
+        activation: 'file_pattern',
+        condition: '**/*.ts',
+      });
+    });
+
+    it('sends create, enable, and delete commands', async () => {
+      const { service, commands } = await workbench();
+      await service.createUserRule('User', 'manual');
+      await service.setUserRuleEnabled(managed, false);
+      await service.deleteUserRule(managed);
+      expect(commands().slice(-3)).toEqual([
+        { type: GlyphWorkbenchCommandType.CREATE_USER_RULE, name: 'User', activation: 'manual' },
+        {
+          type: GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED,
+          path: 'rules/user.mdc',
+          expectedRevision: 'source-one',
+          enabled: false,
+        },
+        {
+          type: GlyphWorkbenchCommandType.DELETE_USER_RULE,
+          path: 'rules/user.mdc',
+          expectedRevision: 'source-one',
+        },
+      ]);
+    });
+
+    it('rejects sources without a management path or revision', async () => {
+      const { service } = await workbench();
+      for (const source of [
+        { ...managed, managementPath: undefined },
+        { ...managed, managementRevision: undefined },
+      ]) {
+        await expect(service.setUserRuleEnabled(source as never, true)).rejects.toThrow('cannot be managed');
+        await expect(service.deleteUserRule(source as never)).rejects.toThrow('cannot be managed');
+      }
+    });
+  });
+
+  it('supplies projected instruction sources to context search and transcript entries', async () => {
+    const instruction = {
+      id: 'rule',
+      kind: 'glyph_project_rule',
+      label: 'Glyph project rule',
+      path: '.glyph/rules/rule.mdc',
+      scope: '.',
+      status: 'active',
+    };
+    const context = {
+      sources: [instruction],
+      activations: [{ sourceId: 'rule', reason: 'always' as const }],
+      candidates: [],
+    };
+    const { service } = await workbench({
+      runs: [run('alpha', 'context-run', GlyphRunStatus.COMPLETED, { context })],
+      extra: { instructionSources: [instruction] as never },
+    });
+    const controller = service.context as unknown as { instructionSources(): unknown };
+    expect(controller.instructionSources()).toEqual([instruction]);
+    expect(service.state.transcript.at(-1)?.context).toEqual(context);
+    const empty = await workbench();
+    expect((empty.service.context as unknown as { instructionSources(): unknown }).instructionSources()).toEqual([]);
   });
 
   describe(NativeGlyphWorkbenchService.prototype.selectMode, () => {
@@ -1230,6 +1539,60 @@ describe(NativeGlyphWorkbenchService, () => {
       });
       await test.service.buildPlan('alpha', approved);
       expect(test.service.state.buildingPlanIds).toBeUndefined();
+    });
+
+    it('round-trips exact slash badges when a new-chat draft is restored from workspace storage', async () => {
+      const first = await workbench({ saved: { 'glyph.selectedChat': '' } });
+      const composer = first.service.composer;
+      composer.setDraft('/Same and /Same');
+      const rule = attachment({
+        kind: GlyphContextAttachmentKind.RULE,
+        ruleId: 'manual',
+        path: 'Same',
+        uri: 'glyph-rule:manual',
+        contentRevision: 'r1',
+        text: '',
+      });
+      const skill = attachment({
+        kind: GlyphContextAttachmentKind.RULE,
+        ruleId: 'selected',
+        path: 'Same',
+        uri: 'glyph-rule:selected',
+        contentRevision: 's1',
+        text: '',
+      });
+      composer.setDocument({
+        parts: [
+          { type: 'attachment', attachment: rule },
+          { type: 'text', text: ' and ' },
+          { type: 'attachment', attachment: skill },
+        ],
+        from: 0,
+        to: 0,
+      });
+      const saved = first.storage.get('glyph.newChatDraft');
+      expect(saved).toMatchObject({
+        text: '/Same and /Same',
+        references: [
+          { kind: 'rule', from: 0, to: 5 },
+          { kind: 'rule', from: 10, to: 15 },
+        ],
+      });
+      const second = await workbench({ saved: { 'glyph.selectedChat': '', 'glyph.newChatDraft': saved } });
+      const send = vi.fn(async () => {});
+      await second.service.composer.submit(send);
+      expect(send).toHaveBeenCalledWith(
+        '/Same and /Same',
+        [],
+        expect.objectContaining({
+          manualRuleIds: ['manual', 'selected'],
+
+          referenceSpans: [
+            { kind: 'rule', sourceId: 'manual', label: 'Same', revision: 'r1', from: 0, to: 5 },
+            { kind: 'rule', sourceId: 'selected', label: 'Same', revision: 's1', from: 10, to: 15 },
+          ],
+        }),
+      );
     });
 
     it.each([

@@ -35,7 +35,7 @@ export function pathsOverlap(left: string, right: string): boolean {
   );
 }
 
-function resolveAvailableIdentity(path: string): string {
+export function resolveAvailableIdentity(path: string): string {
   let existing = resolve(path);
   const missing: string[] = [];
   while (!existsSync(existing)) {
@@ -44,5 +44,5 @@ function resolveAvailableIdentity(path: string): string {
     missing.push(basename(existing));
     existing = parent;
   }
-  return missing.toReversed().reduce((current, component) => join(current, component), realpathSync(existing));
+  return missing.toReversed().reduce((current, component) => join(current, component), realpathSync.native(existing));
 }

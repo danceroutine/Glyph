@@ -1,3 +1,4 @@
+use glyph_filesystem_metadata::workspace_paths::WorkspacePaths;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -62,6 +63,8 @@ pub(crate) struct ContentSearchParams {
     pub(crate) offset: u32,
     #[serde(default)]
     pub(crate) overrides: BTreeMap<String, String>,
+    #[serde(default)]
+    pub(crate) include_source_identity: bool,
 }
 
 impl ContentSearchParams {
@@ -154,6 +157,7 @@ fn has_windows_drive_prefix(path: &str) -> bool {
 
 #[derive(Clone)]
 pub(crate) struct ContentSearchContext {
+    access: WorkspacePaths,
     root: PathBuf,
     paths: Arc<RwLock<BTreeSet<String>>>,
     index_truncated: Arc<AtomicBool>,
@@ -164,12 +168,12 @@ pub(crate) struct ContentSearchContext {
 /// Reads a catalog-relative file under the workspace's content access policy.
 /// Editor overrides are applied by the search operation before consulting disk.
 trait SearchableFiles: Sync {
-    fn read(&self, path: &str) -> Result<String, ()>;
+    fn read(&self, path: &str) -> Result<(String, Option<String>), ()>;
 }
 
 impl SearchableFiles for ContentSearchContext {
-    fn read(&self, path: &str) -> Result<String, ()> {
-        read_searchable_file(&self.root, path, self.max_file_bytes)
+    fn read(&self, path: &str) -> Result<(String, Option<String>), ()> {
+        read_searchable_file(&self.root, path, self.max_file_bytes, &self.access)
     }
 }
 
@@ -214,6 +218,10 @@ fn collect_outcomes(
 }
 
 impl ContentSearchContext {
+    pub(crate) fn with_access(mut self, access: WorkspacePaths) -> Self {
+        self.access = access;
+        self
+    }
     pub(crate) fn new(
         root: PathBuf,
         paths: Arc<RwLock<BTreeSet<String>>>,
@@ -222,6 +230,7 @@ impl ContentSearchContext {
         max_file_bytes: u64,
     ) -> Self {
         Self {
+            access: WorkspacePaths::default(),
             root,
             paths,
             index_truncated,
@@ -235,7 +244,15 @@ impl ContentSearchContext {
         params: ContentSearchParams,
         cancelled: &AtomicBool,
     ) -> Result<ContentSearchResult, ContentSearchError> {
-        self.search_files(params, cancelled, self)
+        let result = self.search_files(params, cancelled, self)?;
+        self.access
+            .current_at_completion()
+            .then_some(result)
+            .ok_or_else(|| {
+                ContentSearchError::Internal(
+                    "Workspace access boundaries changed during search.".into(),
+                )
+            })
     }
 
     fn search_files(
@@ -300,20 +317,22 @@ impl ContentSearchContext {
                                 if text.len() as u64 > self.max_file_bytes || text.contains('\0') {
                                     Err(())
                                 } else {
-                                    Ok(text.clone())
+                                    Ok((text.clone(), None))
                                 }
                             },
                         ) {
-                            Ok(text) => {
+                            Ok((text, identity)) => {
                                 searched_files.fetch_add(1, Ordering::AcqRel);
-                                search_file(
+                                let mut outcome = search_file(
                                     path,
                                     &text,
                                     &matcher,
                                     params,
                                     target_entries,
                                     cancelled,
-                                )
+                                );
+                                outcome.identity = identity;
+                                outcome
                             }
                             Err(()) => {
                                 skipped_files.fetch_add(1, Ordering::AcqRel);
@@ -353,6 +372,7 @@ impl ContentSearchContext {
             .map_err(|_| "The known-path set lock is poisoned.".to_owned())?;
         Ok(paths
             .iter()
+            .filter(|path| !self.access.excludes(&self.root.join(path)))
             .filter(|path| path_is_in_scope(path, scoped_path, self.path_case_sensitive))
             .filter(|path| file_glob.is_none_or(|matcher| matcher.is_match(path)))
             .filter(|path| file_types.is_none_or(|types| types.matched(path, false).is_whitelist()))
@@ -401,6 +421,8 @@ pub(crate) struct SearchMetadata {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ContentMatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_identity: Option<String>,
     path: String,
     line: u32,
     column: u32,
@@ -470,13 +492,19 @@ impl<'a> ResultAccumulator<'a> {
                         end,
                         self.params,
                     );
+                    let bytes = bytes
+                        + if self.params.include_source_identity {
+                            outcome.identity.as_ref().map_or(0, |id| id.len() + 20)
+                        } else {
+                            0
+                        };
                     if self.content_bytes + bytes > MAX_RESULT_TEXT_BYTES - RESULT_JSON_OVERHEAD {
                         self.has_more = true;
                         return true;
                     }
                     self.content_bytes += bytes;
                     self.seen_entries += 1;
-                    let found = content_match(
+                    let mut found = content_match(
                         &outcome.path,
                         &outcome.text,
                         &outcome.lines,
@@ -484,6 +512,9 @@ impl<'a> ResultAccumulator<'a> {
                         end,
                         self.params,
                     );
+                    if self.params.include_source_identity {
+                        found.source_identity.clone_from(&outcome.identity);
+                    }
                     debug_assert!(serde_json::to_vec(&found).unwrap().len() <= bytes);
                     self.matches.push(found);
                 }
@@ -564,6 +595,7 @@ impl<'a> ResultAccumulator<'a> {
 }
 
 struct FileOutcome {
+    identity: Option<String>,
     path: String,
     text: String,
     lines: Vec<LineRange>,
@@ -575,6 +607,7 @@ struct FileOutcome {
 impl FileOutcome {
     fn empty(path: &str) -> Self {
         Self {
+            identity: None,
             path: path.to_owned(),
             text: String::new(),
             lines: Vec::new(),
@@ -655,7 +688,12 @@ fn path_is_in_scope(path: &str, scope: Option<&str>, case_sensitive: bool) -> bo
     }
 }
 
-fn read_searchable_file(root: &Path, relative: &str, max_file_bytes: u64) -> Result<String, ()> {
+fn read_searchable_file(
+    root: &Path,
+    relative: &str,
+    max_file_bytes: u64,
+    access: &WorkspacePaths,
+) -> Result<(String, Option<String>), ()> {
     let candidate = root.join(relative);
     let link = fs::symlink_metadata(&candidate).map_err(|_| ())?;
     if !link.is_file() || link.file_type().is_symlink() || link.len() > max_file_bytes {
@@ -665,7 +703,20 @@ fn read_searchable_file(root: &Path, relative: &str, max_file_bytes: u64) -> Res
     if canonical != candidate || !canonical.starts_with(root) {
         return Err(());
     }
-    open_searchable_file(&canonical, &link, max_file_bytes)
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        Some((link.dev().to_string(), link.ino().to_string()))
+    };
+    #[cfg(not(unix))]
+    let identity: Option<(String, String)> = None;
+    let identity = identity
+        .as_ref()
+        .map(|(dev, ino)| (dev.as_str(), ino.as_str()));
+    access.assert_path(&canonical, identity).map_err(|_| ())?;
+    let text = open_searchable_file(&canonical, &link, max_file_bytes)?;
+    access.assert_path(&canonical, identity).map_err(|_| ())?;
+    Ok((text, identity.map(|(dev, ino)| format!("{dev}:{ino}"))))
 }
 
 fn open_searchable_file(
@@ -701,7 +752,8 @@ fn read_opened_searchable_file(
         use std::os::unix::fs::MetadataExt;
         // The path may have been replaced after inspection. Never read bytes
         // from a different file merely because it occupies the same pathname.
-        if opened.dev() != _expected.dev() || opened.ino() != _expected.ino() {
+        if opened.nlink() != 1 || opened.dev() != _expected.dev() || opened.ino() != _expected.ino()
+        {
             return Err(());
         }
     }
@@ -777,6 +829,7 @@ fn search_file(
         }
     }
     FileOutcome {
+        identity: None,
         path: path.to_owned(),
         text: if ranges.is_empty() {
             String::new()
@@ -834,6 +887,7 @@ fn content_match(
     let before_start = start_line.saturating_sub(params.lines_before as usize);
     let after_end = (end_line + params.lines_after as usize + 1).min(lines.len());
     ContentMatch {
+        source_identity: None,
         path: path.to_owned(),
         line: start_line as u32 + 1,
         column: start_column as u32,

@@ -1,3 +1,5 @@
+import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FileSearchResult } from '#src/context/search/FileSearchResult.js';
 import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
@@ -9,6 +11,53 @@ import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.
 import type { WorkspacePathIndexState } from '#src/context/search/WorkspacePathIndexState.js';
 
 describe(MultiRootWorkspacePathIndex, () => {
+  it.each(['search', 'glob', 'searchContents'] as const)('rechecks an earlier root at delivery of %s', async method => {
+    const first = new FixtureIndex('first', 'one', 1);
+    const later = new FixtureIndex('later', 'two', 1);
+    const index = new MultiRootWorkspacePathIndex('workspace', [
+      { name: 'first', index: first },
+      { name: 'later', index: later },
+    ]);
+    let paths: string[] = [];
+    const policy = new WorkspaceAccessPolicy({}, () => paths);
+    const access = new WorkspaceRootAccess(policy, '/first', true);
+    first.beginResultAccess = () => access.beginOperation().assertCurrent;
+    const run = () =>
+      method === 'search'
+        ? index.search('', { generation: 1 })
+        : method === 'glob'
+          ? index.glob('**/*', { limit: 10 })
+          : index.searchContents('value', { outputMode: 'files_with_matches', limit: 10 });
+    await expect(run()).resolves.toBeDefined();
+    later.onResult = () => {
+      paths = ['/first/private'];
+    };
+    await expect(run()).rejects.toThrow('Workspace access changed');
+  });
+
+  it('retains the original root admission across successive content pages', async () => {
+    const root = new FixtureIndex('first', 'one', 1);
+    let paths: string[] = [];
+    const access = new WorkspaceRootAccess(new WorkspaceAccessPolicy({}, () => paths), '/first', true);
+    root.beginResultAccess = () => access.beginOperation().assertCurrent;
+    vi.spyOn(root, 'searchContents').mockImplementation(async (_query, options) => {
+      if (options.offset === 1) paths = ['/first/private'];
+      return {
+        outputMode: 'files_with_matches',
+        files: ['one'],
+        searchedFiles: 2,
+        skippedFiles: 0,
+        indexTruncated: false,
+        truncated: options.offset === 0,
+        nextOffset: options.offset === 0 ? 1 : null,
+      };
+    });
+    const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'first', index: root }]);
+    await expect(index.searchContents('value', { outputMode: 'files_with_matches', limit: 2 })).rejects.toThrow(
+      'Workspace access changed',
+    );
+    expect(root.searchContents).toHaveBeenCalledTimes(2);
+  });
   it.each([-1, 0, 100001])('keeps a full result without offering its unusable native cursor %s', async nextOffset => {
     const api = new FixtureIndex('api', 'found.ts', 1);
     vi.spyOn(api, 'searchContents').mockResolvedValue({
@@ -365,9 +414,9 @@ describe(MultiRootWorkspacePathIndex, () => {
       const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
       const signal = new AbortController().signal;
 
-      await index.glob('*.ts', { limit: 5, signal });
+      await index.glob('*.ts', { limit: 5, signal, rootFilesOnly: true });
 
-      expect(apiGlob).toHaveBeenCalledWith('*.ts', { limit: 5, signal });
+      expect(apiGlob).toHaveBeenCalledWith('*.ts', { limit: 5, signal, rootFilesOnly: true });
     });
 
     it('targets a whole folder when the target directory names only the folder', async () => {
@@ -419,6 +468,24 @@ describe(MultiRootWorkspacePathIndex, () => {
       expect(result).toMatchObject({ files: ['web/src/App.tsx'] });
       expect(apiSearch).not.toHaveBeenCalled();
       expect(webSearch).toHaveBeenCalledWith('value', expect.objectContaining({ fileGlob: '**/*.tsx', signal }));
+    });
+
+    it('passes the source authority to both roots before qualifying content matches', async () => {
+      const api = new FixtureIndex('api', 'server.ts', 1);
+      const web = new FixtureIndex('web', 'app.ts', 1);
+      const apiSearch = vi.spyOn(api, 'searchContents');
+      const webSearch = vi.spyOn(web, 'searchContents');
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'api', index: api },
+        { name: 'web', index: web },
+      ]);
+      const sourceAuthority = { capture: vi.fn(), authorize: vi.fn() };
+
+      const result = await index.searchContents('value', { sourceAuthority, outputMode: 'content' });
+
+      expect(result).toMatchObject({ matches: [{ path: 'api/server.ts' }, { path: 'web/app.ts' }] });
+      for (const search of [apiSearch, webSearch])
+        expect(search).toHaveBeenCalledWith('value', expect.objectContaining({ sourceAuthority }));
     });
 
     it('keeps an unqualified file glob for every folder', async () => {
@@ -604,6 +671,8 @@ describe(MultiRootWorkspacePathIndex, () => {
 });
 
 class FixtureIndex implements WorkspacePathIndex {
+  beginResultAccess = () => () => {};
+  onResult = () => {};
   lastGlob: { pattern: string; targetDirectory: string | undefined } | undefined;
   lastContentPath: string | null | undefined;
 
@@ -624,6 +693,7 @@ class FixtureIndex implements WorkspacePathIndex {
   }
 
   async search(query: string, options: { generation: number }): Promise<FileSearchResult> {
+    this.onResult();
     return {
       generation: options.generation,
       query,
@@ -633,6 +703,7 @@ class FixtureIndex implements WorkspacePathIndex {
   }
 
   async glob(pattern: string, options: { targetDirectory?: string; limit: number }): Promise<WorkspacePathGlobResult> {
+    this.onResult();
     this.lastGlob = { pattern, targetDirectory: options.targetDirectory };
     return { files: [this.path], truncated: false };
   }
@@ -641,6 +712,7 @@ class FixtureIndex implements WorkspacePathIndex {
     _pattern: string,
     options: WorkspaceContentSearchOptions,
   ): Promise<WorkspaceContentSearchResult> {
+    this.onResult();
     this.lastContentPath = options.path;
     const metadata = {
       searchedFiles: 1,

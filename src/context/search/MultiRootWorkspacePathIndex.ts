@@ -12,14 +12,16 @@ import type { WorkspacePathGlobResult } from './WorkspacePathGlobResult.ts';
 import type { WorkspacePathIndex } from './WorkspacePathIndex.ts';
 import type { WorkspacePathIndexState } from './WorkspacePathIndexState.ts';
 
+type RootIndex = WorkspacePathIndex & { beginResultAccess(): () => void };
+
 interface NamedWorkspacePathIndex {
   readonly name: string;
-  readonly index: WorkspacePathIndex;
+  readonly index: RootIndex;
 }
 
 /** Combines one native index per workspace folder into a namespaced multi-root index. */
 export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
-  private readonly indexes: ReadonlyMap<string, WorkspacePathIndex>;
+  private readonly indexes: ReadonlyMap<string, RootIndex>;
 
   constructor(
     private readonly contextId: string,
@@ -31,7 +33,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
   }
 
   async initialize(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
-    return this.combineStates(await Promise.all([...this.indexes.values()].map(index => index.initialize(signal))));
+    return this.readState('initialize', signal);
   }
 
   async search(
@@ -40,6 +42,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
   ): Promise<FileSearchResult> {
     const routed = this.routeQuery(query);
     const indexes = routed ? [[routed.name, this.requireIndex(routed.name)] as const] : [...this.indexes];
+    const guards = indexes.map(([, index]) => index.beginResultAccess());
     const results = await Promise.all(
       indexes.map(async ([name, index]) => ({ name, result: await index.search(routed?.query ?? query, options) })),
     );
@@ -56,6 +59,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
       })
       .toSorted((left, right) => right.score - left.score || left.path.localeCompare(right.path))
       .slice(0, limit);
+    assertResultsCurrent(guards, options.signal);
     return {
       generation: options.generation,
       query,
@@ -66,7 +70,13 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
 
   async glob(
     pattern: string,
-    options: { targetDirectory?: string; limit: number; signal?: AbortSignal },
+    options: {
+      targetDirectory?: string;
+      rootFilesOnly?: boolean;
+      limit: number;
+      signal?: AbortSignal;
+      retainAccess?: (check: () => void) => void;
+    },
   ): Promise<WorkspacePathGlobResult> {
     const target =
       options.targetDirectory !== undefined && options.targetDirectory !== ''
@@ -76,6 +86,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
     const candidates = [...this.indexes].filter(
       ([name]) => (!target || target.name === name) && (!routedPattern || routedPattern.name === name),
     );
+    const guards: (() => void)[] = [];
     const files: string[] = [];
     let truncated = false;
     for (const [name, index] of candidates) {
@@ -83,19 +94,23 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
         truncated = true;
         break;
       }
+      guards.push(index.beginResultAccess());
       const result = await index.glob(routedPattern?.pattern ?? pattern, {
         limit: options.limit - files.length,
+        ...(options.rootFilesOnly ? { rootFilesOnly: true } : {}),
         ...(target?.path !== undefined && target?.path !== '' ? { targetDirectory: target.path } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
       });
       files.push(...result.files.map(path => `${name}/${path}`));
       truncated ||= result.truncated;
     }
+    assertResultsCurrent(guards, options.signal);
+    for (const check of guards) options.retainAccess?.(check);
     return { files, truncated };
   }
 
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
-    const { signal, ...serializableOptions } = options;
+    const { signal, retainAccess, sourceAuthority, ...serializableOptions } = options;
     const resolved = workspaceContentSearchOptionsSchema.parse(serializableOptions);
     const path = resolved.path !== null && resolved.path !== '' ? this.routePath(resolved.path) : undefined;
     const fileGlob =
@@ -103,6 +118,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
     const candidates = [...this.indexes].filter(
       ([name]) => (!path || path.name === name) && (!fileGlob || fileGlob.name === name),
     );
+    const guards: (() => void)[] = [];
     const selected: ContentEntry[] = [];
     let skip = resolved.offset;
     // Keep room for response metadata as well as root-qualified JSON entries.
@@ -115,11 +131,15 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
     let truncated = false;
     let hasContinuation = false;
     roots: for (const [rootIndex, [name, index]] of candidates.entries()) {
+      const check = index.beginResultAccess();
+      guards.push(check);
       let offset = 0;
       while (true) {
         signal?.throwIfAborted();
+        check();
         const page = await index.searchContents(pattern, {
           ...resolved,
+          ...(sourceAuthority && { sourceAuthority }),
           path: (path?.path ?? '') || null,
           fileGlob: fileGlob?.pattern ?? resolved.fileGlob,
           offset,
@@ -187,6 +207,8 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
       truncated,
       nextOffset: hasContinuation && canContinue ? nextOffset : null,
     };
+    assertResultsCurrent(guards, signal);
+    for (const check of guards) retainAccess?.(check);
     switch (resolved.outputMode) {
       case 'content':
         return { outputMode: 'content', matches: selected.filter(entry => isContentMatch(entry)), ...metadata };
@@ -203,7 +225,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
   }
 
   async refresh(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
-    return this.combineStates(await Promise.all([...this.indexes.values()].map(index => index.refresh(signal))));
+    return this.readState('refresh', signal);
   }
 
   async dispose(): Promise<void> {
@@ -216,7 +238,11 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
       );
   }
 
-  private combineStates(states: readonly WorkspacePathIndexState[]): WorkspacePathIndexState {
+  private async readState(method: 'initialize' | 'refresh', signal?: AbortSignal): Promise<WorkspacePathIndexState> {
+    const indexes = [...this.indexes.values()];
+    const guards = indexes.map(index => index.beginResultAccess());
+    const states = await Promise.all(indexes.map(index => index[method](signal)));
+    assertResultsCurrent(guards, signal);
     return {
       root: this.contextId,
       fileCount: states.reduce((sum, state) => sum + state.fileCount, 0),
@@ -247,11 +273,17 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
     return { name, path: separator < 0 ? '' : path.slice(separator + 1) };
   }
 
-  private requireIndex(name: string): WorkspacePathIndex {
+  private requireIndex(name: string): RootIndex {
     const index = this.indexes.get(name);
     if (!index) throw new Error(`Unknown workspace folder: ${name}`);
     return index;
   }
+}
+
+/** A merged result retains the admissions for every root that supplied entries or counts, across every page. */
+function assertResultsCurrent(guards: readonly (() => void)[], signal?: AbortSignal): void {
+  signal?.throwIfAborted();
+  for (const guard of guards) guard();
 }
 
 type ContentCount = WorkspaceContentCountResult['counts'][number];

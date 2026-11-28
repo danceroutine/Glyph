@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -702,7 +703,7 @@ describe(GlyphService, () => {
         text: 'hello',
         attachments,
       });
-      expect(contextAttachments.resolve).toHaveBeenCalledWith([{ path: 'a.ts' }]);
+      expect(contextAttachments.resolve).toHaveBeenCalledWith([{ path: 'a.ts' }], expect.any(WorkspaceDisclosure));
     });
   });
 

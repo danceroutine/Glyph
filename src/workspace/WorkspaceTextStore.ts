@@ -46,11 +46,12 @@ export interface WorkspaceTextStore {
     maxFiles: number,
     globPattern?: string,
     targetDirectory?: string,
+    signal?: AbortSignal,
   ): Promise<{ files: string[]; truncated: boolean }>;
   /**
-   * Converts agent- or user-supplied input into the single project-relative spelling used everywhere else,
-   * and rejects paths outside the project or excluded by access policy. Normalizing at this one point
-   * ensures path comparisons, policy checks, and persisted reviews all see the same spelling.
+   * Returns the adapter's workspace-relative address and checks its lexical
+   * constraints. Use the store again to perform each read or mutation. A saved
+   * spelling cannot establish what filesystem object it will resolve to later.
    */
   normalizePath(path: string): string;
   /**
@@ -66,8 +67,7 @@ export interface WorkspaceTextStore {
    * protecting `docs/` would wave through `DOCS/plan.md` on macOS if only the agent's spelling were checked.
    *
    * Canonical paths are absolute, so policies must accept both forms. Symlinks never reach this point
-   * because the filesystem store rejects them. Hard links are not resolved here, so no policy can see
-   * through a pre-existing hard link to the file it shares content with.
+   * because the filesystem store rejects them. The filesystem read boundary rejects unverified hard links.
    */
   canonicalPath(path: string): Promise<string>;
   /**

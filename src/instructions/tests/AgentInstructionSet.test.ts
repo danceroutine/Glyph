@@ -1,0 +1,154 @@
+import { describe, expect, it } from 'vitest';
+import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
+import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
+import { AgentInstructionSet } from '#src/instructions/AgentInstructionSet.js';
+import {
+  AgentInstructionSourceKind,
+  AgentInstructionSourceStatus,
+  type AgentInstructionSource,
+} from '#src/instructions/AgentInstructionSource.js';
+
+function anInstructionSource(overrides: Partial<AgentInstructionSource> = {}): AgentInstructionSource {
+  return {
+    id: 'root',
+    kind: AgentInstructionSourceKind.AGENTS_MD,
+    label: 'AGENTS.md',
+    path: 'AGENTS.md',
+    scope: '.',
+    status: AgentInstructionSourceStatus.ACTIVE,
+    ...overrides,
+  };
+}
+
+describe(AgentInstructionSet, () => {
+  it('retains native precedence and host aliases on the user-owned physical rule', () => {
+    const user = anInstructionSource({
+      id: 'user',
+      name: 'One',
+      kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+      projectAlias: {
+        id: 'old-native',
+        kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
+        scope: 'elsewhere',
+        additionalScopes: [{ kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, scope: 'packages' }],
+      },
+    });
+    const compatibility = anInstructionSource({
+      id: 'cursor',
+      kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
+      name: 'One',
+      scope: 'packages',
+    });
+    const set = new AgentInstructionSet([compatibility, user]);
+    expect(set.sources).toHaveLength(1);
+    expect(set.sources[0]).toMatchObject({ id: 'user', legacyIds: ['old-native'] });
+    expect(set.sources[0]!.projectAlias).toBeUndefined();
+  });
+
+  it('preserves family precedence within scope buckets and isolates returned arrays', () => {
+    const root = anInstructionSource();
+    const guidance = anInstructionSource({ id: 'guidance', scope: 'src', path: 'src/AGENTS.md' });
+    const rule = anInstructionSource({
+      id: 'rule',
+      kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      scope: 'src',
+      path: 'src/.glyph/rules/types.mdc',
+      enabled: false,
+    });
+    const set = new AgentInstructionSet([guidance, root, rule]);
+
+    expect(set.forPath('.')).toEqual([root]);
+    expect(set.forPath('src/file.ts')).toEqual([root, rule, guidance]);
+    expect(set.forPath('unrelated/file.ts')).toEqual([root]);
+    expect(new AgentInstructionSet([rule]).forPath('src/file.ts')).toEqual([rule]);
+    expect(new AgentInstructionSet([]).forPath('file.ts')).toEqual([]);
+
+    // Callers may own and change the result array without changing the scope index.
+    const result = set.forPath('src/file.ts') as AgentInstructionSource[];
+    result.splice(0);
+    expect(set.forPath('src/file.ts')).toEqual([root, rule, guidance]);
+  });
+
+  it('resolves ancestors in precedence order without matching sibling directory prefixes', () => {
+    const root = anInstructionSource();
+    const near = anInstructionSource({ id: 'near', scope: 'src', path: 'src/AGENTS.md' });
+    const deeper = anInstructionSource({ id: 'deep', scope: 'src/lib', path: 'src/lib/AGENTS.md' });
+    const sibling = anInstructionSource({ id: 'sibling', scope: 'src-old', path: 'src-old/AGENTS.md' });
+    const error = anInstructionSource({ id: 'error', status: AgentInstructionSourceStatus.ERROR });
+    const input = [deeper, sibling, near, error, root];
+    const set = new AgentInstructionSet(input);
+
+    expect(set.forPath('src/lib/file.ts')).toEqual([root, near, deeper]);
+    expect(set.forPath('src')).toEqual([root, near]);
+    expect(set.forPath('src-old/file.ts')).toEqual([root, sibling]);
+    expect(set.sources).toContain(error);
+    expect(input).toEqual([deeper, sibling, near, error, root]);
+  });
+
+  it('shadows compatible rules only when both name and scope match', () => {
+    const native = anInstructionSource({
+      id: 'native',
+      kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      path: '.glyph/rules/shared.mdc',
+      name: 'Shared',
+    });
+    const compatible = anInstructionSource({
+      id: 'compatible',
+      kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
+      path: '.cursor/rules/shared.mdc',
+      name: 'Shared',
+    });
+    const nested = { ...compatible, id: 'nested', scope: 'src', path: 'src/.cursor/rules/shared.mdc' };
+    const different = { ...compatible, id: 'different', name: 'Different' };
+
+    expect(new AgentInstructionSet([compatible, nested, different, native]).sources).toEqual([
+      different,
+      native,
+      nested,
+    ]);
+  });
+
+  it('retains native shadowing when the native source is disabled or unreadable', () => {
+    const native = anInstructionSource({
+      kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      path: '.glyph/rules/shared.mdc',
+      name: 'Shared',
+      enabled: false,
+    });
+    const compatible = { ...native, kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE, enabled: true };
+    const error = { ...native, status: AgentInstructionSourceStatus.ERROR };
+
+    expect(new AgentInstructionSet([compatible, native]).sources).toEqual([native]);
+    expect(new AgentInstructionSet([compatible, error]).sources).toEqual([error]);
+  });
+});
+
+it('shadows a compatible rule independently of which overlapping index returned each family', () => {
+  const roots = [
+    { name: 'Outer', path: '/repo' },
+    { name: 'Inner', path: '/repo/sub' },
+  ];
+  const paths = new InstructionPaths(new Map(roots.map(root => [root.name, true])), new WorkspaceSourceRoutes(roots));
+  const native = anInstructionSource({
+    kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+    id: 'native',
+    name: 'Style',
+    scope: 'Outer/sub',
+    enabled: false,
+  });
+  const cursor = anInstructionSource({
+    kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
+    id: 'cursor',
+    name: 'Style',
+    scope: 'Inner',
+  });
+  const sibling = { ...cursor, scope: 'Outer/another' };
+  expect(new AgentInstructionSet([cursor, native, sibling], paths).sources).toEqual([sibling, native]);
+  const user = anInstructionSource({
+    kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+    id: 'user',
+    name: 'Style',
+    projectAlias: { id: 'native', kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, scope: native.scope },
+  });
+  expect(new AgentInstructionSet([cursor, user], paths).sources.map(source => source.id)).toEqual(['user']);
+});

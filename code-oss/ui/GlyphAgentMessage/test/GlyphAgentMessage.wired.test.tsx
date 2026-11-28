@@ -57,6 +57,58 @@ describe(WiredGlyphAgentMessage, () => {
     expect(actions.copyText).toHaveBeenCalledWith('All done.');
   });
 
+  it('shows persisted instruction provenance and opens its source', () => {
+    const openLink = vi.fn(async () => {});
+    render(
+      <WiredGlyphAgentMessage
+        entry={transcriptEntry({
+          context: {
+            sources: [
+              {
+                id: 'rule',
+                kind: 'glyph_project_rule',
+                label: 'Glyph project rule',
+                name: 'TypeScript',
+                revision: 'frozen-revision',
+                content: 'Frozen instructions',
+                path: '.glyph/rules/typescript.mdc',
+                scope: '.',
+                status: 'active',
+              },
+              {
+                id: 'other',
+                kind: 'agents_md',
+                label: 'AGENTS.md',
+                path: 'src/AGENTS.md',
+                scope: 'src',
+                status: 'active',
+                content: 'Stored without an explicit revision.',
+              },
+              {
+                id: 'agents',
+                kind: 'agents_md',
+                label: 'AGENTS.md',
+                path: 'AGENTS.md',
+                scope: '.',
+                status: 'active',
+              },
+            ],
+            activations: [{ sourceId: 'rule', reason: 'file_access' }],
+            candidates: [],
+          },
+        })}
+        actions={messageActions({ openLink })}
+      />,
+    );
+
+    expect(screen.getByText('AGENTS.md · active')).toBeTruthy();
+    expect(screen.getByText('Frozen instructions')).toBeTruthy();
+    expect(screen.getByText('frozen-revision')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Open current file · .glyph/u }));
+    expect(openLink).toHaveBeenCalledWith('glyph-instruction:rule');
+    expect(screen.getByRole('button', { name: /Open current file · AGENTS.md/u })).toBeTruthy();
+  });
+
   it('branches the conversation from a checkpoint', async () => {
     const branchChat = vi.fn(async () => {});
     render(

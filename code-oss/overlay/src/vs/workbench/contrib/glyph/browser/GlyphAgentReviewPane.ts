@@ -336,6 +336,7 @@ export class GlyphAgentReviewPane extends ViewPane {
         uri: file.uri,
         path: file.path,
         text: file.contextText,
+        projectFile: true,
         contentRevision: file.revision,
       }));
     await useGlyphContext(

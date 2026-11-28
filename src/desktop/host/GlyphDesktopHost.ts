@@ -1,4 +1,11 @@
+import { WindowCommandAuthority } from './WindowCommandAuthority.ts';
 import { randomUUID } from 'node:crypto';
+import { join, sep } from 'node:path';
+import { relativeWorkspaceSpelling } from '#src/workspace/sameWorkspaceDirectory.js';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { getGlyphWorkspaceRootId } from '#src/desktop/protocol/connection/getGlyphWorkspaceRootId.js';
+import type { GlyphAttachmentResource } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import { existsSync, realpathSync } from 'node:fs';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphCommandResultHostEvent } from '#src/desktop/protocol/events/GlyphCommandResultHostEvent.js';
 import type { GlyphErrorHostEvent } from '#src/desktop/protocol/events/GlyphErrorHostEvent.js';
@@ -18,7 +25,7 @@ import { HostEventJournal } from './HostEventJournal.ts';
 import { RequestDeduplicator } from './RequestDeduplicator.ts';
 import { getWorkspaceKey, WorkspaceOwnershipRegistry } from './WorkspaceOwnershipRegistry.ts';
 
-import type { GlyphDesktopWorkspaceRuntime, GlyphRuntimeCommand } from './GlyphDesktopWorkspaceRuntime.ts';
+import type { GlyphDesktopWorkspaceRuntime, GlyphAttachedCommand } from './GlyphDesktopWorkspaceRuntime.ts';
 import type { GlyphDesktopWorkspaceRuntimeFactory } from './GlyphDesktopWorkspaceRuntimeFactory.ts';
 import { isGlyphRequestEnvelope } from '#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.js';
 import { isMutationCommand } from '#src/desktop/host/typeguards/isMutationCommand.js';
@@ -28,18 +35,23 @@ interface Connection {
   readonly journal: HostEventJournal;
   readonly requests: RequestDeduplicator<readonly GlyphHostEvent[]>;
   send: ((event: ReturnType<HostEventJournal['append']>) => void) | undefined;
+  authorityKnown: boolean;
   attached: boolean;
   ready: boolean;
   canReplay: boolean;
   trusted: boolean;
   readOnly: boolean;
   roots: readonly GlyphWorkspaceRoot[];
+  physicalRoots: Map<GlyphWorkspaceRoot, Set<string>>;
   attachmentQueue: Promise<void>;
   pendingAttachments: number;
+  authorityGeneration: number;
+  readonly commands: WindowCommandAuthority;
 }
 interface WorkspaceRuntimeRecord {
   readonly runtime: GlyphDesktopWorkspaceRuntime;
   readonly ownerWindowId: string;
+  readonly trusted: boolean;
 }
 
 /**
@@ -65,6 +77,44 @@ export class GlyphDesktopHost {
     this.generation = generation;
   }
 
+  /** A trusted editor may still own user-file buffers while reconnecting or sharing another runtime. */
+  trustedUserEditors(
+    owner: GlyphConnectionIdentity,
+    sourcePath?: string,
+    sourceAliases: readonly string[] = [],
+  ): readonly { identity: GlyphConnectionIdentity; connectionId: string }[] {
+    const peers = [];
+    for (const peer of this.sessions.values()) {
+      if (!peer.trusted) continue;
+      for (const root of peer.roots) {
+        const current = physicalRoot(root);
+        const observed = peer.physicalRoots.get(root)!;
+        if (
+          [...observed].some(
+            previous =>
+              previous !== current &&
+              !(
+                current === undefined &&
+                sourcePath &&
+                !existsSync(sourcePath) &&
+                [sourcePath, ...sourceAliases].some(alias => previous === alias || previous.startsWith(alias + sep))
+              ),
+          )
+        )
+          throw new Error(
+            'A trusted editor folder was removed or retargeted. Save or close its files before changing user instructions.',
+          );
+        if (current !== undefined) observed.add(current);
+      }
+      if (connectionKey(peer.identity) === connectionKey(owner)) continue;
+      const connectionId = [...this.connections].find(([, current]) => current === peer)?.[0];
+      if (!connectionId || !peer.authorityKnown || peer.pendingAttachments > 0)
+        throw new Error('Another trusted Glyph window is reconnecting. Retry the change after it reconnects.');
+      peers.push({ identity: peer.identity, connectionId });
+    }
+    return peers;
+  }
+
   connect(connectionId: string, identity: GlyphConnectionIdentity, send: Exclude<Connection['send'], undefined>): void {
     if (this.disposed) throw new Error('The Glyph desktop host has stopped.');
     if (this.connections.has(connectionId)) throw new Error(`Connection ${connectionId} is already registered.`);
@@ -77,17 +127,22 @@ export class GlyphDesktopHost {
         send: undefined,
         journal: new HostEventJournal(this.generation),
         requests: new RequestDeduplicator(),
+        authorityKnown: false,
         attached: false,
         ready: false,
         canReplay: false,
         trusted: false,
         readOnly: true,
         roots: [],
+        physicalRoots: new Map(),
         attachmentQueue: Promise.resolve(),
         pendingAttachments: 0,
+        authorityGeneration: 0,
+        commands: new WindowCommandAuthority(),
       };
       this.sessions.set(key, connection);
     }
+    connection.authorityKnown = false;
     connection.send = send;
     clearTimeout(this.disconnectTimers.get(connection));
     this.disconnectTimers.delete(connection);
@@ -98,7 +153,9 @@ export class GlyphDesktopHost {
   async receive(connectionId: string, request: unknown): Promise<void> {
     const connection = this.requireConnection(connectionId);
     if (!isGlyphRequestEnvelope(request)) throw new Error('Invalid request envelope.');
-    const result = await connection.requests.run(request.requestId, () => this.execute(connection, request));
+    const transport = connection.commands.transport;
+    const result = await connection.requests.run(request.requestId, () => this.execute(connection, request, transport));
+    if (transport.aborted) return;
     for (const event of result) this.send(connection, event);
   }
 
@@ -106,6 +163,7 @@ export class GlyphDesktopHost {
     const connection = this.connections.get(connectionId);
     if (!connection) return;
     this.connections.delete(connectionId);
+    connection.commands.disconnect();
     connection.send = undefined;
     connection.ready = false;
     // Preserve replay across a renderer reload, but never leave authority or
@@ -126,6 +184,7 @@ export class GlyphDesktopHost {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    for (const connection of this.sessions.values()) connection.commands.disconnect();
     for (const timer of this.disconnectTimers.values()) clearTimeout(timer);
     this.disconnectTimers.clear();
     await Promise.allSettled(this.runtimeCreations.values());
@@ -144,7 +203,11 @@ export class GlyphDesktopHost {
     }
   }
 
-  private async execute(connection: Connection, request: GlyphRequestEnvelope): Promise<readonly GlyphHostEvent[]> {
+  private async execute(
+    connection: Connection,
+    request: GlyphRequestEnvelope,
+    transport: AbortSignal,
+  ): Promise<readonly GlyphHostEvent[]> {
     const authorityError = this.validateAuthority(connection, request);
     if (authorityError !== undefined && authorityError !== '') {
       return [
@@ -171,13 +234,21 @@ export class GlyphDesktopHost {
       switch (request.command.type) {
         case GlyphWorkbenchCommandType.ATTACH_WORKSPACE: {
           const command = request.command;
-          return await this.transitionAttachment(connection, () => this.attach(connection, request.requestId, command));
+          if (
+            command.trusted !== connection.trusted ||
+            JSON.stringify(command.roots) !== JSON.stringify(connection.roots)
+          )
+            connection.commands.revoke();
+          return await this.transitionAttachment(connection, transport, () =>
+            this.attach(connection, request.requestId, command, transport),
+          );
         }
         case GlyphWorkbenchCommandType.REQUEST_SNAPSHOT:
           await this.publishSnapshot(connection);
           return [toCommandResultGlyphHostEvent(request.requestId)];
         case GlyphWorkbenchCommandType.DETACH:
-          await this.transitionAttachment(connection, () => this.detach(connection));
+          connection.commands.revoke();
+          await this.transitionAttachment(connection, transport, () => this.detach(connection));
           return [toCommandResultGlyphHostEvent(request.requestId)];
         default:
           return await this.dispatch(connection, request.requestId, request.command);
@@ -194,9 +265,14 @@ export class GlyphDesktopHost {
   }
 
   /** Serialize trust/ownership changes even when a transport sends overlapping requests. */
-  private async transitionAttachment<T>(connection: Connection, action: () => Promise<T>): Promise<T> {
+  private async transitionAttachment<T>(
+    connection: Connection,
+    transport: AbortSignal,
+    action: () => Promise<T>,
+  ): Promise<T> {
     connection.pendingAttachments++;
     const run = async (): Promise<T> => {
+      transport.throwIfAborted();
       this.assertCurrentConnection(connection);
       return action();
     };
@@ -210,7 +286,10 @@ export class GlyphDesktopHost {
     try {
       return await operation;
     } catch (error) {
-      connection.ready = false;
+      if (!transport.aborted) {
+        connection.commands.revoke();
+        connection.ready = false;
+      }
       throw error;
     } finally {
       connection.pendingAttachments--;
@@ -227,9 +306,17 @@ export class GlyphDesktopHost {
     connection: Connection,
     requestId: string,
     command: Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE }>,
+    transport: AbortSignal,
   ): Promise<readonly GlyphHostEvent[]> {
     const key = getWorkspaceKey(connection.identity);
-    if (command.trusted !== connection.trusted && !connection.readOnly && connection.attached) {
+    if (command.trusted !== connection.trusted || JSON.stringify(command.roots) !== JSON.stringify(connection.roots)) {
+      connection.journal.discard();
+      connection.canReplay = false;
+    }
+    if (
+      command.trusted !== connection.trusted &&
+      (connection.attached || this.ownership.getOwnerWindowId(connection.identity) === connection.identity.windowId)
+    ) {
       // Trust changes are lifecycle boundaries. Revocation drains tools; a
       // grant must reconcile deferred reviews before authorizing new mutations.
       connection.trusted = false;
@@ -238,7 +325,17 @@ export class GlyphDesktopHost {
     // New authority cannot overlap a previous owner's asynchronous shutdown.
     const stopping = this.runtimeStops.get(key);
     if (stopping) await stopping;
+    transport.throwIfAborted();
     this.assertCurrentConnection(connection);
+    connection.authorityKnown = true;
+    connection.trusted = command.trusted;
+    connection.roots = command.roots;
+    connection.physicalRoots = new Map(
+      command.roots.map(root => {
+        const physical = physicalRoot(root);
+        return [root, new Set(physical === undefined ? [] : [physical])];
+      }),
+    );
     const ownership = this.ownership.acquire(connection.identity, command.roots);
     let record = this.runtimes.get(key);
     if (!record) {
@@ -246,17 +343,30 @@ export class GlyphDesktopHost {
       if (!creating) {
         // Factory initialization includes async persistence/native setup. Peers
         // must await the owner's runtime instead of creating a second writer.
+        const generation = connection.authorityGeneration;
+        const rootSelection = JSON.stringify(command.roots);
         creating = this.runtimeFactory
           .create({
             identity: connection.identity,
             roots: command.roots,
             trusted: command.trusted,
+            assertTrusted: () => {
+              this.assertCurrentConnection(connection);
+              if (
+                !connection.trusted ||
+                !connection.authorityKnown ||
+                !connection.send ||
+                generation !== connection.authorityGeneration ||
+                JSON.stringify(connection.roots) !== rootSelection
+              )
+                throw new Error('Workspace trust or ownership changed before disclosure.');
+            },
             emit: event => {
               this.broadcast(key, event);
             },
           })
           .then(runtime => {
-            const created = { runtime, ownerWindowId: ownership.ownerWindowId };
+            const created = { runtime, ownerWindowId: ownership.ownerWindowId, trusted: command.trusted };
             this.runtimes.set(key, created);
             return created;
           })
@@ -271,7 +381,15 @@ export class GlyphDesktopHost {
       }
       record = await creating;
     }
+    transport.throwIfAborted();
     this.assertCurrentConnection(connection);
+    if (record.trusted !== command.trusted) {
+      connection.attached = false;
+      connection.ready = false;
+      connection.canReplay = false;
+      connection.trusted = command.trusted;
+      throw new Error('Match the owning window’s workspace trust before sharing its Glyph session.');
+    }
     if (this.runtimeStops.has(key)) throw new Error('The owning window disconnected during workspace initialization.');
     connection.attached = true;
     connection.ready = true;
@@ -289,6 +407,7 @@ export class GlyphDesktopHost {
       return [toCommandResultGlyphHostEvent(requestId)];
     }
     await this.publishSnapshot(connection);
+    transport.throwIfAborted();
     connection.canReplay = true;
     return [toCommandResultGlyphHostEvent(requestId)];
   }
@@ -296,7 +415,7 @@ export class GlyphDesktopHost {
   private async dispatch(
     connection: Connection,
     requestId: string,
-    command: GlyphRuntimeCommand,
+    command: GlyphAttachedCommand,
   ): Promise<readonly GlyphHostEvent[]> {
     if (!connection.attached || !connection.ready || connection.pendingAttachments > 0) {
       return [
@@ -307,7 +426,12 @@ export class GlyphDesktopHost {
         }),
       ];
     }
-    if (!connection.trusted && isMutationCommand(command)) {
+    if (
+      !connection.trusted &&
+      (isMutationCommand(command) ||
+        command.type === GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE ||
+        command.type === GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE)
+    ) {
       return [
         toErrorGlyphHostEvent({
           requestId: requestId,
@@ -337,11 +461,61 @@ export class GlyphDesktopHost {
           code: GlyphDesktopErrorCode.HOST_UNAVAILABLE,
         }),
       ];
-    const controller = new AbortController();
+    if (command.type === GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE) {
+      const { resource, lookupId } = command;
+      if (
+        !record.runtime.attachmentAccess ||
+        typeof lookupId !== 'string' ||
+        !lookupId ||
+        lookupId.length > 64 ||
+        !resource ||
+        typeof resource.path !== 'string' ||
+        !resource.path ||
+        resource.path.length > 32768 ||
+        typeof resource.uri !== 'string' ||
+        resource.uri.length > 32768 ||
+        (resource.projectFile !== undefined && typeof resource.projectFile !== 'boolean') ||
+        typeof resource.folder !== 'boolean'
+      )
+        throw new Error('Invalid or unavailable attachment resource.');
+      const signal = connection.commands.signal;
+      const owner = this.sessions.get(connectionKey({ ...connection.identity, windowId: record.ownerWindowId }));
+      const resolveResource = () => (connection.readOnly ? resourceForOwner(resource, connection, owner) : resource);
+      const listing = await record.runtime.attachmentAccess.resolve(resolveResource(), signal);
+      if (connection.readOnly) resolveResource();
+      signal.throwIfAborted();
+      this.assertCurrentConnection(connection);
+      this.send(connection, {
+        type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED,
+        lookupId,
+        ...(listing ? { listing } : {}),
+      });
+      return [toCommandResultGlyphHostEvent(requestId)];
+    }
+    if (command.type === GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE) {
+      if (
+        typeof command.lookupId !== 'string' ||
+        !command.lookupId ||
+        command.lookupId.length > 64 ||
+        typeof command.ruleId !== 'string' ||
+        !command.ruleId ||
+        command.ruleId.length > 500
+      )
+        throw new Error('Invalid rule reference lookup.');
+      const ruleId = record.runtime.resolveRuleReference?.(command.ruleId);
+      this.send(connection, {
+        type: GlyphHostEventType.RULE_REFERENCE_RESOLVED,
+        lookupId: command.lookupId,
+        ...(ruleId ? { ruleId } : {}),
+      });
+      return [toCommandResultGlyphHostEvent(requestId)];
+    }
+    const signal = connection.commands.signal;
     await record.runtime.handle(command, {
       windowId: connection.identity.windowId,
-      signal: controller.signal,
+      signal,
       emit: event => {
+        signal.throwIfAborted();
         this.broadcast(getWorkspaceKey(connection.identity), event);
       },
     });
@@ -349,14 +523,19 @@ export class GlyphDesktopHost {
   }
 
   private async publishSnapshot(connection: Connection): Promise<void> {
+    this.assertCurrentConnection(connection);
     const record = this.runtimes.get(getWorkspaceKey(connection.identity));
     if (!record) throw new Error('The Glyph workspace runtime is unavailable.');
+    if (!connection.attached || !connection.ready || record.trusted !== connection.trusted)
+      throw new Error('Attach an authorized workspace before requesting a snapshot.');
+    const signal = connection.commands.signal;
     for (let attempt = 0; attempt < 8; attempt++) {
       const before = connection.journal.watermark;
       const state = await record.runtime.snapshot();
       this.assertCurrentConnection(connection);
       if (this.runtimes.get(getWorkspaceKey(connection.identity)) !== record || !connection.ready)
         throw new Error('The workspace detached during snapshot capture.');
+      signal.throwIfAborted();
       if (before !== connection.journal.watermark) continue;
       // Check and sequence synchronously: returning the snapshot through another
       // await would let a newer event overtake it again. Deduplication caches only
@@ -382,9 +561,12 @@ export class GlyphDesktopHost {
     if (isOwner && pendingStop) return pendingStop;
     // The reservation can already exist while initialization is still pending.
     if (!connection.attached && !isOwner) return;
+    connection.commands.revoke();
+    connection.authorityGeneration++;
     connection.attached = false;
     connection.ready = false;
     connection.canReplay = false;
+    connection.journal.discard();
     const record = this.runtimes.get(key);
     if (!isOwner) {
       await record?.runtime.connectionLost(connection.identity.windowId);
@@ -392,9 +574,11 @@ export class GlyphDesktopHost {
     }
     for (const peer of this.sessions.values()) {
       if (getWorkspaceKey(peer.identity) !== key) continue;
+      peer.commands.revoke();
       peer.attached = false;
       peer.ready = false;
       peer.canReplay = false;
+      peer.journal.discard();
       if (peer === connection && options.notifyOwner === false) continue;
       this.send(peer, {
         type: GlyphHostEventType.HOST_STATUS,
@@ -421,7 +605,9 @@ export class GlyphDesktopHost {
 
   private broadcast(key: string, event: GlyphHostEvent): void {
     for (const connection of this.sessions.values()) {
-      if (connection.attached && getWorkspaceKey(connection.identity) === key) this.send(connection, event);
+      if (!connection.attached || getWorkspaceKey(connection.identity) !== key) continue;
+      const envelope = connection.journal.append(connection.identity, event);
+      if (connection.ready) connection.send?.(envelope);
     }
   }
 
@@ -443,6 +629,48 @@ export class GlyphDesktopHost {
     const connection = this.connections.get(connectionId);
     if (!connection) throw new Error(`Unknown desktop connection: ${connectionId}`);
     return connection;
+  }
+}
+
+/** A second editor can open the same roots under different names or selected symlinks. */
+function resourceForOwner(
+  resource: GlyphAttachmentResource,
+  peer: Connection,
+  owner: Connection | undefined,
+): GlyphAttachmentResource {
+  const [name, ...parts] = resource.path.split('/');
+  const peerRoot =
+    peer.roots.length === 1
+      ? peer.roots[0]
+      : peer.roots.find(root => getGlyphWorkspaceRootId(root, peer.roots) === name);
+  const physical = peerRoot && physicalRoot(peerRoot);
+  const observed = peerRoot && peer.physicalRoots.get(peerRoot);
+  if (!physical || !observed?.has(physical) || observed.size !== 1 || !owner)
+    throw new Error('The selected attachment workspace folder changed.');
+  const ownerRoot = owner.roots.find(root => owner.physicalRoots.get(root)?.has(physical));
+  if (!ownerRoot || physicalRoot(ownerRoot) !== physical)
+    throw new Error('The selected attachment workspace folder changed.');
+  const local = peer.roots.length === 1 ? resource.path : parts.join('/');
+  if (local.split('/').includes('..') || local.includes('\\')) throw new Error('Invalid attachment workspace path.');
+  const selected = fileURLToPath(resource.uri);
+  const path = join(physical, local);
+  if (
+    relativeWorkspaceSpelling(join(peerRoot.canonicalPath, local), selected) !== '' &&
+    relativeWorkspaceSpelling(path, selected) !== ''
+  )
+    throw new Error('The selected attachment does not belong to the declared workspace path.');
+  const route =
+    owner.roots.length === 1
+      ? local
+      : [getGlyphWorkspaceRootId(ownerRoot, owner.roots), local].filter(part => part && part !== '.').join('/');
+  return { ...resource, uri: pathToFileURL(path).href, path: route };
+}
+
+function physicalRoot(root: GlyphWorkspaceRoot): string | undefined {
+  try {
+    return realpathSync.native(root.canonicalPath);
+  } catch {
+    return undefined;
   }
 }
 

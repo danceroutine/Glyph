@@ -1,17 +1,63 @@
+import { fixtureWorkspace, fixtureIndex, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ProjectAccess } from '#src/project/ProjectAccess.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
 
 describe(RustWorkspacePathIndex, () => {
   describe('workspace path queries', () => {
+    it('withholds earlier native content hits when another root changes their reservation during the merged search', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'context-index-merged-'));
+      const first = join(directory, 'first');
+      const second = join(directory, 'second');
+      await Promise.all([mkdir(first), mkdir(second)]);
+      await Promise.all([writeFile(join(first, 'one.txt'), 'found'), writeFile(join(second, 'two.txt'), 'found')]);
+      let privatePaths: string[] = [];
+      let reserveEarlier = false;
+      const binaryPath = resolve(
+        'target',
+        'release',
+        process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
+      );
+      const merged = new MultiRootWorkspacePathIndex('project', [
+        {
+          name: 'first',
+          index: fixtureIndex({
+            root: first,
+            binaryPath,
+            accessPolicy: new WorkspaceAccessPolicy({}, () => privatePaths),
+          }),
+        },
+        {
+          name: 'second',
+          index: fixtureIndex({
+            root: second,
+            binaryPath,
+            readContentOverrides: async () => {
+              if (reserveEarlier) privatePaths = [first];
+              return {};
+            },
+          }),
+        },
+      ]);
+      try {
+        const find = () => merged.searchContents('found', { outputMode: 'files_with_matches', limit: 5 });
+        await expect(find()).resolves.toMatchObject({ files: ['first/one.txt', 'second/two.txt'] });
+        reserveEarlier = true;
+        await expect(find()).rejects.toThrow('Workspace access changed');
+        await expect(find()).resolves.toMatchObject({ files: ['second/two.txt'] });
+      } finally {
+        await merged.dispose();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+
     it('returns escaped context within the multi-root response budget through the real Rust process', async () => {
       const root = await mkdtemp(join(tmpdir(), 'context-index-escaped-'));
-      const native = new RustWorkspacePathIndex({
+      const native = fixtureIndex({
         root,
         binaryPath: resolve(
           'target',
@@ -68,7 +114,7 @@ describe(RustWorkspacePathIndex, () => {
       await writeFile(join(project, '.env'), 'SECRET=never-index-this\n');
       await writeFile(join(project, '.git-credentials'), 'https://user:never-index-this@example.test\n');
       await writeFile(join(project, '.glyph-state', 'accounts.json'), '{"refreshToken":"never-index-this"}\n');
-      let search = new RustWorkspacePathIndex({
+      let search = fixtureIndex({
         binaryPath,
         root: project,
         cachePath: join(state, 'paths.bin'),
@@ -126,7 +172,7 @@ describe(RustWorkspacePathIndex, () => {
             offset: 0,
           }),
         ).resolves.toMatchObject({ files: [] });
-        const access = new ProjectAccess(project, {}, new FileSystemWorkspaceTextStore(project), search);
+        const access = fixtureProjectAccess(project, {}, fixtureWorkspace(project), search);
         const toolResult = JSON.parse(
           await access.execute(
             'search_project_contents',
@@ -176,7 +222,7 @@ describe(RustWorkspacePathIndex, () => {
         });
         await search.dispose();
 
-        search = new RustWorkspacePathIndex({
+        search = fixtureIndex({
           binaryPath,
           root: project,
           cachePath: join(state, 'paths.bin'),

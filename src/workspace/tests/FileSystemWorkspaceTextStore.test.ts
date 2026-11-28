@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { constants } from 'node:fs';
 import {
   link,
@@ -6,6 +7,7 @@ import {
   mkdtemp,
   open,
   readFile,
+  readdir,
   realpath,
   rm,
   rmdir,
@@ -22,6 +24,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 
@@ -51,15 +54,124 @@ async function actualFileSystem() {
 }
 
 describe(FileSystemWorkspaceTextStore, () => {
+  it('admits each listed path and pins reads to the opened file before and after loading', async () => {
+    const root = await workspaceRoot('glyph-physical-workspace-');
+    const outside = join(root, 'excluded');
+    const checked: { path: string; handle: FileHandle | undefined }[] = [];
+    const disk = fixtureWorkspace(root, {
+      caseSensitive: true,
+      excludedPaths: ['excluded'],
+      physicalAccess: {
+        assertWorkspacePath: async (path, privatePaths, options) => {
+          expect(privatePaths).toContain(outside);
+          if (path.endsWith('/hidden')) throw new Error('private');
+          checked.push({ path, handle: options?.handle });
+        },
+      },
+    });
+    await writeFile(join(root, 'public'), 'allowed');
+    await writeFile(join(root, 'hidden'), 'hidden');
+    expect((await disk.list(20)).files).toEqual(['public']);
+    checked.length = 0;
+    expect((await disk.read('public')).text).toBe('allowed');
+    expect(checked).toHaveLength(2);
+    expect(checked[0]!.handle).toBeDefined();
+    expect(checked[1]!.handle).toBe(checked[0]!.handle);
+    await expect(disk.exists('hidden')).rejects.toThrow('private');
+    await expect(disk.validateAccess('hidden')).rejects.toThrow('private');
+    await expect(disk.canonicalPath('hidden')).rejects.toThrow('private');
+    await expect(disk.read('hidden')).rejects.toThrow('private');
+    const changed = fixtureWorkspace(root, {
+      physicalAccess: {
+        assertWorkspacePath: vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error('changed')),
+      },
+    });
+    await expect(changed.read('public')).rejects.toThrow('changed');
+  });
+
+  it('leaves alternate project spellings to the owning physical filesystem', async () => {
+    const root = await realpath(await workspaceRoot('glyph-ordinary-sibling-'));
+    const privatePath = join(root, 'record');
+    await writeFile(join(root, 'Record'), 'ordinary');
+    const policy = new WorkspaceAccessPolicy({}, [privatePath]);
+    const physicalAccess = {
+      assertWorkspacePath: vi.fn(async (path: string) => {
+        if (path === privatePath) throw new Error('private');
+      }),
+    };
+    const disk = fixtureWorkspace(root, { caseSensitive: false, accessPolicy: policy, physicalAccess });
+    expect(disk.normalizePath('Record')).toBe('Record');
+    await disk.validateAccess('Record');
+    expect(physicalAccess.assertWorkspacePath.mock.calls[0]?.[0]).toBe(join(root, 'Record'));
+    expect(() => disk.normalizePath('record')).toThrow('excluded');
+  });
+
+  it('checks ownership, current mode, and host access controls on the completed staging file', async () => {
+    const root = await workspaceRoot('glyph-workspace-replacement-');
+    const disk = fixtureWorkspace(root);
+    const target = join(root, 'rule.mdc');
+    await writeFile(target, 'before', { mode: 0o600 });
+    const snapshot = await disk.read('rule.mdc');
+    const failure = new Error('Metadata changed');
+    await expect(
+      disk.replace('rule.mdc', snapshot.revision, 'after', false, {
+        beforeReplace: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    for (const difference of [{ uid: -1 }, { gid: -1 }, { mode: 0o100400 }]) {
+      const actual = await actualFileSystem();
+      vi.mocked(lstat).mockImplementation((async (path: string) => {
+        const info = await actual.lstat(path);
+        return path.endsWith('.glyph.tmp') ? Object.assign(info, difference) : info;
+      }) as typeof lstat);
+      await expect(disk.replace('rule.mdc', snapshot.revision, 'after', false)).rejects.toMatchObject({
+        reason: EditFailureReason.UNSUPPORTED,
+      });
+    }
+    expect(await readFile(target, 'utf8')).toBe('before');
+  });
+  it('admits only the checkpointed inode and reviewed content during interrupted rename recovery', async () => {
+    const root = await workspaceRoot('glyph-workspace-links-');
+    const disk = fixtureWorkspace(root);
+    await writeFile(join(root, 'source'), 'reviewed');
+    const { identity, revision } = await disk.read('source');
+    await link(join(root, 'source'), join(root, 'second'));
+    await expect(disk.read('second')).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+    await expect(disk.validateAccess('second')).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+    await expect(disk.read('second', { interruptedRename: { identity: 'different', revision } })).rejects.toMatchObject(
+      { reason: EditFailureReason.UNSUPPORTED },
+    );
+    await expect(disk.read('second', { interruptedRename: { identity, revision } })).resolves.toMatchObject({
+      text: 'reviewed',
+    });
+    await writeFile(join(root, 'source'), 'changed');
+    await expect(disk.read('second', { interruptedRename: { identity, revision } })).rejects.toMatchObject({
+      reason: EditFailureReason.STALE,
+    });
+    await link(join(root, 'source'), join(root, 'third'));
+    await expect(disk.read('second', { interruptedRename: { identity, revision } })).rejects.toMatchObject({
+      reason: EditFailureReason.UNSUPPORTED,
+    });
+  });
+  it('cancels a disk-backed catalog listing and keeps directories out of file reads', async () => {
+    const root = await workspaceRoot('glyph-catalog-cancel-');
+    const disk = fixtureWorkspace(root);
+    await mkdir(join(root, 'nested'));
+    await expect(disk.read('nested')).rejects.toThrow('regular file');
+    const signal = AbortSignal.abort(new Error('catalog cancelled'));
+    await expect(disk.list(10, '**/*', undefined, signal)).rejects.toThrow('catalog cancelled');
+  });
   it.each(['\uD800', '\uDC00', 'folder/\uD800.txt', 'folder/\uDC00.txt'])(
     'rejects malformed Unicode path %j before resolving a filesystem key',
     async path => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-malformed-path-'));
       directories.push(root);
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       await expect(store.canonicalPath(path)).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
       expect(() => store.normalizePath(path)).toThrow();
-      expect(() => new FileSystemWorkspaceTextStore(join(root, path))).toThrow();
+      expect(() => fixtureWorkspace(join(root, path))).toThrow();
     },
   );
 
@@ -68,8 +180,8 @@ describe(FileSystemWorkspaceTextStore, () => {
     directories.push(root);
     await mkdir(join(root, 'repo', 'pkg'), { recursive: true });
     await symlink(join(root, 'repo', 'pkg'), join(root, 'alias'));
-    const parent = new FileSystemWorkspaceTextStore(join(root, 'repo'));
-    const child = new FileSystemWorkspaceTextStore(join(root, 'alias'));
+    const parent = fixtureWorkspace(join(root, 'repo'));
+    const child = fixtureWorkspace(join(root, 'alias'));
     const read = vi.spyOn(parent, 'read');
     const canonical = await parent.canonicalPath('pkg/new/deep/file.txt');
     expect(canonical).toBe(await child.canonicalPath('new/deep/file.txt'));
@@ -83,7 +195,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     await mkdir(join(root, 'directory'));
     await writeFile(join(root, 'file'), 'base');
     await symlink(join(root, 'directory'), join(root, 'alias'));
-    const store = new FileSystemWorkspaceTextStore(root, { caseSensitive: false });
+    const store = fixtureWorkspace(root, { caseSensitive: false });
     for (const path of ['.ENV', 'alias/new', 'file/new']) {
       await expect(store.canonicalPath(path)).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
     }
@@ -98,7 +210,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     await writeFile(join(root, 'binary.txt'), Buffer.from([0, 255]));
     await mkdir(join(root, 'directory'));
     await symlink(join(root, 'binary.txt'), join(root, 'alias.txt'));
-    const store = new FileSystemWorkspaceTextStore(root);
+    const store = fixtureWorkspace(root);
     const read = vi.spyOn(store, 'read');
     await expect(store.exists('binary.txt')).resolves.toBe(true);
     await expect(store.exists('directory')).resolves.toBe(true);
@@ -111,7 +223,7 @@ describe(FileSystemWorkspaceTextStore, () => {
   it('rejects an occupied rename target without decoding it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'workspace-rename-metadata-'));
     directories.push(root);
-    const store = new FileSystemWorkspaceTextStore(root);
+    const store = fixtureWorkspace(root);
     const source = await store.create('source.txt', 'base', false);
     await writeFile(join(root, 'target.txt'), Buffer.from([0, 255]));
     const read = vi.spyOn(store, 'read');
@@ -125,7 +237,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     async text => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-nul-mutation-'));
       directories.push(root);
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const base = await store.create('existing.txt', 'original', false);
       await expect(store.create('new.txt', text, false)).rejects.toMatchObject({
         reason: EditFailureReason.UNSUPPORTED,
@@ -143,7 +255,7 @@ describe(FileSystemWorkspaceTextStore, () => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-double-bom-'));
       directories.push(root);
       await writeFile(join(root, 'text.txt'), Buffer.from('efbbbfefbbbf61', 'hex'));
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const before = await store.read('text.txt');
       await store.replace('text.txt', before.revision, `${before.text}!`, before.byteOrderMark);
       expect((await readFile(join(root, 'text.txt'))).toString('hex')).toBe('efbbbfefbbbf6121');
@@ -152,7 +264,7 @@ describe(FileSystemWorkspaceTextStore, () => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-budget-'));
       directories.push(root);
       await writeFile(join(root, 'text.txt'), 'é🙂');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       await expect(store.read('text.txt', { maxBytes: 6 })).resolves.toMatchObject({ text: 'é🙂', byteLength: 6 });
       await expect(store.readOptional('text.txt', { maxBytes: 5 })).rejects.toMatchObject({
         maxBytes: 5,
@@ -171,7 +283,7 @@ describe(FileSystemWorkspaceTextStore, () => {
         // on a case-sensitive CI volume. These are synthetic, harmless canaries.
         await writeFile(join(root, path), 'fixture-only-protected-content');
         await writeFile(join(root, 'public.txt'), 'public fixture');
-        const store = new FileSystemWorkspaceTextStore(root, { caseSensitive: false });
+        const store = fixtureWorkspace(root, { caseSensitive: false });
         await expect(store.read('public.txt')).resolves.toMatchObject({ text: 'public fixture' });
         await expect(store.read(path)).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
       },
@@ -182,7 +294,7 @@ describe(FileSystemWorkspaceTextStore, () => {
       directories.push(root);
       const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('a\r\nb\nc\r\t  ')]);
       await writeFile(join(root, 'mixed.txt'), bytes);
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
 
       const snapshot = await store.read('mixed.txt');
 
@@ -195,7 +307,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     it('rejects invalid UTF-8, NUL content, and paths outside the workspace', async () => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-store-invalid-'));
       directories.push(root);
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       await writeFile(join(root, 'invalid.txt'), Buffer.from([0xc3, 0x28]));
       await writeFile(join(root, 'binary.txt'), Buffer.from('a\0b'));
 
@@ -213,7 +325,7 @@ describe(FileSystemWorkspaceTextStore, () => {
       await writeFile(join(root, '.glyph-state', '.env.example'), 'SECRET=still-private');
       await writeFile(join(root, 'logs', 'provider.jsonl'), '{"project":"content"}\n');
       await writeFile(join(root, 'logs', 'provider.jsonl.backup'), 'kept\n');
-      const store = new FileSystemWorkspaceTextStore(root, {
+      const store = fixtureWorkspace(root, {
         excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
       });
 
@@ -239,7 +351,7 @@ describe(FileSystemWorkspaceTextStore, () => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-store-cas-'));
       directories.push(root);
       await writeFile(join(root, 'file.txt'), 'base\n', { mode: 0o640 });
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       expect(store.mutationConsistency).toBe(WorkspaceMutationConsistency.BEST_EFFORT_FILESYSTEM);
       const base = await store.read('file.txt');
       await writeFile(join(root, 'file.txt'), 'collaborator\n');
@@ -252,7 +364,7 @@ describe(FileSystemWorkspaceTextStore, () => {
 
     it('reports a missing file as stale without a current revision', async () => {
       const root = await workspaceRoot('workspace-replace-missing-');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
 
       const error = await store.replace('missing.txt', 'revision', 'agent\n', false).catch((caught: unknown) => caught);
 
@@ -263,7 +375,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     it('surfaces a failure to clean up the temporary replacement file', async () => {
       const root = await workspaceRoot('workspace-replace-cleanup-');
       await writeFile(join(root, 'file.txt'), 'base\n');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const base = await store.read('file.txt');
       const failure = filesystemError('EPERM');
       vi.mocked(unlink).mockRejectedValueOnce(failure);
@@ -275,7 +387,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     it('surfaces a cleanup failure that carries no error code', async () => {
       const root = await workspaceRoot('workspace-replace-cleanup-uncoded-');
       await writeFile(join(root, 'file.txt'), 'base\n');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const base = await store.read('file.txt');
       const failure = filesystemError(undefined);
       vi.mocked(unlink).mockRejectedValueOnce(failure);
@@ -286,7 +398,7 @@ describe(FileSystemWorkspaceTextStore, () => {
 
   describe(FileSystemWorkspaceTextStore.prototype.normalizePath, () => {
     it.each(['.', 'folder/..'])('rejects %j because it names the project root directory', path => {
-      const store = new FileSystemWorkspaceTextStore(tmpdir());
+      const store = fixtureWorkspace(tmpdir());
 
       expect(() => store.normalizePath(path)).toThrow(
         expect.objectContaining({
@@ -298,7 +410,7 @@ describe(FileSystemWorkspaceTextStore, () => {
   });
 
   it('treats a path without a final segment as not sensitive', () => {
-    const store = new FileSystemWorkspaceTextStore(tmpdir(), { caseSensitive: true });
+    const store = fixtureWorkspace(tmpdir(), { caseSensitive: true });
     const internals = store as unknown as { isExcluded(path: unknown): boolean };
 
     expect(internals.isExcluded({ split: () => [] })).toBe(false);
@@ -308,7 +420,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     it('reports an ancestor that stops being a directory while resolving as unsupported', async () => {
       const root = await workspaceRoot('workspace-canonical-race-');
       await mkdir(join(root, 'directory'));
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const actual = await actualFileSystem();
       vi.mocked(realpath).mockImplementation(async path =>
         path === join(store.root, 'directory', 'file.txt')
@@ -324,7 +436,7 @@ describe(FileSystemWorkspaceTextStore, () => {
 
     it('fails when the project root disappears while resolving a prospective path', async () => {
       const root = await workspaceRoot('workspace-canonical-root-race-');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const actual = await actualFileSystem();
       const missing = filesystemError('ENOENT');
       let rootResolutions = 0;
@@ -339,11 +451,27 @@ describe(FileSystemWorkspaceTextStore, () => {
   });
 
   describe(FileSystemWorkspaceTextStore.prototype.list, () => {
+    it('hides reserved entries and a separately attached private root', async () => {
+      const root = await workspaceRoot('workspace-private-root-');
+      const nested = join(root, '.skill-staging');
+      await mkdir(nested);
+      await writeFile(join(nested, 'old.txt'), 'saved');
+      await mkdir(join(root, 'sub'));
+      await writeFile(join(root, 'sub/.skill-staging'), 'reserved');
+      const privateRoot = fixtureWorkspace(nested);
+      await expect(privateRoot.list(2)).resolves.toEqual({ files: [], truncated: false });
+      await expect(privateRoot.inspectDirectory()).rejects.toMatchObject({
+        reason: EditFailureReason.UNSUPPORTED,
+        message: 'That directory is excluded from project access.',
+      });
+      await expect(privateRoot.read('old.txt')).rejects.toThrow('excluded');
+      await expect(fixtureWorkspace(root).list(2)).resolves.toEqual({ files: [], truncated: false });
+    });
     it.each([true, false])('finds matching files with explicit caseSensitive=%s', async caseSensitive => {
       const root = await workspaceRoot('workspace-list-glob-case-');
       await mkdir(join(root, 'Nested'));
       await writeFile(join(root, 'Nested', 'Example.TXT'), 'fixture');
-      const store = new FileSystemWorkspaceTextStore(root, { caseSensitive });
+      const store = fixtureWorkspace(root, { caseSensitive });
 
       await expect(store.list(10, '*.TXT', 'Nested')).resolves.toEqual({
         files: ['Nested/Example.TXT'],
@@ -355,7 +483,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     it('rejects a project root that is not a directory', async () => {
       const root = await workspaceRoot('workspace-list-file-root-');
       await writeFile(join(root, 'file.txt'), 'not a directory');
-      const store = new FileSystemWorkspaceTextStore(join(root, 'file.txt'));
+      const store = fixtureWorkspace(join(root, 'file.txt'));
 
       await expect(store.list(10)).rejects.toMatchObject({
         reason: EditFailureReason.UNSUPPORTED,
@@ -371,7 +499,7 @@ describe(FileSystemWorkspaceTextStore, () => {
       await writeFile(join(root, 'a', 'one.ts'), 'one');
       await writeFile(join(root, 'a', 'two.ts'), 'two');
       await writeFile(join(root, 'b', 'three.ts'), 'three');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
 
       await expect(store.list(1)).resolves.toEqual({ files: ['a/one.ts'], truncated: true });
     });
@@ -391,17 +519,17 @@ describe(FileSystemWorkspaceTextStore, () => {
             });
           }),
       );
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
 
       await expect(store.list(10)).resolves.toEqual({ files: ['file.ts'], truncated: false });
     });
 
     it('applies exclusions with exact case when case sensitive', async () => {
-      const root = await workspaceRoot('workspace-list-case-sensitive-');
+      const root = await realpath(await workspaceRoot('workspace-list-case-sensitive-'));
       await mkdir(join(root, 'Private'));
       await writeFile(join(root, 'Private', 'kept.ts'), 'kept');
-      const sensitive = new FileSystemWorkspaceTextStore(root, { caseSensitive: true, excludedPaths: ['private'] });
-      const insensitive = new FileSystemWorkspaceTextStore(root, { caseSensitive: false, excludedPaths: ['private'] });
+      const sensitive = fixtureWorkspace(root, { caseSensitive: true, excludedPaths: ['private'] });
+      const insensitive = fixtureWorkspace(root, { caseSensitive: false, excludedPaths: ['private'] });
 
       await expect(sensitive.list(10, '*.ts')).resolves.toEqual({ files: ['Private/kept.ts'], truncated: false });
       await expect(insensitive.list(10, '*.ts')).resolves.toEqual({ files: [], truncated: false });
@@ -409,10 +537,80 @@ describe(FileSystemWorkspaceTextStore, () => {
   });
 
   describe(FileSystemWorkspaceTextStore.prototype.create, () => {
+    it('withdraws an ordinary staged create before publishing its name when its caller loses authority', async () => {
+      const root = await workspaceRoot('workspace-create-revoked-');
+      const store = fixtureWorkspace(root);
+      const command = new AbortController();
+      await expect(
+        store.create('draft.md', 'original', false, 0o644, {
+          signal: command.signal,
+          beforePublish: async () => {
+            expect(await readdir(root)).not.toContain('draft.md');
+            command.abort(new Error('The command was revoked.'));
+          },
+        }),
+      ).rejects.toThrow('The command was revoked.');
+      expect(await readdir(root)).toEqual([]);
+    });
+
+    it('admits an empty private descriptor before writing and preserves an existing destination', async () => {
+      const root = await workspaceRoot('workspace-inspected-create-');
+      const store = fixtureWorkspace(root);
+      const filename = join(root, 'new.txt');
+      const inspect = vi.fn(async (handle: FileHandle) => {
+        const info = await handle.stat();
+        expect(info.size).toBe(0);
+        expect(info.mode & 0o777).toBe(0o600);
+        expect(await readdir(root)).toEqual([expect.stringMatching(/\.glyph\.tmp$/u)]);
+      });
+      const beforePublish = async () => {
+        const [staged] = await readdir(root);
+        expect(await readFile(join(root, staged!), 'utf8')).toBe('fixture');
+        await writeFile(filename, 'collaborator', { flag: 'wx' });
+      };
+      await expect(
+        store.create('new.txt', 'fixture', false, 0o600, { inspectBeforeWrite: inspect, beforePublish }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+      expect(inspect).toHaveBeenCalledOnce();
+      expect(await readdir(root)).toEqual(['new.txt']);
+      expect(await readFile(filename, 'utf8')).toBe('collaborator');
+    });
+
+    it('removes only the staged inode owned by this create when admission or publication fails', async () => {
+      const root = await workspaceRoot('workspace-create-ownership-');
+      const store = fixtureWorkspace(root);
+      for (const change of ['removed', 'replaced', 'unreadable'] as const) {
+        let stagedPath: string;
+        const beforePublish = async () => {
+          const [name] = await readdir(root);
+          stagedPath = join(root, name!);
+          await unlink(stagedPath);
+          if (change === 'replaced') await writeFile(stagedPath, 'other file');
+          if (change === 'unreadable') vi.mocked(lstat).mockRejectedValueOnce(filesystemError('EACCES'));
+        };
+        const options = { beforePublish, inspectBeforeWrite: async () => {} };
+        await expect(store.create('new.txt', 'reviewed', false, 0o600, options)).rejects.toThrow(
+          change === 'unreadable' ? 'EACCES' : 'changed before publication',
+        );
+        if (change === 'replaced') {
+          expect(await readFile(stagedPath!, 'utf8')).toBe('other file');
+          await unlink(stagedPath!);
+        }
+        expect(await readdir(root)).toEqual([]);
+      }
+      const target = join(root, 'new.txt');
+      await expect(
+        store.create('new.txt', 'reviewed', false, 0o600, {
+          beforePublish: async () => writeFile(target, 'external'),
+        }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+      expect(await readFile(target, 'utf8')).toBe('external');
+    });
+
     it('reports an existing target as stale', async () => {
       const root = await workspaceRoot('workspace-create-exists-');
       await writeFile(join(root, 'file.txt'), 'collaborator');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
 
       await expect(store.create('file.txt', 'agent', false)).rejects.toMatchObject({
         reason: EditFailureReason.STALE,
@@ -423,7 +621,7 @@ describe(FileSystemWorkspaceTextStore, () => {
 
     it('removes parent directories it created when writing the file fails', async () => {
       const root = await workspaceRoot('workspace-create-rollback-');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const failure = filesystemError('EACCES');
       vi.mocked(open).mockRejectedValueOnce(failure);
 
@@ -436,7 +634,7 @@ describe(FileSystemWorkspaceTextStore, () => {
       ['an uncoded', undefined],
     ])('surfaces %s failure to remove a created parent directory', async (_description, code) => {
       const root = await workspaceRoot('workspace-create-rollback-failure-');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const rollback = filesystemError(code);
       vi.mocked(open).mockRejectedValueOnce(filesystemError('EACCES'));
       vi.mocked(rmdir).mockRejectedValueOnce(rollback);
@@ -447,7 +645,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     it('reports a parent replaced by a file before its directories are created as unsupported', async () => {
       const root = await workspaceRoot('workspace-create-parent-race-');
       await mkdir(join(root, 'parent'));
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const actual = await actualFileSystem();
       vi.mocked(stat).mockImplementationOnce(async path => {
         await actual.rm(join(root, 'parent'), { recursive: true });
@@ -463,7 +661,7 @@ describe(FileSystemWorkspaceTextStore, () => {
 
     it('surfaces a failure to create a missing parent directory', async () => {
       const root = await workspaceRoot('workspace-create-mkdir-race-');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const actual = await actualFileSystem();
       vi.mocked(mkdir).mockImplementationOnce(async (path, options) => {
         await actual.writeFile(path, 'collaborator');
@@ -479,7 +677,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     it('reports a target created concurrently as stale and keeps the collaborator directory', async () => {
       const root = await workspaceRoot('workspace-rename-race-');
       await writeFile(join(root, 'source.txt'), 'agent');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const source = await store.read('source.txt');
       const actual = await actualFileSystem();
       vi.mocked(link).mockImplementationOnce(async (existing, target) => {
@@ -502,7 +700,7 @@ describe(FileSystemWorkspaceTextStore, () => {
       const root = await workspaceRoot('workspace-read-symlink-race-');
       await writeFile(join(root, 'file.txt'), 'original');
       await writeFile(join(root, 'other.txt'), 'other');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const actual = await actualFileSystem();
       vi.mocked(lstat).mockImplementationOnce(async path => {
         const info = await actual.lstat(path);
@@ -520,7 +718,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     it.each([-1, 1.5, Number.NaN])('rejects the invalid read budget %s', async maxBytes => {
       const root = await workspaceRoot('workspace-read-budget-');
       await writeFile(join(root, 'file.txt'), 'text');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
 
       await expect(store.read('file.txt', { maxBytes })).rejects.toThrow('Read budget must be a non-negative integer.');
     });
@@ -528,7 +726,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     it('rejects a bounded read whose handle cannot report how many bytes it read', async () => {
       const root = await workspaceRoot('workspace-read-unsized-');
       await writeFile(join(root, 'file.txt'), 'text');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const actual = await actualFileSystem();
       const info = await actual.stat(join(root, 'file.txt'));
       const handle = {
@@ -548,7 +746,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     it('opens files without POSIX-only flags on Windows', async () => {
       const root = await workspaceRoot('workspace-read-windows-');
       await writeFile(join(root, 'file.txt'), 'text');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = fixtureWorkspace(root);
       const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
       Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
       onTestFinished(() => {

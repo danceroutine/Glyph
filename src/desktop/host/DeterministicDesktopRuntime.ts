@@ -1,3 +1,4 @@
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -5,10 +6,8 @@ import { join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
 import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
-import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import type { GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
-import type { GlyphWorkspaceRoot } from '#src/desktop/protocol/connection/GlyphWorkspaceRoot.js';
 import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { GlyphResponseDeltaKind } from '#src/desktop/protocol/events/GlyphResponseDelta.js';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
@@ -26,16 +25,19 @@ import type { GlyphDesktopWorkspaceRuntimeFactory } from './GlyphDesktopWorkspac
  */
 export class DeterministicDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntimeFactory {
   private probe: Promise<void> | undefined;
+  constructor(private readonly workspace?: Pick<GlyphDesktopWorkspaceRuntimeFactory, 'create'>) {}
 
-  async create(input: {
-    readonly identity: GlyphConnectionIdentity;
-    readonly roots: readonly GlyphWorkspaceRoot[];
-    readonly emit: (event: GlyphHostEvent) => void;
-  }): Promise<GlyphDesktopWorkspaceRuntime> {
+  async create(
+    input: Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0],
+  ): Promise<GlyphDesktopWorkspaceRuntime> {
     const root = input.roots[0]?.canonicalPath;
     if (root === undefined || root === '') throw new Error('The native Glyph runtime requires a local workspace root.');
     await (this.probe ??= probePackagedRuntime(root));
-    return new DeterministicDesktopRuntime(input.emit);
+    const workspace = this.workspace;
+    return new DeterministicDesktopRuntime(
+      input.emit,
+      workspace && (() => workspace.create({ ...input, emit: () => {} })),
+    );
   }
 }
 
@@ -43,7 +45,27 @@ class DeterministicDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   private readonly runs = new Map<string, GlyphRunProjection>();
   private readonly cancellations = new Set<string>();
 
-  constructor(private readonly emit: (event: GlyphHostEvent) => void) {}
+  private backing: Promise<GlyphDesktopWorkspaceRuntime> | undefined;
+  readonly attachmentAccess: GlyphDesktopWorkspaceRuntime['attachmentAccess'];
+
+  constructor(
+    private readonly emit: (event: GlyphHostEvent) => void,
+    createWorkspace?: () => Promise<GlyphDesktopWorkspaceRuntime>,
+  ) {
+    if (!createWorkspace) return;
+    const access = async () => {
+      const workspace = await (this.backing ??= createWorkspace().catch(error => {
+        this.backing = undefined;
+        throw error;
+      }));
+      if (!workspace.attachmentAccess) throw new Error('Attachment access is unavailable.');
+      return workspace.attachmentAccess;
+    };
+    this.attachmentAccess = {
+      resolve: async (resource, signal) => (await access()).resolve(resource, signal),
+      admit: async (attachments, signal) => (await access()).admit(attachments, signal),
+    };
+  }
 
   snapshot(): Promise<GlyphRuntimeSnapshot> {
     return Promise.resolve({
@@ -67,8 +89,16 @@ class DeterministicDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     });
   }
 
-  async handle(command: GlyphRuntimeCommand): Promise<void> {
+  async handle(
+    command: GlyphRuntimeCommand,
+    context: Parameters<GlyphDesktopWorkspaceRuntime['handle']>[1],
+  ): Promise<void> {
     if (command.type === GlyphWorkbenchCommandType.SEND) {
+      if (command.attachments.length > 0) {
+        if (!this.attachmentAccess) throw new Error('Attachment access is unavailable.');
+        await this.attachmentAccess.admit(command.attachments, context.signal);
+        context.signal.throwIfAborted();
+      }
       void this.send(command);
       return;
     }
@@ -82,9 +112,9 @@ class DeterministicDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     return Promise.resolve();
   }
 
-  dispose(): Promise<void> {
+  async dispose(): Promise<void> {
     for (const runId of this.runs.keys()) this.cancellations.add(runId);
-    return Promise.resolve();
+    await (await this.backing)?.dispose();
   }
 
   private async send(command: Extract<GlyphRuntimeCommand, { type: GlyphWorkbenchCommandType.SEND }>): Promise<void> {
@@ -163,6 +193,7 @@ async function probePackagedRuntime(workspaceRoot: string): Promise<void> {
       workspaceRoots: [workspaceRoot],
       stateDirectory,
       protectedPaths: [artifactRoot],
+      accessPolicy: new WorkspaceAccessPolicy({}, [stateDirectory]),
     }).launch('true', workspaceRoot, { sandboxProfile: ShellSandboxProfile.READ_ONLY });
     child.stdin?.end();
     await childResult(child);

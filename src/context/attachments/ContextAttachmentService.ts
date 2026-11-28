@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { z } from 'zod';
 import { ConfigurationError } from '#src/errors/ConfigurationError.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
@@ -31,13 +32,14 @@ type ResolvedConfiguration = z.output<typeof configurationSchema>;
 /**
  * Resolves draft file references into fresh, exact workspace snapshots.
  * Hosts should call resolve after the prompt draft is complete and immediately
- * before invoking the selected inference provider.
+ * before invoking the selected inference provider. Inject only the deliberate-file reader. Its selection grants
+ * access to the named file for this request, while enumeration and later agent reads use their project authority.
  */
 export class ContextAttachmentService {
   private readonly configuration: ResolvedConfiguration;
 
   constructor(
-    private readonly workspace: WorkspaceTextStore,
+    private readonly workspace: Pick<WorkspaceTextStore, 'caseSensitive' | 'normalizePath' | 'read'>,
     configuration: ContextAttachmentConfiguration = {},
   ) {
     const result = configurationSchema.safeParse(configuration);
@@ -47,7 +49,10 @@ export class ContextAttachmentService {
     this.configuration = result.data;
   }
 
-  async resolve(references: readonly ContextAttachmentReference[]): Promise<readonly ContextAttachment[]> {
+  async resolve(
+    references: readonly ContextAttachmentReference[],
+    disclosure = new WorkspaceDisclosure(),
+  ): Promise<readonly ContextAttachment[]> {
     const paths = this.normalize(references);
     if (paths.length > this.configuration.maxFiles) {
       throw new ContextAttachmentError(
@@ -60,7 +65,7 @@ export class ContextAttachmentService {
     const attachments: ContextAttachment[] = [];
     let totalBytes = 0;
     for (const path of paths) {
-      const snapshot = await this.read(path, totalBytes);
+      const snapshot = await this.read(path, totalBytes, disclosure);
       if (snapshot.byteLength > this.configuration.maxFileBytes) {
         throw new ContextAttachmentError(
           ContextAttachmentFailureReason.FILE_SIZE_LIMIT_EXCEEDED,
@@ -85,6 +90,7 @@ export class ContextAttachmentService {
         byteLength: snapshot.byteLength,
       });
     }
+    disclosure.assertCurrent();
     return attachments;
   }
 
@@ -115,9 +121,14 @@ export class ContextAttachmentService {
     return paths;
   }
 
-  private async read(path: string, totalBytes: number): Promise<WorkspaceTextSnapshot> {
+  private async read(
+    path: string,
+    totalBytes: number,
+    disclosure: WorkspaceDisclosure,
+  ): Promise<WorkspaceTextSnapshot> {
     try {
       return await this.workspace.read(path, {
+        retainAccess: disclosure.retain,
         maxBytes: Math.min(this.configuration.maxFileBytes, this.configuration.maxTotalBytes - totalBytes),
       });
     } catch (error) {

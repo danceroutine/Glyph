@@ -125,6 +125,7 @@ function fixture({
   const adapter = {
     captureContext: capture,
     contextPath: (/** @type {import('#vs/base/common/uri.js').URI} */ target) => {
+      if (target.path === '/workspace') return '';
       if (!target.path.startsWith('/workspace/')) throw new Error('Outside workspace');
       return target.path.slice(11);
     },
@@ -147,6 +148,7 @@ function fixture({
   const tests = { results: runs, getResult: id => runs.find(run => run.id === id) };
   const service = new GlyphIdeContext(
     adapter,
+    async () => {},
     markers,
     {
       definitionProvider: {

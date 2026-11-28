@@ -1,11 +1,14 @@
+import type { FilesystemNamePolicy } from '#src/workspace/FilesystemNamePolicy.js';
 import type { GlyphTextMutation } from './GlyphTextMutation.ts';
 import type { GlyphFileMutation } from './GlyphFileMutation.ts';
 import type { GlyphWorkingCopySearchOptions } from './GlyphWorkingCopySearchOptions.ts';
 
 /** Operations the utility host may ask the live Code OSS editor to perform. */
 export enum GlyphEditorRequestType {
+  CHECK_USER_WORKING_COPIES = 'check_user_working_copies',
   EXISTS = 'exists',
   READ_SNAPSHOT = 'read_snapshot',
+  READ_OPEN_SNAPSHOT = 'read_open_snapshot',
   LIST_WORKING_COPIES = 'list_working_copies',
   LIST_WORKING_COPY_PATHS = 'list_working_copy_paths',
   SEARCH_WORKING_COPIES = 'search_working_copies',
@@ -16,12 +19,24 @@ export enum GlyphEditorRequestType {
 
 /** Closed renderer-side RPC union; requests remain structured-clone-safe DTOs. */
 export type GlyphEditorRequest =
+  | {
+      readonly type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES;
+      readonly operationId: string;
+      readonly kind: 'rule' | 'skill';
+      readonly sourceUris?: readonly string[];
+      readonly name: string;
+      readonly caseSensitive: boolean;
+      readonly namePolicy?: FilesystemNamePolicy;
+    }
   | { readonly type: GlyphEditorRequestType.EXISTS; readonly operationId: string; readonly path: string }
   | {
-      readonly type: GlyphEditorRequestType.READ_SNAPSHOT;
+      readonly type: GlyphEditorRequestType.READ_SNAPSHOT | GlyphEditorRequestType.READ_OPEN_SNAPSHOT;
       readonly operationId: string;
       readonly path: string;
       readonly maxBytes?: number;
+      readonly physicalUri?: string;
+      readonly caseSensitive?: boolean;
+      readonly namePolicy?: FilesystemNamePolicy;
     }
   | { readonly type: GlyphEditorRequestType.LIST_WORKING_COPIES; readonly operationId: string }
   | { readonly type: GlyphEditorRequestType.LIST_WORKING_COPY_PATHS; readonly operationId: string }

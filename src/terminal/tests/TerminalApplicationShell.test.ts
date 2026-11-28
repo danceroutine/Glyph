@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { installShutdownHandlers } from '#src/terminal/installShutdownHandlers.js';
@@ -6,7 +7,6 @@ import { GlyphService } from '#src/application/GlyphService.js';
 import type { ChatBackend } from '#src/chat/ChatBackend.js';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { EditReviewResult } from '#src/editing/reviews/EditReviewResult.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
@@ -60,7 +60,7 @@ describe(TerminalApplication, () => {
         logout: async () => true,
         redact: value => value,
       };
-      const reviews = new ProposalReviewManager(new FileSystemWorkspaceTextStore('/inert'), {
+      const reviews = new ProposalReviewManager(fixtureWorkspace('/inert'), {
         load: async () => [],
         save: async () => {},
         clear: async () => {},

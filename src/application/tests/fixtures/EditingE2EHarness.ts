@@ -1,3 +1,4 @@
+import { fixtureWorkspace, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -12,7 +13,6 @@ import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManage
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
-import { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
 import { ProjectAgentInstructions } from '#src/project/prompts/ProjectAgentInstructions.js';
 import { OpenAIProvider } from '#src/providers/openai/OpenAIProvider.js';
@@ -57,7 +57,7 @@ export class EditingE2EHarness {
     readonly stateRoot: string,
     rounds: readonly ScriptedResponseRound[],
   ) {
-    this.workspace = new FileSystemWorkspaceTextStore(projectRoot);
+    this.workspace = fixtureWorkspace(projectRoot);
     this.reviews = new ProposalReviewManager(
       this.workspace,
       new FileProposalReviewStore(stateRoot),
@@ -73,7 +73,7 @@ export class EditingE2EHarness {
       () => new Date(0),
     );
     const runtime = new ProjectToolRuntime(
-      new ProjectAccess(projectRoot, {}, this.workspace),
+      fixtureProjectAccess(projectRoot, {}, this.workspace),
       proposals,
       this.reviews,
       this.logger,

@@ -98,7 +98,7 @@ fn cancellation_during_file_io_returns_cancellation_instead_of_partial_success()
         cancelled: &'a AtomicBool,
     }
     impl SearchableFiles for CancellingFiles<'_> {
-        fn read(&self, path: &str) -> Result<String, ()> {
+        fn read(&self, path: &str) -> Result<(String, Option<String>), ()> {
             let result = self.files.read(path);
             self.cancelled.store(true, Ordering::Release);
             result
@@ -281,6 +281,7 @@ fn parameters(output_mode: ContentSearchOutputMode) -> ContentSearchParams {
         limit: 100,
         offset: 0,
         overrides: BTreeMap::new(),
+        include_source_identity: false,
     }
 }
 
@@ -966,7 +967,7 @@ struct ObservedFiles<'a> {
 }
 
 impl SearchableFiles for ObservedFiles<'_> {
-    fn read(&self, path: &str) -> Result<String, ()> {
+    fn read(&self, path: &str) -> Result<(String, Option<String>), ()> {
         let result = self.files.read(path);
         if let Some(cancelled) = self.cancel_on_read {
             cancelled.store(true, Ordering::Release);
@@ -1028,4 +1029,40 @@ fn searching_a_content_source_reports_admission_and_in_flight_cancellation_or_re
         Ok(ContentSearchResult::FilesWithMatches { files, metadata })
             if files == ["a.txt"] && metadata.searched_files == 1
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn returns_the_opened_identity_for_disk_matches_and_defers_editor_identity_to_the_host() {
+    use std::os::unix::fs::MetadataExt;
+    let (_directory, search) = context(&[("a.txt", "needle"), ("b.txt", "disk")]);
+    let mut params = parameters(ContentSearchOutputMode::Content);
+    params.include_source_identity = true;
+    params.overrides.insert("b.txt".into(), "needle".into());
+    let result = search.search(params, &AtomicBool::new(false)).unwrap();
+    let wire = serde_json::to_value(result).unwrap();
+    let disk = fs::metadata(search.root.join("a.txt")).unwrap();
+    assert_eq!(
+        wire["matches"][0]["sourceIdentity"],
+        format!("{}:{}", disk.dev(), disk.ino())
+    );
+    assert_eq!(wire["matches"][1]["matchedText"], "needle");
+    assert!(wire["matches"][1].get("sourceIdentity").is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn excludes_unverified_hardlink_content_from_disk_searches() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    std::fs::write(root.join("secret"), "fixture").unwrap();
+    std::fs::hard_link(root.join("secret"), root.join("ordinary")).unwrap();
+    assert!(read_searchable_file(&root, "ordinary", 32, &WorkspacePaths::default()).is_err());
+    std::fs::remove_file(root.join("secret")).unwrap();
+    assert_eq!(
+        read_searchable_file(&root, "ordinary", 32, &WorkspacePaths::default())
+            .unwrap()
+            .0,
+        "fixture"
+    );
 }

@@ -45,7 +45,12 @@ export class GlyphDesktopClient extends Disposable {
   private connectionEpoch = 0;
   private cancelHandshake: ((error: Error) => void) | undefined;
 
-  constructor(private readonly handleEditorRequest: (request: GlyphEditorRequest) => Promise<GlyphEditorResponse>) {
+  constructor(
+    private readonly handleEditorRequest: (
+      request: GlyphEditorRequest,
+      checkMutation: () => Promise<void>,
+    ) => Promise<GlyphEditorResponse>,
+  ) {
     super();
     const hostExited = (): void => {
       this.disconnect(new Error('The Glyph desktop host exited. The response was interrupted.'));
@@ -206,11 +211,38 @@ export class GlyphDesktopClient extends Disposable {
     this.cursor.bind(ready.hostGeneration);
   }
 
+  /** Route each publication check back over the port that owns the pending editor RPC. */
+  private checkMutation(port: MessagePort | undefined, grantId: unknown): Promise<void> {
+    if (!port || this.port !== port || typeof grantId !== 'string')
+      return Promise.reject(new Error('The editor mutation is no longer authorized.'));
+    const requestId = generateUuid();
+    return new Promise((resolve, reject) => {
+      this.pending.set(requestId, { resolve, reject });
+      try {
+        port.postMessage({ type: GlyphTransportMessageType.CHECK_EDITOR_MUTATION, grantId, requestId });
+      } catch (error) {
+        this.pending.delete(requestId);
+        reject(error);
+      }
+    });
+  }
+
   private receive(value: unknown): void {
     if (isReadyMessage(value)) return;
+    if (
+      isRecord(value) &&
+      value.type === GlyphTransportMessageType.EDITOR_MUTATION_CHECKED &&
+      typeof value.requestId === 'string'
+    ) {
+      const pending = this.pending.get(value.requestId);
+      this.pending.delete(value.requestId);
+      if (value.ok === true) pending?.resolve();
+      else pending?.reject(new Error('Workspace authority changed before the editor mutation.'));
+      return;
+    }
     if (isRecord(value) && value.type === GlyphTransportMessageType.EDITOR_REQUEST && isEditorRequest(value.request)) {
       const port = this.port;
-      void this.handleEditorRequest(value.request).then(response =>
+      void this.handleEditorRequest(value.request, () => this.checkMutation(port, value.grantId)).then(response =>
         port?.postMessage({ type: GlyphTransportMessageType.EDITOR_RESPONSE, response }),
       );
       return;

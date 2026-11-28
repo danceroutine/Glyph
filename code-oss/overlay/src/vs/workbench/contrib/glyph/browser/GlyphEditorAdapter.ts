@@ -9,6 +9,11 @@ import type { GlyphTextRange } from '#glyph/protocol/connection/GlyphTextRange.j
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { Progress } from '#vs/platform/progress/common/progress.js';
 import { BulkTextEdits } from '#vs/workbench/contrib/bulkEdit/browser/bulkTextEdits.js';
+import { env } from '#vs/base/common/process.js';
+import { normalizeVolumeName, type FilesystemNamePolicy } from '#vs/platform/glyph/workspace/FilesystemNamePolicy.js';
+import { extUri, extUriIgnorePathCase, type IExtUri } from '#vs/base/common/resources.js';
+import { IWorkingCopyService } from '#vs/workbench/services/workingCopy/common/workingCopyService.js';
+import { IPathService } from '#vs/platform/path/common/pathService.js';
 import { URI } from '#vs/base/common/uri.js';
 import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
@@ -75,6 +80,8 @@ export class GlyphEditorAdapter extends Disposable {
     @IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
     @IUserDataProfileService private readonly userDataProfileService: IUserDataProfileService,
     @IInstantiationService private readonly instantiationService: IInstantiationService,
+    @IWorkingCopyService private readonly workingCopyService: IWorkingCopyService,
+    @IPathService private readonly pathService: IPathService,
   ) {
     super();
     this.workspaceBinding = this.currentWorkspaceBinding();
@@ -100,7 +107,7 @@ export class GlyphEditorAdapter extends Disposable {
   }
 
   /** Serializes failures at the process boundary while keeping typed errors inside the adapter. */
-  async handle(request: GlyphEditorRequest): Promise<GlyphEditorResponse> {
+  async handle(request: GlyphEditorRequest, checkMutation?: () => Promise<void>): Promise<GlyphEditorResponse> {
     const operationId =
       request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ||
       request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION
@@ -115,20 +122,76 @@ export class GlyphEditorAdapter extends Disposable {
       if (!this.trustService.isWorkspaceTrusted())
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       switch (request.type) {
+        case GlyphEditorRequestType.CHECK_USER_WORKING_COPIES:
+          return { operationId, ok: true, workingCopiesClean: await this.userWorkingCopiesClean(request) };
         case GlyphEditorRequestType.EXISTS:
           return { operationId, ok: true, exists: await this.exists(request.path) };
         case GlyphEditorRequestType.READ_SNAPSHOT:
           return { operationId, ok: true, snapshot: await this.read(request.path, request.maxBytes) };
+        case GlyphEditorRequestType.READ_OPEN_SNAPSHOT: {
+          const resource = this.resolve(request.path, !request.namePolicy);
+          const physical = request.physicalUri ? URI.parse(request.physicalUri, true) : resource;
+          const identity = filesystemUriIdentity(request, this.uriIdentityService.extUri);
+          const candidates = identity.isEqual(resource, physical) ? [resource] : [resource, physical];
+          const dirty = candidates.flatMap(candidate => {
+            if (!this.textFileService.isDirty(candidate)) return [];
+            const model = this.modelService.getModel(candidate);
+            return model && identity.isEqual(candidate, model.uri) ? [model] : [];
+          });
+          if (request.namePolicy) {
+            for (const model of this.modelService.getModels()) {
+              if (
+                candidates.some(uri => identity.isEqual(uri, model.uri)) &&
+                this.textFileService.isDirty(model.uri) &&
+                !dirty.includes(model)
+              )
+                dirty.push(model);
+            }
+          }
+          if (dirty.length > 0 && request.physicalUri) {
+            const actual = await this.fileService.realpath(resource);
+            if (!identity.isEqual(actual, physical))
+              throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+            // Check the provider-resolved route here. The host verifies the inode of the returned model URI.
+            if (request.namePolicy) {
+              for (const model of dirty) {
+                if (
+                  !extUri.isEqual(model.uri, resource) &&
+                  !extUri.isEqual(model.uri, physical) &&
+                  !identity.isEqual(await this.fileService.realpath(model.uri), actual)
+                )
+                  throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+              }
+            }
+          }
+          const snapshots = await Promise.all(dirty.map(model => this.snapshot(request.path, model, request.maxBytes)));
+          if (new Set(snapshots.map(snapshot => snapshot.contentRevision)).size > 1)
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+          return { operationId, ok: true, ...(snapshots[0] ? { snapshot: snapshots[0] } : {}) };
+        }
         case GlyphEditorRequestType.APPLY_FILE_MUTATION:
-          return { operationId, ok: true, ...(await this.applyFile(request.mutation)) };
+          return {
+            operationId,
+            ok: true,
+            ...(await this.applyFile(request.mutation, requireMutationCheck(checkMutation))),
+          };
         case GlyphEditorRequestType.APPLY_TEXT_MUTATION:
-          return { operationId, ok: true, ...(await this.apply(request.mutation)) };
+          return {
+            operationId,
+            ok: true,
+            ...(await this.apply(request.mutation, requireMutationCheck(checkMutation))),
+          };
         case GlyphEditorRequestType.LIST_WORKING_COPIES:
           return { operationId, ok: true, workingCopies: await this.workingCopies() };
         case GlyphEditorRequestType.LIST_WORKING_COPY_PATHS: {
           const models = this.modelService
             .getModels()
-            .filter(model => model.uri.scheme === 'file' && this.workspaceContextService.isInsideWorkspace(model.uri));
+            .filter(
+              model =>
+                model.uri.scheme === 'file' &&
+                this.workspaceContextService.isInsideWorkspace(model.uri) &&
+                this.textFileService.isDirty(model.uri),
+            );
           if (models.length > 2000)
             throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED, {
               maximumWorkingCopies: 2000,
@@ -182,7 +245,7 @@ export class GlyphEditorAdapter extends Disposable {
     return resource.scheme === 'untitled' ? resource.path.replace(/^\//u, '') : this.pathFor(resource);
   }
 
-  isCurrentContext(model: ITextModel, attachment: GlyphContextAttachment): boolean {
+  isCurrentContext(model: ITextModel, attachment: Pick<GlyphContextAttachment, 'token'>): boolean {
     return (
       attachment.token?.workspaceGeneration === this.workspaceGeneration &&
       attachment.token.incarnation === this.incarnation(model) &&
@@ -282,6 +345,7 @@ export class GlyphEditorAdapter extends Disposable {
   /** Structural edits go through native Bulk Edit so Explorer, open editors and Undo stay coordinated. */
   async applyFile(
     mutation: GlyphFileMutation,
+    checkMutation: () => Promise<void>,
   ): Promise<{ snapshot?: GlyphEditorTextSnapshot; receipt: GlyphMutationReceipt }> {
     const targetPath = mutation.kind === GlyphFileMutationKind.RENAME ? mutation.target : mutation.path;
     if (targetPath === undefined || targetPath === '')
@@ -297,7 +361,8 @@ export class GlyphEditorAdapter extends Disposable {
       let snapshot = await this.read(targetPath);
       if (snapshot.contentRevision !== known.afterRevision)
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-      if (mutation.save === true) snapshot = await this.saveMutation(targetPath, snapshot.contentRevision);
+      if (mutation.save === true)
+        snapshot = await this.saveMutation(targetPath, snapshot.contentRevision, checkMutation);
       return { snapshot, receipt: known };
     }
     const source = this.resolve(mutation.path);
@@ -352,6 +417,7 @@ export class GlyphEditorAdapter extends Disposable {
               maxSize: 2 * 1024 * 1024 + 3,
             });
       edit.validate = async () => {
+        await checkMutation();
         this.assertWorkspaceBinding();
         if (!this.trustService.isWorkspaceTrusted())
           throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
@@ -426,7 +492,8 @@ export class GlyphEditorAdapter extends Disposable {
         appliedToken: snapshot.token,
       };
       this.receipts.set(mutation.operationId, complete);
-      if (mutation.save === true) snapshot = await this.saveMutation(targetPath, snapshot.contentRevision);
+      if (mutation.save === true)
+        snapshot = await this.saveMutation(targetPath, snapshot.contentRevision, checkMutation);
       return { snapshot, receipt: complete };
     } finally {
       changed?.dispose();
@@ -442,6 +509,7 @@ export class GlyphEditorAdapter extends Disposable {
    */
   async apply(
     mutation: GlyphTextMutation,
+    checkMutation: () => Promise<void>,
   ): Promise<{ snapshot: GlyphEditorTextSnapshot; receipt: GlyphMutationReceipt }> {
     const known = this.receipts.get(mutation.operationId);
     if (known) {
@@ -451,7 +519,7 @@ export class GlyphEditorAdapter extends Disposable {
       if (mutation.save === true) {
         if (snapshot.contentRevision !== known.afterRevision)
           throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-        snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision);
+        snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision, checkMutation);
       }
       return { snapshot, receipt: known };
     }
@@ -571,6 +639,10 @@ export class GlyphEditorAdapter extends Disposable {
           reason,
         };
         const apply = async (edits: ResourceTextEdit[]) => {
+          await checkMutation();
+          this.assertWorkspaceBinding();
+          if (!this.trustService.isWorkspaceTrusted() || cancellation.token.isCancellationRequested)
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
           if (!separateEol) return this.bulkEditService.apply(edits, options);
           // BulkEditService only reuses IDs from currently active calls. The
           // native text-edit primitive accepts our actual group across both calls.
@@ -657,7 +729,8 @@ export class GlyphEditorAdapter extends Disposable {
           throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
         }
         let snapshot = await this.snapshot(mutation.path, model);
-        if (mutation.save === true) snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision);
+        if (mutation.save === true)
+          snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision, checkMutation);
         return { snapshot, receipt };
       } finally {
         changed.dispose();
@@ -679,7 +752,11 @@ export class GlyphEditorAdapter extends Disposable {
   }
 
   /** Save only the changed resource; skip formatters that would escape the recorded edit. */
-  private async saveMutation(path: string, expectedRevision: string): Promise<GlyphEditorTextSnapshot> {
+  private async saveMutation(
+    path: string,
+    expectedRevision: string,
+    checkMutation: () => Promise<void>,
+  ): Promise<GlyphEditorTextSnapshot> {
     this.assertWorkspaceBinding();
     if (!this.trustService.isWorkspaceTrusted())
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
@@ -688,7 +765,21 @@ export class GlyphEditorAdapter extends Disposable {
     if (current.contentRevision !== expectedRevision)
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
     if (this.textFileService.isDirty(resource)) {
-      const saved = await this.textFileService.save(resource, { skipSaveParticipants: true });
+      const assertModel = () => {
+        this.assertWorkspaceBinding();
+        if (!this.trustService.isWorkspaceTrusted())
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
+        const model = this.modelService.getModel(resource);
+        if (!model || !this.isCurrentContext(model, current))
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+      };
+      const saved = await this.textFileService.save(resource, {
+        skipSaveParticipants: true,
+        validateBeforeWrite: async () => {
+          await checkMutation();
+          return assertModel;
+        },
+      });
       if (!saved || this.textFileService.isDirty(resource))
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT, {
           reason: 'The edit changed the working copy but could not be saved. Save it before running commands.',
@@ -781,7 +872,52 @@ export class GlyphEditorAdapter extends Disposable {
     return GlyphDesktopErrorCode.INTERNAL;
   }
 
-  private resolve(path: string): URI {
+  /** Resolve only registered folder aliases and the configured user directory. Dirty models need no content read. */
+  private async userWorkingCopiesClean(
+    request: Extract<GlyphEditorRequest, { type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES }>,
+  ): Promise<boolean> {
+    const { kind, name } = request;
+    if (!name || name === '.' || name === '..' || /[/\\\0]/u.test(name) || (kind === 'rule' && !/\.mdc$/iu.test(name)))
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+    const dirty = this.workingCopyService.dirtyWorkingCopies.flatMap(({ resource }) => {
+      if (resource.scheme === 'untitled' && this.textFileService.untitled.isUntitledWithAssociatedResource(resource))
+        return [resource.with({ scheme: 'file' })];
+      return resource.scheme === 'file' ? [resource] : [];
+    });
+    if (dirty.length === 0) return true;
+    const configured = env['GLYPH_USER_DIRECTORY'];
+    const profile = configured
+      ? URI.file(configured)
+      : URI.joinPath(this.pathService.userHome({ preferLocal: true }), '.glyph');
+    const identity = filesystemUriIdentity(request, this.uriIdentityService.extUri);
+    const target = (root: URI) => URI.joinPath(root, kind === 'rule' ? 'rules' : 'skills', name);
+    const contains = (directory: URI, resource: URI) =>
+      kind === 'rule' ? identity.isEqual(resource, directory) : identity.isEqualOrParent(resource, directory);
+    const projected = (request.sourceUris ?? []).map(uri => URI.parse(uri, true));
+    if (dirty.some(resource => contains(target(profile), resource) || projected.some(path => contains(path, resource))))
+      return false;
+    const canonical = await this.fileService.realpath(profile);
+    if (!canonical) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+    const physical = target(canonical);
+    if (dirty.some(resource => contains(physical, resource))) return false;
+    for (const folder of this.workspaceContextService.getWorkspace().folders) {
+      if (folder.uri.scheme !== 'file') continue;
+      const owned = dirty.filter(resource => identity.isEqualOrParent(resource, folder.uri));
+      if (owned.length === 0) continue;
+      const root = await this.fileService.realpath(folder.uri);
+      if (!root) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+      if (
+        owned.some(resource => {
+          const path = URI.joinPath(root, identity.relativePath(folder.uri, resource)!);
+          return contains(physical, path) || projected.some(alias => contains(alias, path));
+        })
+      )
+        return false;
+    }
+    return true;
+  }
+
+  private resolve(path: string, canonical = true): URI {
     this.assertWorkspaceBinding();
     const folders = this.workspaceContextService.getWorkspace().folders.filter(folder => folder.uri.scheme === 'file');
     const segments = path.split('/');
@@ -805,9 +941,8 @@ export class GlyphEditorAdapter extends Disposable {
     // Match the model resolver's canonical identity before any cache, occupancy,
     // or byte-budget lookup. A dirty model is authoritative even when the caller
     // uses another spelling on a case-insensitive filesystem.
-    const resource = this.uriIdentityService.asCanonicalUri(
-      URI.joinPath(folder.uri, folders.length > 1 ? segments.join('/') : path),
-    );
+    const logical = URI.joinPath(folder.uri, folders.length > 1 ? segments.join('/') : path);
+    const resource = canonical ? this.uriIdentityService.asCanonicalUri(logical) : logical;
     if (!this.workspaceContextService.isInsideWorkspace(resource)) {
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
     }
@@ -938,4 +1073,29 @@ async function sha256(text: string, byteOrderMark: boolean): Promise<string> {
   const bytes = byteOrderMark ? Uint8Array.from([0xef, 0xbb, 0xbf, ...textBytes]) : textBytes;
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** Apply the owning volume's filename rules to URI paths while preserving scheme and authority. */
+function filesystemUriIdentity(
+  request: { readonly caseSensitive?: boolean; readonly namePolicy?: FilesystemNamePolicy },
+  fallback: IExtUri,
+): Pick<IExtUri, 'isEqual' | 'isEqualOrParent' | 'relativePath'> {
+  const policy = request.namePolicy;
+  const sensitive = policy?.caseSensitive ?? request.caseSensitive;
+  const identity = sensitive === undefined ? fallback : sensitive ? extUri : extUriIgnorePathCase;
+  if (!policy?.normalizesUnicode) return identity;
+  const key = (resource: URI): URI => resource.with({ path: normalizeVolumeName(resource.path, policy) });
+  return {
+    isEqual: (left, right) => (left && right ? identity.isEqual(key(left), key(right)) : left === right),
+    isEqualOrParent: (child, parent) => identity.isEqualOrParent(key(child), key(parent)),
+    // Relative routes must retain their original spelling even when a folded parent changes length.
+    relativePath: (parent, child) =>
+      child.path.split('/').filter(Boolean).slice(parent.path.split('/').filter(Boolean).length).join('/'),
+  };
+}
+
+/** A write requires the pending RPC that can recheck the host's pinned root. */
+function requireMutationCheck(check: (() => Promise<void>) | undefined): () => Promise<void> {
+  if (!check) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+  return check;
 }

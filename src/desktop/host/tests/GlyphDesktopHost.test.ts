@@ -1,4 +1,9 @@
 import { describe, expect, beforeEach, it, onTestFinished, vi, type Mock } from 'vitest';
+import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { Deferred } from '#src/shared/Deferred.js';
+import { tmpdir } from 'node:os';
 vi.mock('#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.ts', () => ({
   isGlyphRequestEnvelope: vi.fn(),
 }));
@@ -28,6 +33,613 @@ const peer = { ...owner, windowId: 'peer' } as const;
 const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }] as const;
 
 describe(GlyphDesktopHost, () => {
+  it('rechecks the owning connection, attachment and trust generation at disclosure', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+    fixture.connect('first', owner);
+    await fixture.receive('first', owner, 'attach', attach);
+    const input = fixture.factory.create.mock.calls[0]![0] as Parameters<
+      GlyphDesktopWorkspaceRuntimeFactory['create']
+    >[0];
+    expect(input.assertTrusted).not.toThrow();
+    await fixture.host.disconnect('first');
+    expect(input.assertTrusted).toThrow();
+    fixture.connect('next', owner);
+    expect(input.assertTrusted).toThrow();
+    await fixture.receive('next', owner, 'reattach', attach);
+    expect(input.assertTrusted).not.toThrow();
+    await fixture.receive('next', owner, 'other', { ...attach, roots: [{ ...roots[0], canonicalPath: '/other' }] });
+    expect(input.assertTrusted).toThrow();
+    await fixture.receive('next', owner, 'restore', attach);
+    expect(input.assertTrusted).not.toThrow();
+    await fixture.receive('next', owner, 'revoke', { ...attach, trusted: false });
+    expect(input.assertTrusted).toThrow();
+    await fixture.receive('next', owner, 'grant', attach);
+    expect(input.assertTrusted).toThrow();
+  });
+
+  it('revokes queued commands on disconnect and trust loss even when the same window reconnects', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+    const list = { type: GlyphWorkbenchCommandType.LIST_CHATS } as const;
+    fixture.connect('first', owner);
+    await fixture.receive('first', owner, 'attach', attach);
+    await fixture.receive('first', owner, 'first-list', list);
+    const first = fixture.runtime.handle.mock.lastCall![1]!.signal;
+    expect(first.aborted).toBe(false);
+    await fixture.host.disconnect('first');
+    expect(first.aborted).toBe(true);
+    fixture.connect('next', owner);
+    await fixture.receive('next', owner, 'reattach', attach);
+    await fixture.receive('next', owner, 'next-list', list);
+    const next = fixture.runtime.handle.mock.lastCall![1]!.signal;
+    expect(next.aborted).toBe(false);
+    await fixture.receive('next', owner, 'revoke', { ...attach, trusted: false });
+    expect(next.aborted).toBe(true);
+    expect(first.aborted).toBe(true);
+  });
+
+  it('withdraws queued commands when trust changes while an earlier attach is collecting a snapshot', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    fixture.connect('owner', owner);
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+    await fixture.receive('owner', owner, 'attach', attach);
+    await fixture.receive('owner', owner, 'list', { type: GlyphWorkbenchCommandType.LIST_CHATS });
+    const context = fixture.runtime.handle.mock.lastCall![1]!;
+    let finish!: (value: GlyphRuntimeSnapshot) => void;
+    vi.spyOn(fixture.runtime, 'snapshot').mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          finish = resolve;
+        }),
+    );
+    const first = fixture.receive('owner', owner, 'refresh', attach);
+    const second = fixture.receive('owner', owner, 'downgrade', { ...attach, trusted: false });
+    expect(context.signal.aborted).toBe(true);
+    expect(() => {
+      context.emit({ type: GlyphHostEventType.HOST_STATUS, status: GlyphHostStatus.READY });
+    }).toThrow();
+    finish({ accounts: [], models: [], chats: [], proposals: [], runs: [] });
+    await Promise.all([first, second]);
+    expect(
+      fixture
+        .events('owner')
+        .find(entry => entry.event.type === GlyphHostEventType.ERROR && entry.event.requestId === 'refresh'),
+    ).toBeDefined();
+  });
+
+  it('acknowledges an owner file lookup and withdraws pending results when the workspace detaches', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const resolve = vi.fn(async (): Promise<undefined> => undefined);
+    Object.assign(fixture.runtime, { attachmentAccess: { resolve } });
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'attach', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    const command = {
+      type: GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE,
+      lookupId: 'file',
+      resource: { path: 'notes.md', uri: 'file:///project/notes.md', folder: false, projectFile: true },
+    } as const;
+    await fixture.receive('owner', owner, 'file', command);
+    expect(resolve).toHaveBeenCalledWith(command.resource, expect.any(AbortSignal));
+    const captures = () =>
+      fixture
+        .events('owner')
+        .flatMap(({ event }) => (event.type === GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED ? [event] : []));
+    expect(captures()).toEqual([{ type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED, lookupId: 'file' }]);
+
+    const pending = new Deferred<undefined>();
+    const started = new Deferred<void>();
+    resolve.mockImplementationOnce(() => {
+      started.resolve();
+      return pending.promise;
+    });
+    const lookup = fixture.receive('owner', owner, 'pending', command);
+    await started.promise;
+    await fixture.receive('owner', owner, 'detach', { type: GlyphWorkbenchCommandType.DETACH });
+    pending.resolve(undefined);
+    await lookup;
+    expect(fixture.events('owner').at(-1)?.event).toMatchObject({
+      type: GlyphHostEventType.ERROR,
+      requestId: 'pending',
+    });
+    expect(captures()).toHaveLength(1);
+  });
+
+  it('accepts a peer selection under another root spelling only when the volume resolves both to one directory', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-peer-root-spelling-')));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const project = join(directory, 'Project');
+    const alternate = join(directory, 'project');
+    await mkdir(project);
+    const createdSibling = await mkdir(alternate, { recursive: true });
+    const resolve = vi.fn(async () => undefined);
+    Object.assign(fixture.runtime, { attachmentAccess: { resolve } });
+    for (const identity of [owner, peer]) {
+      fixture.connect(identity.windowId, identity);
+      await fixture.receive(identity.windowId, identity, 'attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots: [{ name: 'Project', canonicalPath: project, uri: pathToFileURL(project).href }],
+        trusted: true,
+      });
+    }
+    await fixture.receive('peer', peer, 'lookup', {
+      type: GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE,
+      lookupId: 'lookup',
+      resource: { path: 'notes.md', uri: pathToFileURL(join(alternate, 'notes.md')).href, folder: false },
+    });
+    if (createdSibling) {
+      expect(resolve).not.toHaveBeenCalled();
+      expect(fixture.events('peer').at(-1)?.event).toMatchObject({
+        type: GlyphHostEventType.ERROR,
+        error: { message: expect.stringContaining('does not belong to the declared workspace path') },
+      });
+    } else {
+      expect(resolve).toHaveBeenCalledWith(
+        { path: 'notes.md', uri: pathToFileURL(join(project, 'notes.md')).href, folder: false },
+        expect.any(AbortSignal),
+      );
+    }
+  });
+
+  it('routes peer selections by physical folder and rechecks both aliases before returning a listing', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-peer-folders-')));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const selected = join(directory, 'selected');
+    const second = join(directory, 'second');
+    const ownerAlias = join(directory, 'owner-alias');
+    const peerAlias = join(directory, 'peer-alias');
+    await Promise.all([mkdir(selected), mkdir(second)]);
+    await Promise.all([symlink(selected, ownerAlias), symlink(selected, peerAlias)]);
+    const root = (name: string, canonicalPath: string) => ({
+      name,
+      canonicalPath,
+      uri: pathToFileURL(canonicalPath).href,
+    });
+    for (const [identity, selectedRoot] of [
+      [owner, root('owner-folder', ownerAlias)],
+      [peer, root('peer-folder', peerAlias)],
+    ] as const) {
+      fixture.connect(identity.windowId, identity);
+      await fixture.receive(identity.windowId, identity, 'attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots: [root('other', second), selectedRoot],
+        trusted: true,
+      });
+    }
+    const listing = { files: ['notes.md'], truncated: false };
+    const resolve = vi.fn(async () => listing);
+    Object.assign(fixture.runtime, { attachmentAccess: { resolve } });
+    const lookup = (id: string, path: string, selectedPath: string) =>
+      fixture.receive('peer', peer, id, {
+        type: GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE,
+        lookupId: id,
+        resource: { path, uri: pathToFileURL(selectedPath).href, folder: true },
+      });
+    await lookup('root', 'peer-folder', selected);
+    expect(resolve).toHaveBeenLastCalledWith(
+      { path: 'owner-folder', uri: pathToFileURL(selected).href, folder: true },
+      expect.any(AbortSignal),
+    );
+    await lookup('child', 'peer-folder/src', join(peerAlias, 'src'));
+    expect(resolve).toHaveBeenLastCalledWith(
+      { path: 'owner-folder/src', uri: pathToFileURL(join(selected, 'src')).href, folder: true },
+      expect.any(AbortSignal),
+    );
+    for (const [id, path, selectedPath, message] of [
+      ['unknown', 'missing', selected, 'workspace folder changed'],
+      ['parent', 'peer-folder/../other', selected, 'Invalid attachment workspace path'],
+      ['unrelated', 'peer-folder', second, 'does not belong to the declared workspace path'],
+    ] as const) {
+      await lookup(id, path, selectedPath);
+      expect(fixture.events('peer').at(-1)?.event).toMatchObject({
+        type: GlyphHostEventType.ERROR,
+        requestId: id,
+        error: { message: expect.stringContaining(message) },
+      });
+    }
+    expect(resolve).toHaveBeenCalledTimes(2);
+    const pending = new Deferred<typeof listing>();
+    const started = new Deferred<void>();
+    resolve.mockImplementationOnce(() => {
+      started.resolve();
+      return pending.promise;
+    });
+    const capture = lookup('retargeted', 'peer-folder', selected);
+    await started.promise;
+    await rm(ownerAlias);
+    await symlink(second, ownerAlias);
+    pending.resolve(listing);
+    await capture;
+    expect(fixture.events('peer').at(-1)?.event).toMatchObject({
+      type: GlyphHostEventType.ERROR,
+      requestId: 'retargeted',
+      error: { message: expect.stringContaining('workspace folder changed') },
+    });
+    expect(
+      fixture.events('peer').filter(({ event }) => event.type === GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED),
+    ).toHaveLength(2);
+  });
+
+  it('returns attachment results only to the requesting trusted window and discards revoked lookups', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-window-attach-')));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const alias = join(directory, 'alias');
+    const actual = join(directory, 'root');
+    await mkdir(actual);
+    await symlink(actual, alias);
+    const attach = {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: [{ name: 'project', canonicalPath: actual, uri: 'file://' + actual }],
+      trusted: true,
+    } as const;
+    const command = {
+      type: GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE,
+      lookupId: 'folder',
+      resource: { uri: 'file://' + alias, path: '.', folder: true },
+    } as const;
+    const listing = { files: ['allowed.md'], truncated: false };
+    const resolve = vi.fn(async () => listing);
+    Object.assign(fixture.runtime, { attachmentAccess: { resolve } });
+    for (const [id, identity] of [
+      ['owner', owner],
+      ['peer', peer],
+    ] as const) {
+      fixture.connect(id, identity);
+      await fixture.receive(
+        id,
+        identity,
+        'attach-' + id,
+        id === 'owner'
+          ? attach
+          : { ...attach, roots: [{ name: 'project', canonicalPath: alias, uri: 'file://' + alias }] },
+      );
+    }
+    await fixture.receive('peer', peer, 'resolve', command);
+    expect(resolve).toHaveBeenCalledWith({ ...command.resource, uri: 'file://' + actual }, expect.any(AbortSignal));
+    const resolved = { type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED, lookupId: 'folder', listing };
+    expect(fixture.events('peer').at(-2)?.event).toEqual(resolved);
+    expect(fixture.events('owner').map(entry => entry.event)).not.toContainEqual(resolved);
+    await fixture.receive('peer', peer, 'bad', { ...command, lookupId: '' });
+    expect(fixture.events('peer').at(-1)?.event.type).toBe(GlyphHostEventType.ERROR);
+    const pending = new Deferred<typeof listing>();
+    resolve.mockImplementationOnce(() => pending.promise);
+    const lookup = fixture.receive('peer', peer, 'pending', command);
+    await vi.waitFor(() => {
+      expect(resolve).toHaveBeenCalledTimes(2);
+    });
+    await fixture.host.disconnect('peer');
+    pending.resolve(listing);
+    await lookup;
+    expect(fixture.events('peer').filter(entry => entry.event.type === resolved.type)).toHaveLength(1);
+    await fixture.receive('owner', owner, 'downgrade', { ...attach, trusted: false });
+    await fixture.receive('owner', owner, 'denied', command);
+    expect(fixture.events('owner').at(-1)?.event.type).toBe(GlyphHostEventType.ERROR);
+    expect(resolve).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([true, false])('a replacement port negotiates its own attachment (trusted %s)', async trusted => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    let initialize!: (runtime: GlyphDesktopWorkspaceRuntime) => void;
+    fixture.factory.create.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          initialize = resolve;
+        }),
+    );
+    fixture.connect('first', owner);
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+    const first = fixture.receive('first', owner, 'old-attach', attach);
+    const oldQueued = fixture.receive('first', owner, 'old-detach', { type: GlyphWorkbenchCommandType.DETACH });
+    await fixture.host.disconnect('first');
+    fixture.connect('replacement', owner);
+    initialize(fixture.runtime);
+    await Promise.all([first, oldQueued]);
+    expect(fixture.events('replacement')).toEqual([]);
+    await fixture.receive('replacement', owner, 'early', { type: GlyphWorkbenchCommandType.LIST_CHATS });
+    expect(fixture.runtime.handle).not.toHaveBeenCalled();
+    await fixture.receive('replacement', owner, 'fresh', { ...attach, trusted });
+    expect(fixture.events('replacement').at(-1)?.event).toMatchObject({
+      type: GlyphHostEventType.COMMAND_RESULT,
+      requestId: 'fresh',
+      ok: true,
+    });
+    expect(fixture.events('replacement').some(({ event }) => event.type === GlyphHostEventType.INITIAL_STATE)).toBe(
+      true,
+    );
+  });
+
+  it('returns rule identity lookups only to their authorized attached window', async () => {
+    const fixture = new HostFixture();
+    const command = {
+      type: GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE,
+      lookupId: 'lookup',
+      ruleId: 'old',
+    } as const;
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    await fixture.receive('owner', owner, 'attach-owner', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.receive('peer', peer, 'attach-peer', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.receive('peer', peer, 'absent', command);
+    expect(fixture.events('peer').at(-2)?.event).toEqual({
+      type: GlyphHostEventType.RULE_REFERENCE_RESOLVED,
+      lookupId: 'lookup',
+    });
+    Object.assign(fixture.runtime, { resolveRuleReference: () => 'canonical' });
+    await fixture.receive('peer', peer, 'lookup', command);
+    expect(fixture.events('peer').at(-2)?.event).toEqual({
+      type: GlyphHostEventType.RULE_REFERENCE_RESOLVED,
+      lookupId: 'lookup',
+      ruleId: 'canonical',
+    });
+    expect(fixture.events('owner').some(entry => entry.event.type === GlyphHostEventType.RULE_REFERENCE_RESOLVED)).toBe(
+      false,
+    );
+    for (const [i, bad] of [
+      { lookupId: null },
+      { lookupId: '' },
+      { lookupId: 'a'.repeat(65) },
+      { ruleId: null },
+      { ruleId: '' },
+      { ruleId: 'a'.repeat(501) },
+    ].entries()) {
+      await fixture.receive('peer', peer, 'invalid' + i, { ...command, ...bad } as typeof command);
+      expect(fixture.events('peer').at(-1)?.event).toMatchObject({ type: GlyphHostEventType.ERROR });
+    }
+    await fixture.receive('owner', owner, 'downgrade', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+    });
+    await fixture.receive('owner', owner, 'restricted', command);
+    expect(fixture.events('owner').at(-1)?.event).toMatchObject({ type: GlyphHostEventType.ERROR });
+  });
+
+  it('keeps user-file checks conservative when owner or peer folder aliases change', async () => {
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-user-root-')));
+    const fixture = new HostFixture();
+    onTestFinished(async () => {
+      await fixture.host.dispose();
+      await rm(directory, { recursive: true, force: true });
+    });
+    const project = join(directory, 'project');
+    const profile = join(directory, 'profile');
+    const replacement = join(directory, 'replacement');
+    const alias = join(directory, 'alias');
+    for (const path of [project, profile, replacement]) await mkdir(path);
+    await symlink(profile, alias);
+    const other = { ...peer, workspaceId: 'other' };
+    fixture.connect('owner', owner);
+    fixture.connect('peer', other);
+    const attach = (path: string) => ({
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE as const,
+      trusted: true,
+      roots: [{ name: 'folder', canonicalPath: path, uri: `file://${path}` }],
+    });
+    await fixture.receive('owner', owner, 'attach-owner', attach(project));
+    await fixture.receive('peer', other, 'attach-peer', attach(alias));
+    expect(fixture.host.trustedUserEditors(owner)).toEqual([{ identity: other, connectionId: 'peer' }]);
+    await rm(alias);
+    await symlink(replacement, alias);
+    expect(() => fixture.host.trustedUserEditors(owner, profile)).toThrow('retargeted');
+    await rm(alias);
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('removed');
+    await symlink(profile, alias);
+    await rm(project, { recursive: true });
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('removed');
+    expect(() => fixture.host.trustedUserEditors(owner, join(directory, 'absent'))).toThrow('removed');
+    expect(() => fixture.host.trustedUserEditors(owner, directory)).toThrow('removed');
+    expect(fixture.host.trustedUserEditors(owner, join(directory, 'missing-mount'), [project])).toEqual([
+      { identity: other, connectionId: 'peer' },
+    ]);
+    expect(fixture.host.trustedUserEditors(owner, project)).toEqual([{ identity: other, connectionId: 'peer' }]);
+  });
+
+  it('allows clean checks after an intended package removal deletes an attached subtree', async () => {
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-user-removal-')));
+    const fixture = new HostFixture();
+    onTestFinished(async () => {
+      await fixture.host.dispose();
+      await rm(directory, { recursive: true, force: true });
+    });
+    const packagePath = join(directory, 'package');
+    const references = join(packagePath, 'references');
+    await mkdir(references, { recursive: true });
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'attach', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      trusted: true,
+      roots: [{ name: 'references', canonicalPath: references, uri: `file://${references}` }],
+    });
+    await rm(packagePath, { recursive: true });
+    expect(fixture.host.trustedUserEditors(owner, packagePath)).toEqual([]);
+  });
+  it('checks trusted user working-copy peers including disconnected or reconnecting windows', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE as const, roots, trusted: true };
+    expect(fixture.host.trustedUserEditors(owner)).toEqual([]);
+    await fixture.receive('owner', owner, 'owner-attach', attach);
+    await fixture.receive('peer', peer, 'peer-attach', attach);
+    expect(fixture.host.trustedUserEditors(owner)).toEqual([{ identity: peer, connectionId: 'peer' }]);
+    await fixture.host.disconnect('peer');
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('reconnecting');
+    fixture.connect('new', peer);
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('reconnecting');
+    const pending = fixture.receive('new', peer, 'peer-reattach', attach);
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('reconnecting');
+    await pending;
+    expect(fixture.host.trustedUserEditors(owner)).toEqual([{ identity: peer, connectionId: 'new' }]);
+    await fixture.host.dispose();
+  });
+  it.each([false, true])(
+    'requires peers to match the owning runtime trust (%s) before sharing snapshots or events',
+    async trusted => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      fixture.connect('peer', peer);
+      await fixture.receive('owner', owner, 'owner-attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted,
+      });
+      await fixture.receive('peer', peer, 'peer-attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: !trusted,
+      });
+      expect(fixture.events('peer').some(envelope => envelope.event.type === GlyphHostEventType.INITIAL_STATE)).toBe(
+        false,
+      );
+      fixture.runtime.emit({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: [] });
+      expect(
+        fixture.events('peer').some(envelope => envelope.event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED),
+      ).toBe(false);
+      expect(fixture.events('peer').at(-1)?.event).toMatchObject({
+        type: GlyphHostEventType.ERROR,
+        error: { message: expect.stringContaining('workspace trust') },
+      });
+      await fixture.host.dispose();
+    },
+  );
+  it('does not invoke trusted snapshot work for a rejected observer', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    await fixture.receive('owner', owner, 'attach-owner', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.receive('peer', peer, 'attach-peer', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+    });
+    const snapshot = vi.spyOn(fixture.runtime, 'snapshot');
+    await fixture.receive('peer', peer, 'snapshot-rejected', {
+      type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
+      afterSequence: 0,
+    });
+    expect(snapshot).not.toHaveBeenCalled();
+    await fixture.host.dispose();
+  });
+
+  it('withholds live broadcasts from a replacement port until its attachment is authorized', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'attach', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.host.disconnect('owner');
+    fixture.connect('replacement', owner);
+    fixture.runtime.emit({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: [] });
+    expect(fixture.events('replacement')).toEqual([]);
+    await fixture.receive('replacement', owner, 'restricted', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+    });
+    const after = fixture.events('replacement').at(-1)!.sequence;
+    await fixture.receive('replacement', owner, 'resume-restricted', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+      resumeHostGeneration: fixture.host.generation,
+      resumeAfterSequence: after - 1,
+    });
+    expect(
+      fixture.events('replacement').some(value => value.event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED),
+    ).toBe(false);
+    await fixture.host.dispose();
+  });
+  it.each([false, true])(
+    'requires peers to match the owning runtime trust (%s) before sharing snapshots or events',
+    async trusted => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      fixture.connect('peer', peer);
+      await fixture.receive('owner', owner, 'owner-attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted,
+      });
+      await fixture.receive('peer', peer, 'peer-attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: !trusted,
+      });
+      expect(fixture.events('peer').some(envelope => envelope.event.type === GlyphHostEventType.INITIAL_STATE)).toBe(
+        false,
+      );
+      fixture.runtime.emit({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: [] });
+      expect(
+        fixture.events('peer').some(envelope => envelope.event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED),
+      ).toBe(false);
+      expect(fixture.events('peer').at(-1)?.event).toMatchObject({
+        type: GlyphHostEventType.ERROR,
+        error: { message: expect.stringContaining('workspace trust') },
+      });
+      await fixture.host.dispose();
+    },
+  );
+  it('quarantines an observer immediately when it revokes trust and prevents journal replay', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+    await fixture.receive('owner', owner, 'owner-attach', attach);
+    await fixture.receive('peer', peer, 'peer-attach', attach);
+    const count = fixture
+      .events('peer')
+      .filter(envelope => envelope.event.type === GlyphHostEventType.INITIAL_STATE).length;
+    await fixture.receive('peer', peer, 'revoke', { ...attach, trusted: false });
+    await fixture.receive('peer', peer, 'snapshot', {
+      type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
+      afterSequence: 0,
+    });
+    fixture.runtime.emit({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: [] });
+    expect(
+      fixture.events('peer').filter(envelope => envelope.event.type === GlyphHostEventType.INITIAL_STATE),
+    ).toHaveLength(count);
+    expect(
+      fixture.events('peer').some(envelope => envelope.event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED),
+    ).toBe(false);
+    await fixture.receive('peer', peer, 'trust-again', {
+      ...attach,
+      resumeHostGeneration: fixture.host.generation,
+      resumeAfterSequence: 0,
+    });
+    expect(
+      fixture.events('peer').filter(envelope => envelope.event.type === GlyphHostEventType.INITIAL_STATE),
+    ).toHaveLength(count + 1);
+    await fixture.host.dispose();
+  });
   beforeEach(() => {
     vi.mocked(isGlyphRequestEnvelope).mockReturnValue(true);
   });
