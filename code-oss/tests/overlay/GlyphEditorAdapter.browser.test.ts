@@ -163,11 +163,17 @@ function editorServices() {
           return model;
         }),
       },
-      save: vi.fn(async (resource: URI): Promise<URI | undefined> => {
-        disk.set(resource.path, find(resource)!.text);
-        dirty.delete(resource.path);
-        return resource;
-      }),
+      save: vi.fn(
+        async (
+          resource: URI,
+          options?: { validateBeforeWrite?: () => Promise<() => void> },
+        ): Promise<URI | undefined> => {
+          if (options?.validateBeforeWrite) (await options.validateBeforeWrite())();
+          disk.set(resource.path, find(resource)!.text);
+          dirty.delete(resource.path);
+          return resource;
+        },
+      ),
     },
     trustService: { isWorkspaceTrusted: vi.fn(() => state.trusted) },
     fileService: {
@@ -1456,7 +1462,8 @@ describe(GlyphEditorAdapter, () => {
           else {
             services.models.splice(0);
             if (change === 'reopened') {
-              const replacement = services.open('a.ts', 'independent working copy');
+              const replacement = textModel(model.uri, 'independent working copy');
+              services.models.push(replacement);
               replacement.version = model.version;
             }
           }
@@ -1464,7 +1471,7 @@ describe(GlyphEditorAdapter, () => {
         await expect(adapter.apply(textMutation(before, 'changed', { save: true }), check)).rejects.toMatchObject({
           code: GlyphDesktopErrorCode.STALE_DOCUMENT,
         });
-        expect(services.textFileService.save).not.toHaveBeenCalled();
+        expect(services.disk.get('/workspace/a.ts')).toBe('text');
       },
     );
 
@@ -1481,7 +1488,7 @@ describe(GlyphEditorAdapter, () => {
       await expect(adapter.apply(textMutation(before, 'changed', { save: true }), check)).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
       });
-      expect(services.textFileService.save).not.toHaveBeenCalled();
+      expect(services.disk.get('/workspace/a.ts')).toBe('text');
       expect(services.textFileService.isDirty(URI.file('/workspace/a.ts'))).toBe(true);
     });
 
@@ -1576,6 +1583,7 @@ describe(GlyphEditorAdapter, () => {
       });
       expect(services.textFileService.save).toHaveBeenCalledWith(expect.objectContaining({ path: '/workspace/a.ts' }), {
         skipSaveParticipants: true,
+        validateBeforeWrite: expect.any(Function),
       });
       expect(services.disk.get('/workspace/a.ts')).toBe('changed');
     });
