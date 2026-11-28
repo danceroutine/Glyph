@@ -1,10 +1,17 @@
 import { randomUUID } from 'node:crypto';
+import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
 import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.js';
 import { createNullPrototypeRecord } from '#src/shared/mappers/createNullPrototypeRecord.js';
+
+const fileLimitKiB = 512;
+
+function snapshotLimitError(path: string, cause: unknown): Error {
+  return new Error(`Editor search snapshot for ${path} exceeds the ${fileLimitKiB} KiB per-file limit.`, { cause });
+}
 
 /** Transfer only catalog-approved, physically validated live text; never fall back after a failed snapshot. */
 export async function readEditorContentOverrides(
@@ -40,7 +47,7 @@ export async function readEditorContentOverrides(
       );
       signal?.throwIfAborted();
       if (!response.ok && response.error?.code === GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED)
-        throw new Error(`Editor search snapshot for ${rootPrefix + path} exceeds the 512 KiB per-file limit.`);
+        throw snapshotLimitError(rootPrefix + path, response.error);
       if (!response.ok || !response.snapshot || response.snapshot.path !== rootPrefix + path)
         throw new Error(response.error?.message ?? 'An editor search snapshot is unavailable.');
       await disk.validateAccess(path);
@@ -49,7 +56,10 @@ export async function readEditorContentOverrides(
   let bytes = 0;
   for (const path of allowed) {
     signal?.throwIfAborted();
-    const text = await read(path, 512 * 1024);
+    const text = await read(path, fileLimitKiB * 1024).catch((error: unknown) => {
+      if (error instanceof WorkspaceReadLimitError) throw snapshotLimitError(rootPrefix + path, error);
+      throw error;
+    });
     signal?.throwIfAborted();
     bytes += Buffer.byteLength(JSON.stringify({ [path]: text }));
     if (bytes > 768 * 1024) throw new Error('Editor search snapshots exceed the aggregate byte budget.');
