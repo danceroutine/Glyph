@@ -190,7 +190,7 @@ it.skipIf(process.platform === 'win32')(
     });
   },
 );
-it.skipIf(process.platform === 'win32').each(['credential helper', 'mirror'])(
+it.skipIf(process.platform === 'win32').each(['credential helper', 'credential cache', 'mirror'])(
   'holds the configured %s through transport close and releases it for the next preview',
   async input => {
     const base = await fixture();
@@ -202,10 +202,11 @@ it.skipIf(process.platform === 'win32').each(['credential helper', 'mirror'])(
     await chmod(helper, 0o700);
     const url = 'https://example.invalid/selected.git';
     if (input === 'mirror') execFileSync('git', ['init', '--bare', '--quiet', '--template=', helpers]);
+    vi.stubEnv('XDG_CACHE_HOME', helpers);
     const configuration =
       input === 'mirror'
         ? `[url "${pathToFileURL(helpers).href}"]\ninsteadOf = ${url}\n`
-        : '[credential]\nhelper = ' + helper + '\n';
+        : '[credential]\nhelper = ' + (input === 'credential cache' ? 'cache' : helper) + '\n';
     await writeFile(join(base, 'trusted.config'), configuration);
     let roots: string[] = [];
     const leases = new HostProcessLeases(() => roots);

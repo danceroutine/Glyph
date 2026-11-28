@@ -1,5 +1,7 @@
-import { execFileSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { createConnection, createServer } from 'node:net';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
@@ -11,8 +13,8 @@ import { trustedHostExecutable } from '#src/shell/TrustedHostExecutable.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 
 afterEach(() => vi.unstubAllEnvs());
-async function fixture() {
-  const base = await mkdtemp(join(tmpdir(), 'glyph-git-configuration-'));
+async function fixture(temporary = tmpdir()) {
+  const base = await mkdtemp(join(temporary, 'glyph-git-configuration-'));
   onTestFinished(() => rm(base, { recursive: true, force: true }));
   const home = join(base, 'home');
   const project = join(base, 'project');
@@ -53,9 +55,7 @@ it('pins trusted include values, repeated values, bare booleans and escaped subs
       env: environment,
       encoding: 'utf8',
     });
-  expect(git('--get-all', 'credential.helper')).toMatch(
-    /^!exec '[^\n]+git-credential-store'\n!exec '[^\n]+git-credential-cache'\n$/u,
-  );
+  expect(git('--get-all', 'credential.helper')).toMatch(/^!exec '[^\n]+git-credential-store'\n!:\n$/u);
   expect(git('--bool', '--get', 'fetch.prune')).toBe('true\n');
   expect(git('--get', 'user.name')).toBe('Trusted user\n');
   expect(git('--get', 'url.https://trusted.invalid/a.insteadOf')).toBe('https://example.invalid/\t\n\b\\"\n');
@@ -420,4 +420,138 @@ it('honors a disabled global config and retains transport integrity and ref visi
   });
   expect(await readFile(env.GIT_CONFIG_GLOBAL!, 'utf8')).toBe('');
   expect(admitted.mock.calls.flatMap(call => call[0])).not.toContain('/dev/null');
+});
+
+async function credentialCacheFixture() {
+  const f = await fixture(await realpath('/tmp'));
+  const git = trustedHostExecutable('git', []);
+  const cwd = f.preview;
+  execFileSync(git, ['init', '--bare', '--quiet', '--template=', 'source.git'], { cwd });
+  execFileSync(git, ['--git-dir=source.git', 'remote', 'add', 'origin', 'https://fixture.invalid/selected'], { cwd });
+  const configured = join(f.home, "user's cache");
+  const legacy = join(f.home, '.git-credential-cache');
+  vi.stubEnv('XDG_CACHE_HOME', configured);
+  await writeFile(f.global, '[credential]\nhelper = store\nhelper = cache\n');
+  const checks = vi.fn(testFilesystemMetadata.assertHostPaths);
+  const metadata = { ...testFilesystemMetadata, assertHostPaths: checks };
+  const capture = () =>
+    captureRepositoryEnvironment(
+      [f.project],
+      cwd,
+      new AbortController().signal,
+      metadata,
+      'source.git',
+      undefined,
+      vi.fn(),
+    );
+  const credential = async (env: NodeJS.ProcessEnv, operation: 'fill' | 'approve' | 'reject') => {
+    const child = spawn(git, ['--git-dir=source.git', 'credential', operation], {
+      cwd,
+      env,
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+    const done = once(child, 'close');
+    const value = operation === 'fill' ? '' : 'username=fixture\npassword=fixture-only\n';
+    child.stdin.end('protocol=https\nhost=fixture.invalid\n' + value + '\n');
+    expect((await done)[0]).toBe(0);
+  };
+  return { ...f, configured, legacy, checks, capture, credential };
+}
+
+/** This disposable endpoint serves a synthetic account for fixture.invalid. */
+async function fixtureCacheDaemon(directory: string, name = 'socket') {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const actions: string[] = [];
+  const server = createServer(client => {
+    let request = '';
+    client.on('data', chunk => {
+      request += chunk.toString('utf8');
+    });
+    client.on('end', () => {
+      const action = request.split('\n')[0]!;
+      actions.push(action);
+      client.end(action === 'action=get' ? 'username=fixture\npassword=fixture-only\n\n' : undefined);
+    });
+  });
+  const opened = once(server, 'listening');
+  server.listen(join(directory, name));
+  await opened;
+  const close = async () => {
+    const closed = once(server, 'close');
+    server.close();
+    await closed;
+  };
+  return { actions, close };
+}
+
+it.skipIf(process.platform === 'win32').each(['legacy', 'XDG', 'home'])(
+  'uses the existing %s endpoint for credential cache lookup, storage and erasure',
+  async kind => {
+    const f = await credentialCacheFixture();
+    if (kind === 'home') vi.stubEnv('XDG_CACHE_HOME', 'relative path');
+    const directory =
+      kind === 'legacy'
+        ? join(f.home, 'account cache')
+        : join(kind === 'home' ? join(f.home, '.cache') : f.configured, 'git/credential');
+    const daemon = await fixtureCacheDaemon(directory);
+    onTestFinished(daemon.close);
+    if (kind === 'legacy') await symlink(directory, f.legacy);
+    const env = await f.capture();
+    const socket = join(directory, 'socket');
+    expect(f.checks).toHaveBeenCalledWith(
+      expect.any(Array),
+      [f.project],
+      expect.arrayContaining([kind === 'legacy' ? join(f.legacy, 'socket') : socket, socket]),
+    );
+    // The preview keeps using the same socket if the account's default changes.
+    if (kind !== 'legacy') await mkdir(f.legacy);
+    vi.stubEnv('XDG_CACHE_HOME', f.project);
+    await f.credential(env, 'approve');
+    expect(await stat(join(f.home, '.git-credentials'))).toBeDefined();
+    await f.credential(env, 'reject');
+    await f.credential(env, 'fill');
+    expect(daemon.actions).toEqual(['action=store', 'action=erase', 'action=get']);
+  },
+);
+
+it.skipIf(process.platform === 'win32').each(['missing', 'stale'])(
+  'keeps the store helper working when the selected cache socket is %s',
+  async kind => {
+    const f = await credentialCacheFixture();
+    const directory = join(f.configured, 'git/credential');
+    const socket = join(directory, 'socket');
+    if (kind === 'stale') {
+      const daemon = await fixtureCacheDaemon(directory, 'original');
+      // Closing the listener at its old name leaves the new name without a live daemon.
+      await rename(join(directory, 'original'), socket);
+      await daemon.close();
+    }
+    const env = await f.capture();
+    await f.credential(env, 'approve');
+    expect(await stat(join(f.home, '.git-credentials'))).toBeDefined();
+    if (kind === 'missing') {
+      await expect(stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+    } else {
+      const connection = createConnection(socket);
+      try {
+        await expect(once(connection, 'connect')).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+      } finally {
+        connection.destroy();
+      }
+    }
+  },
+);
+
+it.skipIf(process.platform === 'win32')('refuses a shared cache routed into an attached workspace', async () => {
+  const f = await credentialCacheFixture();
+  await symlink(f.project, f.legacy);
+  await expect(f.capture()).rejects.toThrow('outside writable workspaces');
+});
+
+it.skipIf(process.platform === 'win32')('honors a helper reset before selecting credential-cache inputs', async () => {
+  const f = await credentialCacheFixture();
+  await writeFile(f.global, '[credential]\nhelper = cache\nhelper =\nhelper = store\n');
+  const env = await f.capture();
+  expect(await readFile(env.GIT_CONFIG_GLOBAL!, 'utf8')).not.toContain('--socket');
+  expect(f.checks.mock.calls.flatMap(([paths]) => paths)).not.toContain(join(f.configured, 'git/credential/socket'));
 });

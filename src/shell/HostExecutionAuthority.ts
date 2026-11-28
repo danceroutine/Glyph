@@ -34,7 +34,7 @@ export class HostExecutionAuthority {
     return physical;
   }
 
-  /** Admit the operating system's SSH agent socket as a socket only, retaining its logical and physical routes. */
+  /** Admit a host authentication endpoint as a socket only, retaining its logical and physical routes. */
   admitSocket(path: string): string {
     const physical = this.admit(path);
     this.sockets.add(path);
