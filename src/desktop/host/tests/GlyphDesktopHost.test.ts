@@ -234,6 +234,44 @@ describe(GlyphDesktopHost, () => {
     expect(captures()).toHaveLength(1);
   });
 
+  it('accepts a peer selection under another root spelling only when the volume resolves both to one directory', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-peer-root-spelling-')));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const project = join(directory, 'Project');
+    const alternate = join(directory, 'project');
+    await mkdir(project);
+    const createdSibling = await mkdir(alternate, { recursive: true });
+    const resolve = vi.fn(async () => undefined);
+    Object.assign(fixture.runtime, { attachmentAccess: { resolve } });
+    for (const identity of [owner, peer]) {
+      fixture.connect(identity.windowId, identity);
+      await fixture.receive(identity.windowId, identity, 'attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots: [{ name: 'Project', canonicalPath: project, uri: pathToFileURL(project).href }],
+        trusted: true,
+      });
+    }
+    await fixture.receive('peer', peer, 'lookup', {
+      type: GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE,
+      lookupId: 'lookup',
+      resource: { path: 'notes.md', uri: pathToFileURL(join(alternate, 'notes.md')).href, folder: false },
+    });
+    if (createdSibling) {
+      expect(resolve).not.toHaveBeenCalled();
+      expect(fixture.events('peer').at(-1)?.event).toMatchObject({
+        type: GlyphHostEventType.ERROR,
+        error: { message: expect.stringContaining('does not belong to the declared workspace path') },
+      });
+    } else {
+      expect(resolve).toHaveBeenCalledWith(
+        { path: 'notes.md', uri: pathToFileURL(join(project, 'notes.md')).href, folder: false },
+        expect.any(AbortSignal),
+      );
+    }
+  });
+
   it('routes peer selections by physical folder and rechecks both aliases before returning a listing', async () => {
     const fixture = new HostFixture();
     onTestFinished(() => fixture.host.dispose());
