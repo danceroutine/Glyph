@@ -176,3 +176,24 @@ impl Mounts for MountTrace {
         Ok(std::mem::take(&mut self.0))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_entry_budget_counts_across_projected_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let request = crate::tests::request(SandboxProfile::ReadOnly, &root, &root.join("state"));
+        std::fs::write(root.join("entry"), "fixture").unwrap();
+        let mut view = WorkspaceView::new(MountTrace::default());
+        view.entries = MAX_WORKSPACE_SCAN_ENTRIES - 1;
+        view.workspace(&root, &request, &[], &[]).unwrap();
+        let error = view.workspace(&root, &request, &[], &[]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Workspace projection exceeds its entry limit."
+        );
+    }
+}

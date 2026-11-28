@@ -31,20 +31,12 @@ impl KernelWorkspace {
         fs::write("/proc/self/setgroups", "deny")?;
         fs::write("/proc/self/uid_map", format!("{uid} {uid} 1\n"))?;
         fs::write("/proc/self/gid_map", format!("{gid} {gid} 1\n"))?;
-        mount_change(
-            "/",
-            MountPropagationFlags::REC | MountPropagationFlags::PRIVATE,
-        )?;
+        let propagation = MountPropagationFlags::REC | MountPropagationFlags::PRIVATE;
+        mount_change("/", propagation)?;
         let scratch = tempfile::Builder::new()
             .prefix("glyph-shell-view-")
             .tempdir_in("/tmp")?;
-        mount(
-            "tmpfs",
-            scratch.path(),
-            "tmpfs",
-            MountFlags::NODEV | MountFlags::NOSUID,
-            c"mode=0700",
-        )?;
+        private_tmpfs(scratch.path())?;
         Ok(scratch.keep())
     }
     fn target(&self, path: &Path) -> PathBuf {
@@ -77,14 +69,7 @@ impl Mounts for &mut KernelWorkspace {
             .join(self.next.to_string());
         self.next += 1;
         fs::create_dir(&self.target)?;
-        mount(
-            "tmpfs",
-            &self.target,
-            "tmpfs",
-            MountFlags::NODEV | MountFlags::NOSUID,
-            c"mode=0700",
-        )?;
-        Ok(())
+        private_tmpfs(&self.target)
     }
     fn directory(&mut self, path: &Path) -> io::Result<()> {
         fs::create_dir(self.target(path))
@@ -96,33 +81,53 @@ impl Mounts for &mut KernelWorkspace {
         let target = self.target(path);
         fs::File::create_new(&target)?;
         mount_bind(format!("/proc/self/fd/{}", fd.as_raw_fd()), &target)?;
-        let source = rustix::fs::fstat(fd)?;
-        let mounted = fs::symlink_metadata(&target)?;
-        if mounted.dev() != source.st_dev || mounted.ino() != source.st_ino || mounted.nlink() != 1
-        {
-            return Err(io::Error::other(
-                "Workspace file changed during sandbox preparation.",
-            ));
-        }
+        verify_file(fd, &target)?;
         if !writable {
-            mount_remount(
-                &target,
-                MountFlags::BIND | MountFlags::RDONLY | MountFlags::NODEV | MountFlags::NOSUID,
-                "",
-            )?;
+            readonly(&target, MountFlags::BIND)?;
         }
         Ok(())
     }
     fn finish(&mut self, root: &Path) -> io::Result<Vec<OsString>> {
-        mount_remount(
-            &self.target,
-            MountFlags::RDONLY | MountFlags::NODEV | MountFlags::NOSUID,
-            "",
-        )?;
+        readonly(&self.target, MountFlags::empty())?;
         Ok(vec![
             "--bind".into(),
             self.target.clone().into(),
             root.into(),
         ])
+    }
+}
+
+fn private_tmpfs(target: &Path) -> io::Result<()> {
+    let flags = MountFlags::NODEV | MountFlags::NOSUID;
+    Ok(mount("tmpfs", target, "tmpfs", flags, c"mode=0700")?)
+}
+fn readonly(target: &Path, extra: MountFlags) -> io::Result<()> {
+    let flags = extra | MountFlags::RDONLY | MountFlags::NODEV | MountFlags::NOSUID;
+    Ok(mount_remount(target, flags, "")?)
+}
+fn verify_file(fd: &OwnedFd, target: &Path) -> io::Result<()> {
+    let source = rustix::fs::fstat(fd)?;
+    let mounted = fs::symlink_metadata(target)?;
+    if mounted.dev() != source.st_dev || mounted.ino() != source.st_ino || mounted.nlink() != 1 {
+        return Err(io::Error::other(
+            "Workspace file changed during sandbox preparation.",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verifies_the_binding_against_the_open_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        let file: OwnedFd = fs::File::create_new(&first).unwrap().into();
+        verify_file(&file, &first).unwrap();
+        fs::write(&second, "different inode").unwrap();
+        assert!(verify_file(&file, &second).is_err());
     }
 }
