@@ -122,7 +122,7 @@ async function pinCredentialHelper(
   value: string,
   directory: string,
   authority: HostExecutionAuthority,
-): Promise<{ command: string; store: boolean }> {
+): Promise<{ path: string; kind?: 'store' | 'cache' }> {
   if (value.startsWith('!') || (!isAbsolute(value) && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(value)))
     throw new Error(
       'Repository preview supports credential helper names or absolute executables without arguments. Inline shell helpers require importing a local package instead.',
@@ -136,9 +136,28 @@ async function pinCredentialHelper(
   const physical = authority.admit(path);
   await access(path, constants.X_OK);
   if (!(await stat(path)).isFile()) throw new Error('A credential helper must be an executable file.');
-  // This is generated from one admitted executable, never from a configuration shell fragment.
-  const command = '!exec ' + shellArgument(path);
-  return { command, store: [path, physical].some(file => /^git-credential-store(?:\.exe)?$/iu.test(basename(file))) };
+  for (const file of [path, physical]) {
+    const name = basename(file)
+      .toLowerCase()
+      .replace(/\.exe$/u, '');
+    if (name === 'git-credential-store') return { path, kind: 'store' };
+    if (name === 'git-credential-cache') return { path, kind: 'cache' };
+  }
+  return { path };
+}
+
+/** Pin Git's account cache once, including a prospective endpoint. The account's existing daemon
+ * belongs to the user. A cache miss during preview must not start a new long-lived service. */
+async function repositoryCacheSocket(home: string, authority: HostExecutionAuthority): Promise<string> {
+  const legacy = join(home, '.git-credential-cache');
+  // Git prefers the legacy directory only when its stat succeeds and reports a directory.
+  const legacyDirectory = await stat(legacy).catch(() => undefined);
+  const configured = process.env.XDG_CACHE_HOME;
+  const xdg = configured && isAbsolute(configured) ? configured : join(home, '.cache');
+  const directory = legacyDirectory?.isDirectory() ? legacy : join(xdg, 'git/credential');
+  const socket = authority.admitSocket(join(directory, 'socket'));
+  await authority.validate();
+  return socket;
 }
 
 /**
@@ -256,6 +275,7 @@ export async function captureRepositoryEnvironment(
   const sources = new Map<string, Set<string>>();
   const entries: Entry[] = [];
   let credentialStore = false;
+  const credentialCaches = new Map<Entry, string>();
   let bytes = 0;
   for (let index = 0; index < records.length; index += 3) {
     const scope = records[index]!;
@@ -306,11 +326,19 @@ export async function captureRepositoryEnvironment(
     }
     if (key.startsWith('credential.') && key.endsWith('.helper') && parsed.value) {
       const helper = await pinCredentialHelper(parsed.value, executionDirectory, authority);
-      credentialStore ||= helper.store;
-      entries.push({ key: parsed.key, value: helper.command });
+      credentialStore ||= helper.kind === 'store';
+      const setting = {
+        key: parsed.key,
+        value: helper.kind === 'cache' ? '!:' : '!exec ' + shellArgument(helper.path),
+      };
+      if (helper.kind === 'cache') credentialCaches.set(setting, helper.path);
+      entries.push(setting);
       continue;
     }
-    if (key === 'credential.helper' && !parsed.value) credentialStore = false;
+    if (key === 'credential.helper' && !parsed.value) {
+      credentialStore = false;
+      credentialCaches.clear();
+    }
     entries.push(parsed);
   }
   const writeConfig = async (entriesToWrite: readonly Entry[]) => {
@@ -371,6 +399,23 @@ export async function captureRepositoryEnvironment(
     env.GIT_SSH_COMMAND = await repositorySshCommand(env, process.env.SSH_AUTH_SOCK, authority);
     env.GIT_ALLOW_PROTOCOL = 'ssh';
   } else if (/^https:\/\//iu.test(remote)) {
+    if (credentialCaches.size > 0) {
+      const socket = shellArgument(await repositoryCacheSocket(home, authority));
+      // Cache clients use their own executable to talk to a live socket. On a stale socket,
+      // Git would launch "git credential-cache--daemon" via PATH. Give this helper no executable
+      // lookup directories. Only an existing account daemon may serve this preview.
+      const noPrograms = shellArgument(nullDevice);
+      env.GIT_CONFIG_GLOBAL = await writeConfig(
+        entries.map(setting => {
+          const helper = credentialCaches.get(setting);
+          if (!helper) return setting;
+          return {
+            key: setting.key,
+            value: `!test -S ${socket} || exit 0; PATH=${noPrograms} GIT_EXEC_PATH=${noPrograms} exec ${shellArgument(helper)} --socket ${socket}`,
+          };
+        }),
+      );
+    }
     authority.admit(join(home, '.netrc'));
     if (process.platform === 'win32') authority.admit(join(home, '_netrc'));
     if (credentialStore) {
