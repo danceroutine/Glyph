@@ -185,12 +185,31 @@ export class GlyphComposerState {
     this.setDocument({ ...document, parts, from, to });
   }
 
-  /** Revalidate context metadata without changing captured text, selection, or queue order. */
-  mapAttachments(map: (attachment: GlyphContextAttachment) => GlyphContextAttachment): void {
+  /** Rebind captures in the current drafts and queue, including edits made while an outline revision is computed. */
+  async mapAttachments(
+    map: (attachment: GlyphContextAttachment) => GlyphContextAttachment | Promise<GlyphContextAttachment>,
+  ): Promise<void> {
+    const mapped = new Map<GlyphContextAttachment, GlyphContextAttachment>();
+    for (;;) {
+      const documents = [this.value.document, ...this.documents, ...this.value.queued.map(message => message.document)];
+      const pending = new Set(
+        documents.flatMap(document =>
+          document.parts.flatMap(part =>
+            part.type === 'attachment' && !mapped.has(part.attachment) ? [part.attachment] : [],
+          ),
+        ),
+      );
+      if (pending.size === 0) break;
+      await Promise.all(
+        [...pending].map(async attachment => {
+          mapped.set(attachment, await map(attachment));
+        }),
+      );
+    }
     const transform = (document: GlyphPromptDocument): GlyphPromptDocument => ({
       ...document,
       parts: document.parts.map(part =>
-        part.type === 'attachment' ? { ...part, attachment: map(part.attachment) } : part,
+        part.type === 'attachment' ? { ...part, attachment: mapped.get(part.attachment)! } : part,
       ),
     });
     this.documents = this.documents.map(transform);

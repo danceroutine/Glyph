@@ -39,3 +39,11 @@ export function formatFolderContextOutline(paths: readonly string[], truncated =
 export function formatFolderAttachment(path: string, files: readonly string[], truncated: boolean): string {
   return `Directory tree: ${path}\n(Search-visible paths; file contents are not included.)\n\n${formatFolderContextOutline(files, truncated)}`;
 }
+
+/** Move only the directory heading of a captured outline to its current workspace route. */
+export function rebindFolderAttachmentText(text: string, previousPath: string, path: string): string {
+  const heading = 'Directory tree: ' + previousPath + '\n';
+  return previousPath !== path && text.startsWith(heading)
+    ? 'Directory tree: ' + path + '\n' + text.slice(heading.length)
+    : text;
+}
