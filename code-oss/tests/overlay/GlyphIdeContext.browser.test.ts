@@ -381,6 +381,20 @@ describe(GlyphIdeContext, () => {
   });
 
   describe('related symbols', () => {
+    it('asks the user to reselect code edited while file admission was pending', async () => {
+      const services = ideServices();
+      const model = services.model(URI.file('/workspace/a.ts'), 'alpha');
+      services.languages.definitionProvider.has.mockReturnValue(true);
+      services.choices.push('Related symbols');
+      services.resolveResource.mockImplementationOnce(async () => {
+        model.setValue('beta');
+      });
+      await expect(createIdeContext(services).select(editorOf(model, new Range(1, 1, 1, 6)))).rejects.toMatchObject({
+        code: GlyphDesktopErrorCode.STALE_DOCUMENT,
+      });
+      expect(services.languages.definitionProvider.ordered).not.toHaveBeenCalled();
+    });
+
     it('captures definitions and references of the selected code', async () => {
       const services = ideServices();
       const model = services.model(URI.file('/workspace/a.ts'), 'alpha beta\nsecond line');
@@ -738,6 +752,19 @@ describe(GlyphIdeContext, () => {
   });
 
   describe(GlyphIdeContext.prototype.captureDiff, () => {
+    it('rejects a Git submodule comparison outside its recorded parent repository', async () => {
+      const services = ideServices();
+      const selected = URI.file('/workspace/sub');
+      const before = selected.with({
+        scheme: 'git',
+        query: JSON.stringify({ path: selected.fsPath, submoduleOf: '/workspace/other', ref: 'HEAD' }),
+      });
+      await expect(createIdeContext(services).captureDiff(selected, before, undefined, 'HEAD')).rejects.toThrow(
+        'The submodule is outside the selected repository.',
+      );
+      expect(services.resolver.createModelReference).not.toHaveBeenCalled();
+    });
+
     it('checks the original name in the Git provider query before loading the comparison or reporting its contents', async () => {
       const services = ideServices();
       const selected = URI.file('/workspace/a.ts');
@@ -766,9 +793,10 @@ describe(GlyphIdeContext, () => {
         after.uri,
         'HEAD → index',
         captured,
+        true,
       );
       expect(captured).toHaveBeenCalledWith('', 'one\ntwo\n');
-      expect(attachment).toMatchObject({ uri: 'file:///workspace/a.ts', path: 'a.ts' });
+      expect(attachment).toMatchObject({ uri: 'file:///workspace/a.ts', path: 'a.ts', projectFile: true });
       expect(attachment.text).toContain('Base URI: /dev/null');
       expect(attachment.text).toContain('--- /dev/null\n+++ a.ts\n@@ -0,0 +1,2 @@\n+one\n+two\n');
     });
