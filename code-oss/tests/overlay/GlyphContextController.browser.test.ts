@@ -1708,7 +1708,7 @@ describe(GlyphContextController, () => {
     expect(await controller.checkAttachment(attachment)).toContain('unavailable');
     await expect(controller.refreshAttachment(attachment)).rejects.toThrow('unavailable');
     services.instructionSources.push(rule);
-    expect(controller.rebindAttachment(attachment)).toEqual(attachment);
+    expect(await controller.rebindAttachment(attachment)).toEqual(attachment);
     const { ruleId: _ruleId, ...legacy } = attachment;
     expect(await controller.checkAttachment(legacy)).toContain('instructions changed');
     expect((await controller.refreshAttachment(legacy)).contentRevision).toBe('new');

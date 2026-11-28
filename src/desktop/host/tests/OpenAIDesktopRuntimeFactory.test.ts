@@ -2397,7 +2397,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(retain.mock.calls[0]?.[0]).toBe('file.txt');
       const disclosure = retain.mock.calls[0]![1] as WorkspaceDisclosure;
       (await disclosure.authorize(signal))();
-      await renameDirectory(join(roots[0]!, 'file.txt'), join(roots[0]!, 'moved.txt'));
+      await rename(join(roots[0]!, 'file.txt'), join(roots[0]!, 'moved.txt'));
       await expect(disclosure.authorize(signal)).rejects.toThrow();
       expect(request).toHaveBeenLastCalledWith(
         factoryIdentity,
