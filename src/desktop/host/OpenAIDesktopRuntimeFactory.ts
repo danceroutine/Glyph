@@ -255,8 +255,10 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 ? request.mutation.target
                 : undefined;
             const validateEndpoints = async () => {
-              if (path !== undefined && path !== '')
-                await admitted.validateAccess(path, backed ? undefined : retainFile);
+              if (path !== undefined && path !== '') {
+                if (retainFile && !backed) await admitted.validateAccess(path, retainFile);
+                else await admitted.validateAccess(path);
+              }
               if (target) await admitted.validateAccess(target);
             };
             if (request.type === GlyphEditorRequestType.EXISTS) await admitted.exists(request.path);
