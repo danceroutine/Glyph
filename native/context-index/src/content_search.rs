@@ -63,6 +63,8 @@ pub(crate) struct ContentSearchParams {
     pub(crate) offset: u32,
     #[serde(default)]
     pub(crate) overrides: BTreeMap<String, String>,
+    #[serde(default)]
+    pub(crate) include_source_identity: bool,
 }
 
 impl ContentSearchParams {
@@ -166,11 +168,11 @@ pub(crate) struct ContentSearchContext {
 /// Reads a catalog-relative file under the workspace's content access policy.
 /// Editor overrides are applied by the search operation before consulting disk.
 trait SearchableFiles: Sync {
-    fn read(&self, path: &str) -> Result<String, ()>;
+    fn read(&self, path: &str) -> Result<(String, Option<String>), ()>;
 }
 
 impl SearchableFiles for ContentSearchContext {
-    fn read(&self, path: &str) -> Result<String, ()> {
+    fn read(&self, path: &str) -> Result<(String, Option<String>), ()> {
         read_searchable_file(&self.root, path, self.max_file_bytes, &self.access)
     }
 }
@@ -315,20 +317,22 @@ impl ContentSearchContext {
                                 if text.len() as u64 > self.max_file_bytes || text.contains('\0') {
                                     Err(())
                                 } else {
-                                    Ok(text.clone())
+                                    Ok((text.clone(), None))
                                 }
                             },
                         ) {
-                            Ok(text) => {
+                            Ok((text, identity)) => {
                                 searched_files.fetch_add(1, Ordering::AcqRel);
-                                search_file(
+                                let mut outcome = search_file(
                                     path,
                                     &text,
                                     &matcher,
                                     params,
                                     target_entries,
                                     cancelled,
-                                )
+                                );
+                                outcome.identity = identity;
+                                outcome
                             }
                             Err(()) => {
                                 skipped_files.fetch_add(1, Ordering::AcqRel);
@@ -417,6 +421,8 @@ pub(crate) struct SearchMetadata {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ContentMatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_identity: Option<String>,
     path: String,
     line: u32,
     column: u32,
@@ -486,13 +492,19 @@ impl<'a> ResultAccumulator<'a> {
                         end,
                         self.params,
                     );
+                    let bytes = bytes
+                        + if self.params.include_source_identity {
+                            outcome.identity.as_ref().map_or(0, |id| id.len() + 20)
+                        } else {
+                            0
+                        };
                     if self.content_bytes + bytes > MAX_RESULT_TEXT_BYTES - RESULT_JSON_OVERHEAD {
                         self.has_more = true;
                         return true;
                     }
                     self.content_bytes += bytes;
                     self.seen_entries += 1;
-                    let found = content_match(
+                    let mut found = content_match(
                         &outcome.path,
                         &outcome.text,
                         &outcome.lines,
@@ -500,6 +512,9 @@ impl<'a> ResultAccumulator<'a> {
                         end,
                         self.params,
                     );
+                    if self.params.include_source_identity {
+                        found.source_identity.clone_from(&outcome.identity);
+                    }
                     debug_assert!(serde_json::to_vec(&found).unwrap().len() <= bytes);
                     self.matches.push(found);
                 }
@@ -580,6 +595,7 @@ impl<'a> ResultAccumulator<'a> {
 }
 
 struct FileOutcome {
+    identity: Option<String>,
     path: String,
     text: String,
     lines: Vec<LineRange>,
@@ -591,6 +607,7 @@ struct FileOutcome {
 impl FileOutcome {
     fn empty(path: &str) -> Self {
         Self {
+            identity: None,
             path: path.to_owned(),
             text: String::new(),
             lines: Vec::new(),
@@ -676,7 +693,7 @@ fn read_searchable_file(
     relative: &str,
     max_file_bytes: u64,
     access: &WorkspacePaths,
-) -> Result<String, ()> {
+) -> Result<(String, Option<String>), ()> {
     let candidate = root.join(relative);
     let link = fs::symlink_metadata(&candidate).map_err(|_| ())?;
     if !link.is_file() || link.file_type().is_symlink() || link.len() > max_file_bytes {
@@ -699,7 +716,7 @@ fn read_searchable_file(
     access.assert_path(&canonical, identity).map_err(|_| ())?;
     let text = open_searchable_file(&canonical, &link, max_file_bytes)?;
     access.assert_path(&canonical, identity).map_err(|_| ())?;
-    Ok(text)
+    Ok((text, identity.map(|(dev, ino)| format!("{dev}:{ino}"))))
 }
 
 fn open_searchable_file(
@@ -812,6 +829,7 @@ fn search_file(
         }
     }
     FileOutcome {
+        identity: None,
         path: path.to_owned(),
         text: if ranges.is_empty() {
             String::new()
@@ -869,6 +887,7 @@ fn content_match(
     let before_start = start_line.saturating_sub(params.lines_before as usize);
     let after_end = (end_line + params.lines_after as usize + 1).min(lines.len());
     ContentMatch {
+        source_identity: None,
         path: path.to_owned(),
         line: start_line as u32 + 1,
         column: start_column as u32,
