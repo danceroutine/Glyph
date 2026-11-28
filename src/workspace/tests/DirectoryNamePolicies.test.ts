@@ -18,6 +18,16 @@ function directory() {
   return root;
 }
 
+function simulateMountedVolume(mounted: string) {
+  const stat = fs.statSync;
+  vi.spyOn(fs, 'statSync').mockImplementation(((path: string, options: fs.StatSyncOptions) => {
+    const info = stat(path, options);
+    if (info && (path === mounted || path.startsWith(mounted + '/')))
+      Object.assign(info, { dev: typeof info.dev === 'bigint' ? info.dev + 1n : info.dev + 1 });
+    return info;
+  }) as typeof fs.statSync);
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true });
@@ -70,6 +80,31 @@ it('rechecks directory identities across event-loop turns and shares probes for 
   expect(read).toHaveBeenCalledTimes(2);
 });
 
+it('shares a mount’s filename policy across siblings and probes again when the mount is replaced', async () => {
+  const root = directory();
+  const mounted = join(root, 'mounted');
+  const first = join(mounted, 'first');
+  const second = join(mounted, 'second');
+  mkdirSync(first, { recursive: true });
+  mkdirSync(second);
+  simulateMountedVolume(mounted);
+  const read = vi.fn((parents: readonly string[]) => parents.map(() => insensitive));
+  const policies = new DirectoryNamePolicies(read, true);
+  policies.remember(root, sensitive);
+  expect(policies.get(first)).toBe(insensitive);
+  expect(policies.get(second)).toBe(insensitive);
+  expect(policies.get(root)).toBe(sensitive);
+  expect(read).toHaveBeenCalledExactlyOnceWith([first]);
+
+  fs.renameSync(mounted, join(root, 'original'));
+  mkdirSync(mounted);
+  await Promise.resolve();
+  read.mockReturnValueOnce([sensitive]);
+  expect(policies.get(mounted)).toBe(sensitive);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(read).toHaveBeenLastCalledWith([mounted]);
+});
+
 it.each([false, true])(
   'matches every literal and wildcard on its containing volume when the outer volume is sensitive=%s',
   outerSensitive => {
@@ -77,13 +112,7 @@ it.each([false, true])(
     const mounted = join(root, 'mounted');
     mkdirSync(join(mounted, 'Docs'), { recursive: true });
     writeFileSync(join(mounted, 'Docs/readme.ts'), '');
-    const stat = fs.statSync;
-    vi.spyOn(fs, 'statSync').mockImplementation(((path: string, options: fs.StatSyncOptions) => {
-      const info = stat(path, options);
-      if (info && (path === mounted || path.startsWith(mounted + '/')))
-        Object.assign(info, { dev: BigInt(info.dev) + 1n });
-      return info;
-    }) as typeof fs.statSync);
+    simulateMountedVolume(mounted);
     const outer = outerSensitive ? sensitive : insensitive;
     const inner = outerSensitive ? insensitive : sensitive;
     const read = vi.fn((parents: readonly string[]) => parents.map(() => inner));
