@@ -76,6 +76,8 @@ fn inspect_host_paths() -> std::io::Result<()> {
     struct Request {
         paths: Vec<std::path::PathBuf>,
         workspace_roots: Vec<std::path::PathBuf>,
+        #[serde(default)]
+        sockets: Vec<std::path::PathBuf>,
     }
     const FRAME_LIMIT: u64 = 2 * 1024 * 1024;
     let mut frame = Vec::new();
@@ -86,7 +88,11 @@ fn inspect_host_paths() -> std::io::Result<()> {
         return Err(std::io::Error::other("Host authority frame is too large."));
     }
     let request: Request = serde_json::from_slice(&frame)?;
-    glyph_filesystem_metadata::assert_host_paths(&request.paths, &request.workspace_roots)?;
+    glyph_filesystem_metadata::assert_host_paths_with_sockets(
+        &request.paths,
+        &request.workspace_roots,
+        &request.sockets,
+    )?;
     println!("verified");
     Ok(())
 }

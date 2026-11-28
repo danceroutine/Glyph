@@ -23,7 +23,7 @@ it('keeps repository helpers outside writable projects and omits process-startup
     expect(env.PATH).not.toContain(project);
     expect(env).not.toHaveProperty('GIT_EXEC_PATH');
     expect(env).not.toHaveProperty('LD_PRELOAD');
-    expect(env.SSH_AUTH_SOCK).toBe(join(home, 'socket'));
+    expect(env.SSH_AUTH_SOCK).toBeUndefined();
     expect(trustedHostExecutable('git', [project])).toMatch(/^\//u);
     expect(trustedHostExecutable('sh', [project])).toBe(realpathSync('/bin/sh'));
     expect(trustedHostExecutable('node', [project])).toBe(realpathSync(process.execPath));

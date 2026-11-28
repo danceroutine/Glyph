@@ -1,5 +1,5 @@
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
-import { chmod, mkdir, mkdtemp, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile, readFile, rm, symlink, realpath, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -82,6 +82,7 @@ it.each([
   'nested object link',
   'config include',
   'not a repository',
+  'empty directory',
   'invalid refs',
 ] as const)('checks the %s repository layout before local transport or subsequent object reads', async layout => {
   const base = await fixture();
@@ -104,6 +105,9 @@ it.each([
     await rm(mirror, { recursive: true });
     await writeFile(mirror, 'not a directory');
     await expect(list()).rejects.toThrow('self-contained repository');
+  } else if (layout === 'empty directory') {
+    await rm(gitDir, { recursive: true });
+    await expect(list()).rejects.toThrow('does not contain a repository');
   } else if (layout === 'invalid refs') {
     await rm(join(gitDir, 'refs'), { recursive: true });
     await writeFile(join(gitDir, 'refs'), 'not a directory');
@@ -197,6 +201,7 @@ it.skipIf(process.platform === 'win32').each(['credential helper', 'mirror'])(
     await writeFile(helper, '#!/bin/sh\nexit 0\n');
     await chmod(helper, 0o700);
     const url = 'https://example.invalid/selected.git';
+    if (input === 'mirror') execFileSync('git', ['init', '--bare', '--quiet', '--template=', helpers]);
     const configuration =
       input === 'mirror'
         ? `[url "${pathToFileURL(helpers).href}"]\ninsteadOf = ${url}\n`
@@ -286,4 +291,37 @@ it('freezes URL-selected settings after recording the remote and before using tr
   expect((await name()).toString().trim()).toBe('Selected remote identity');
   await writeFile(included, '[user]\nname = Changed after capture\n');
   expect((await name()).toString().trim()).toBe('Selected remote identity');
+});
+
+it('pins a primary checkout as the transport source while a peer owns its distinct bare sibling', async () => {
+  const base = await fixture();
+  const preview = join(base, 'preview');
+  const checkout = join(base, 'skills');
+  const sibling = checkout + '.git';
+  await mkdir(preview);
+  execFileSync('git', ['init', '--quiet', '--template=', checkout]);
+  execFileSync('git', ['init', '--bare', '--quiet', '--template=', sibling]);
+  const url = 'https://example.invalid/primary.git';
+  await writeFile(
+    join(base, 'trusted.config'),
+    [
+      `[url "${pathToFileURL(checkout).href}"]`,
+      `insteadOf = ${url}`,
+      `[url "${pathToFileURL(sibling).href}"]`,
+      `pushInsteadOf = ${url}`,
+      '[user]',
+      'name = Trusted identity',
+    ].join('\n'),
+  );
+  const transport = new SkillRepositoryGit(preview, new AbortController().signal, [sibling], testFilesystemMetadata);
+  await transport.initialize(url);
+  const run = (...args: string[]) => transport.run(['--git-dir=source.git', ...args]);
+  expect(await run('ls-remote', 'origin')).toEqual(Buffer.alloc(0));
+  const selected = await realpath(join(checkout, '.git'));
+  expect((await run('remote', 'get-url', 'origin')).toString().trim()).toBe(pathToFileURL(selected).href);
+  expect((await run('remote', 'get-url', '--push', 'origin')).toString().trim()).toBe(pathToFileURL(selected).href);
+  expect((await run('config', '--get', 'user.name')).toString().trim()).toBe('Trusted identity');
+  expect((await run('config', '--get', 'remote.origin.uploadpack')).toString().trim()).toBe('git-upload-pack --strict');
+  await rename(selected, join(base, 'moved'));
+  await expect(run('ls-remote', 'origin')).rejects.toThrow('selected Git mirror is no longer available');
 });

@@ -5,7 +5,7 @@ mod host_paths;
 #[cfg(target_os = "linux")]
 pub mod mount_table;
 pub mod workspace_paths;
-pub use host_paths::assert_host_paths;
+pub use host_paths::{assert_host_paths, assert_host_paths_with_sockets};
 use std::io;
 use std::path::Path;
 

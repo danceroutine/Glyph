@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { open } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
-import { access, constants, stat } from 'node:fs/promises';
+import { access, constants, open, stat } from 'node:fs/promises';
+import { isAbsolute, join, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { userInfo } from 'node:os';
 import { assertNetworkProxy, repositoryEnvironment } from '#src/shell/TrustedHostExecutable.js';
 import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
 import { readHostFile } from './readHostFile.ts';
@@ -92,11 +93,12 @@ export async function captureRepositoryEnvironment(
   metadata: FilesystemMetadata & HostFilesystemAuthority,
   gitDirectory?: string,
   authority = new HostExecutionAuthority(roots, metadata),
+  selectLocalMirror?: (path: string, environment: NodeJS.ProcessEnv) => Promise<string>,
 ): Promise<NodeJS.ProcessEnv> {
   const environment = repositoryEnvironment(authority.workspaceRoots);
   const executable = authority.executable('git');
   authority.admit(cwd);
-  const readGit = (args: string[], maxBuffer: number, input?: Buffer) =>
+  const readGit = (args: string[], maxBuffer: number, input?: Buffer, env = environment) =>
     authority.run(
       signal,
       processSignal =>
@@ -106,7 +108,7 @@ export async function captureRepositoryEnvironment(
           const child = execFile(
             executable,
             args,
-            { cwd, env: environment, signal: processSignal, timeout: 5000, maxBuffer, encoding: 'buffer' },
+            { cwd, env, signal: processSignal, timeout: 5000, maxBuffer, encoding: 'buffer' },
             (error, bytes) => {
               failure ??= error;
               output = bytes;
@@ -195,42 +197,138 @@ export async function captureRepositoryEnvironment(
     }
     if (!(key === 'include.path' || (key.startsWith('includeif.') && key.endsWith('.path')))) entries.push(parsed);
   }
-  const text = entries
-    .map(({ key, value }) => {
-      const first = key.indexOf('.'),
-        last = key.lastIndexOf('.');
-      const section = key.slice(0, first);
-      // Git subsection names escape only quotes and backslashes. Tabs and backspaces remain literal.
-      const subsection = first === last ? '' : ' "' + key.slice(first + 1, last).replaceAll(/[\\"]/gu, '\\$&') + '"';
-      return `[${section}${subsection}]\n\t${key.slice(last + 1)}${value === undefined ? '' : ' = ' + quote(value)}\n`;
-    })
-    .join('');
-  if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('Git configuration exceeds its capture budget.');
-  const path = join(cwd, `glyph-host-${randomUUID()}.gitconfig`);
-  const handle = await open(path, 'wx', 0o600);
-  try {
-    await metadata.inspect(handle, 'access');
-    await handle.writeFile(text);
-    await handle.chmod(0o400);
-  } finally {
-    await handle.close();
-  }
-  authority.admit(path);
-  const ssh = await authority.optionalExecutable('ssh');
-  await authority.validate();
-  return {
+  const writeConfig = async (entriesToWrite: readonly Entry[]) => {
+    const text = entriesToWrite
+      .map(({ key, value }) => {
+        const first = key.indexOf('.'),
+          last = key.lastIndexOf('.');
+        const section = key.slice(0, first);
+        // Git subsection names escape only quotes and backslashes. Tabs and backspaces remain literal.
+        const subsection = first === last ? '' : ' "' + key.slice(first + 1, last).replaceAll(/[\\"]/gu, '\\$&') + '"';
+        return `[${section}${subsection}]\n\t${key.slice(last + 1)}${value === undefined ? '' : ' = ' + quote(value)}\n`;
+      })
+      .join('');
+    if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('Git configuration exceeds its capture budget.');
+    const path = join(cwd, `glyph-host-${randomUUID()}.gitconfig`);
+    const handle = await open(path, 'wx', 0o600);
+    try {
+      await metadata.inspect(handle, 'access');
+      await handle.writeFile(text);
+      await handle.chmod(0o400);
+    } finally {
+      await handle.close();
+    }
+    authority.admit(path);
+    return path;
+  };
+  const env: NodeJS.ProcessEnv = {
     ...environment,
-    GIT_CONFIG_GLOBAL: path,
+    GIT_CONFIG_GLOBAL: await writeConfig(entries),
     GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
-    // SSH config may itself contain executable ProxyCommand/LocalCommand directives.
-    // Use the admitted system client with its default keys/agent and no command-bearing config.
-    ...(ssh
-      ? {
-          GIT_ALLOW_PROTOCOL: 'https:ssh:file',
-          GIT_SSH_COMMAND:
-            "'" + ssh.replaceAll("'", "'\\''") + "' -F " + (process.platform === 'win32' ? 'NUL' : '/dev/null'),
-        }
-      : {}),
   };
+  await authority.validate();
+  if (!gitDirectory || !selectLocalMirror) return env;
+  const repo = '--git-dir=' + gitDirectory;
+  const effective = await readGit([repo, 'remote', 'get-url', 'origin'], 64 * 1024, undefined, env);
+  const remote = new TextDecoder('utf-8', { fatal: true }).decode(effective).replace(/\n$/u, '');
+  const mirror = localMirrorPath(remote);
+  if (mirror) {
+    const directory = await selectLocalMirror(mirror, env);
+    const pinned = pathToFileURL(directory).href;
+    localMirrorPath(pinned);
+    // The user's rules have selected the mirror. The private remote now uses its exact Git directory,
+    // including for promisor fetches. Keep other captured settings and disable further URL rewrites.
+    env.GIT_CONFIG_GLOBAL = await writeConfig(
+      entries.filter(setting => {
+        const key = setting.key.toLowerCase();
+        return (
+          key !== 'remote.origin.url' &&
+          !(key.startsWith('url.') && (key.endsWith('.insteadof') || key.endsWith('.pushinsteadof')))
+        );
+      }),
+    );
+    env.GIT_ALLOW_PROTOCOL = 'file';
+    await readGit([repo, 'config', '--local', '--replace-all', 'remote.origin.url', pinned], 64 * 1024, undefined, env);
+    await readGit(
+      [repo, 'config', '--local', 'remote.origin.uploadpack', 'git-upload-pack --strict'],
+      64 * 1024,
+      undefined,
+      env,
+    );
+  } else if (/^(?:(?:ssh|git\+ssh|ssh\+git):\/\/|[^/]+:(?!\/\/))/iu.test(remote)) {
+    env.GIT_SSH_COMMAND = await repositorySshCommand(env, process.env.SSH_AUTH_SOCK, authority);
+    env.GIT_ALLOW_PROTOCOL = 'ssh';
+  }
+  return env;
+}
+
+/** OpenSSH receives explicit authentication paths only for an effective SSH remote.
+ * The executable, keys, certificates, host-key databases and agent socket share its process lease. */
+async function repositorySshCommand(
+  env: NodeJS.ProcessEnv,
+  agentSocket: string | undefined,
+  authority: HostExecutionAuthority,
+): Promise<string> {
+  const ssh = authority.executable('ssh');
+  const home = userInfo().homedir;
+  const directory = join(home, '.ssh');
+  const admitFile = (path: string) => {
+    // OpenSSH expands tokens and environment references in path-valued options.
+    if (path.includes('${') || /[\r\n\0]/u.test(path))
+      throw new Error('SSH authentication paths must be representable as literal OpenSSH file names.');
+    authority.admit(path);
+    return '"' + path.replaceAll('%', '%%').replaceAll(/[\\"]/gu, '\\$&') + '"';
+  };
+  const args = [
+    ssh,
+    '-F',
+    env.GIT_CONFIG_SYSTEM!,
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    'StrictHostKeyChecking=yes',
+    '-o',
+    'UpdateHostKeys=no',
+  ];
+  for (const name of ['id_rsa', 'id_ecdsa', 'id_ecdsa_sk', 'id_ed25519', 'id_ed25519_sk', 'id_dsa', 'id_xmss']) {
+    const path = join(directory, name);
+    authority.admit(path + '.pub');
+    authority.admit(path + '-cert.pub');
+    args.push('-o', 'IdentityFile=' + admitFile(path));
+  }
+  const knownHosts = [join(directory, 'known_hosts'), join(directory, 'known_hosts2')].map(path => admitFile(path));
+  const system = process.platform === 'win32' ? join(process.env.ProgramData ?? 'C:\\ProgramData', 'ssh') : '/etc/ssh';
+  const globalHosts = [join(system, 'ssh_known_hosts'), join(system, 'ssh_known_hosts2')].map(path => admitFile(path));
+  args.push('-o', 'UserKnownHostsFile=' + knownHosts.join(' '), '-o', 'GlobalKnownHostsFile=' + globalHosts.join(' '));
+  if (agentSocket) {
+    if (!isAbsolute(agentSocket)) throw new Error('SSH authentication agents require an absolute socket path.');
+    env.SSH_AUTH_SOCK = authority.admitSocket(agentSocket);
+    args.push('-o', 'IdentityAgent=SSH_AUTH_SOCK');
+  } else {
+    args.push('-o', 'IdentityAgent=none');
+  }
+  await authority.validate();
+  return args.map(value => "'" + value.replaceAll("'", "'\\''") + "'").join(' ');
+}
+
+/** Git accepts local paths and file URLs as fetch transports. Require an unambiguous absolute mirror location. */
+function localMirrorPath(remote: string): string | undefined {
+  const invalid = new Error('Local Git mirrors require an absolute repository path or local file URL.');
+  if (!remote || /[\u0000-\u001F\u007F]/u.test(remote)) throw invalid;
+  let path = remote;
+  if (remote.startsWith('file://')) {
+    // Git decodes URL escapes before interpreting the path. Reject forms whose URL and filesystem
+    // interpretations differ, including home-directory expansion and traversing beyond a linked parent.
+    if (!/^file:\/\/(?:localhost)?\//u.test(remote) || /[?#\\]/u.test(remote)) throw invalid;
+    const decoded = decodeURIComponent(remote.slice(remote.indexOf('/', 'file://'.length)));
+    if (decoded.startsWith('/~') || decoded.split('/').includes('..') || decoded.includes('\0')) throw invalid;
+    path = fileURLToPath(remote);
+  } else if (!isAbsolute(path)) {
+    // All remaining network transports are still subject to Git's explicit protocol allowlist.
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//u.test(remote) || /^[^/]+:/u.test(remote)) return undefined;
+    throw invalid;
+  }
+  if (path.replaceAll(sep, '/').split('/').includes('..')) throw invalid;
+  return path;
 }

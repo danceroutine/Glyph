@@ -3,7 +3,11 @@ use std::io;
 use std::path::PathBuf;
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub fn assert_host_paths(_: &[PathBuf], _: &[PathBuf]) -> io::Result<()> {
+pub fn assert_host_paths_with_sockets(
+    _: &[PathBuf],
+    _: &[PathBuf],
+    _: &[PathBuf],
+) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "Host filesystem identity is unavailable.",
@@ -11,7 +15,11 @@ pub fn assert_host_paths(_: &[PathBuf], _: &[PathBuf]) -> io::Result<()> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-pub use unix::assert_host_paths;
+pub use unix::assert_host_paths_with_sockets;
+
+pub fn assert_host_paths(paths: &[PathBuf], workspace_roots: &[PathBuf]) -> io::Result<()> {
+    assert_host_paths_with_sockets(paths, workspace_roots, &[])
+}
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod unix {
@@ -19,7 +27,7 @@ mod unix {
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
     use std::ffi::OsString;
     use std::fs;
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
     use std::path::{Component, Path};
 
     fn denied() -> io::Error {
@@ -62,7 +70,7 @@ mod unix {
         directory: bool,
     }
 
-    fn resolve(path: &Path, host: bool) -> io::Result<Location> {
+    fn resolve(path: &Path, host: bool, socket: bool) -> io::Result<Location> {
         if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
             return Err(denied());
         }
@@ -96,7 +104,10 @@ mod unix {
                 for part in target.components().rev() {
                     remaining.push_front(part.as_os_str().to_owned());
                 }
-            } else if !meta.is_dir() && (!meta.is_file() || !remaining.is_empty()) {
+            } else if !meta.is_dir()
+                && !(remaining.is_empty()
+                    && (meta.is_file() || (socket && meta.file_type().is_socket())))
+            {
                 return Err(denied());
             }
         }
@@ -112,10 +123,13 @@ mod unix {
         // A reserved future location may become a directory while its host lease is active.
         let directory = final_meta.as_ref().is_none_or(fs::Metadata::is_dir);
         if let Some(meta) = final_meta {
+            if socket && !meta.file_type().is_socket() {
+                return Err(denied());
+            }
             // A regular hard link can also be present under a workspace without any mount record.
             // Non-writable system multicall binaries legitimately have several installation names.
             if host
-                && meta.is_file()
+                && (meta.is_file() || socket)
                 && meta.nlink() > 1
                 && writable_link(
                     meta.uid(),
@@ -135,14 +149,18 @@ mod unix {
         })
     }
 
-    pub fn assert_host_paths(paths: &[PathBuf], workspace_roots: &[PathBuf]) -> io::Result<()> {
+    pub fn assert_host_paths_with_sockets(
+        paths: &[PathBuf],
+        workspace_roots: &[PathBuf],
+        sockets: &[PathBuf],
+    ) -> io::Result<()> {
         let hosts = paths
             .iter()
-            .map(|p| resolve(p, true))
+            .map(|p| resolve(p, true, sockets.contains(p)))
             .collect::<io::Result<Vec<_>>>()?;
         let roots = workspace_roots
             .iter()
-            .map(|p| resolve(p, false))
+            .map(|p| resolve(p, false, false))
             .collect::<io::Result<Vec<_>>>()?;
         #[cfg(target_os = "linux")]
         let bytes = fs::read("/proc/self/mountinfo")?;
@@ -188,6 +206,29 @@ mod unix {
     mod tests {
         use super::*;
         use std::os::unix::fs::symlink;
+        #[test]
+        fn admits_the_agent_socket_only_for_a_socket_input_outside_the_workspace() {
+            use std::os::unix::net::UnixListener;
+            let dir = tempfile::tempdir_in("/tmp").unwrap();
+            let base = dir.path().canonicalize().unwrap();
+            let socket = base.join("agent");
+            let _listener = UnixListener::bind(&socket).unwrap();
+            let file = base.join("key");
+            fs::write(&file, "").unwrap();
+            let route = base.join("socket-link");
+            symlink(&socket, &route).unwrap();
+            for name in [&socket, &route] {
+                let input = std::slice::from_ref(name);
+                assert_host_paths_with_sockets(input, &[], input).unwrap();
+                assert!(assert_host_paths(input, &[]).is_err());
+                assert!(
+                    assert_host_paths_with_sockets(input, std::slice::from_ref(&base), input)
+                        .is_err()
+                );
+            }
+            let input = std::slice::from_ref(&file);
+            assert!(assert_host_paths_with_sockets(input, &[], input).is_err());
+        }
         #[test]
         fn admits_only_paths_whose_resolution_stays_on_the_host() {
             let dir = tempfile::tempdir().unwrap();

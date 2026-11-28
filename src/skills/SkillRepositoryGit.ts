@@ -6,8 +6,7 @@ import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 import { spawn } from 'node:child_process';
 import { readdir, lstat, opendir } from 'node:fs/promises';
-import { isAbsolute, join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve as resolvePath } from 'node:path';
 
 const maxStorage = 32 * 1024 * 1024;
 async function storageBytes(root: string): Promise<number> {
@@ -106,79 +105,75 @@ export class SkillRepositoryGit {
   }
 
   private async captureEnvironment(): Promise<NodeJS.ProcessEnv> {
-    const gitDirectory = this.gitDirectory;
-    const environment = await captureRepositoryEnvironment(
+    return captureRepositoryEnvironment(
       this.authority.workspaceRoots,
       this.cwd,
       this.signal,
       this.metadata,
-      gitDirectory,
+      this.gitDirectory,
       this.authority,
+      async (path, environment) => {
+        this.localMirror = await this.selectLocalMirror(path, environment);
+        return this.localMirror;
+      },
     );
-    const networkProtocols =
-      environment.GIT_ALLOW_PROTOCOL?.split(':')
-        .filter(protocol => protocol !== 'file')
-        .join(':') ?? 'https';
-    if (!gitDirectory) return { ...environment, GIT_ALLOW_PROTOCOL: networkProtocols };
-    // Resolve the selected mirror with Git's own insteadOf rules from the frozen configuration.
-    // remote get-url is local metadata only. No transport opens until the next leased launch.
-    const bytes = await this.execute(
-      ['--git-dir=' + gitDirectory, 'remote', 'get-url', 'origin'],
-      64 * 1024,
-      environment,
-    );
-    const remote = new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/\n$/u, '');
-    const path = localMirrorPath(remote);
-    if (!path) return { ...environment, GIT_ALLOW_PROTOCOL: networkProtocols };
-    this.localMirror = path;
-    return environment;
   }
 
-  /** Enroll the lookup paths used by upload-pack before inspecting their layout. A plain checkout
-   * owns its .git directory and a bare mirror owns its root. Gitfiles, common directories and
-   * alternate object databases can select storage outside either tree. Decline these layouts
-   * before every transport or lazy object read, even if they appeared after the initial fetch. */
-  private async checkLocalMirror(path: string, env: NodeJS.ProcessEnv): Promise<void> {
-    const base = resolve(path);
-    const suffixed = base + '.git';
-    const candidates = [join(base, '.git'), base, join(suffixed, '.git'), suffixed];
-    this.authority.admit(base);
-    this.authority.admit(suffixed);
-    await this.authority.validate();
-    for (const candidate of candidates) {
-      const entry = await lstat(candidate).catch(missingMirrorEntry);
-      if (!entry) continue;
-      const directory = this.authority.admit(candidate);
+  /** Follow Git's local lookup order once. All subsequent fetches use the selected absolute Git directory. */
+  private async selectLocalMirror(path: string, env: NodeJS.ProcessEnv): Promise<string> {
+    const base = resolvePath(path);
+    for (const location of [base, base + '.git']) {
+      this.authority.admit(location);
       await this.authority.validate();
-      if (!(await lstat(directory)).isDirectory())
-        throw new Error('Local Git mirrors require a self-contained repository. Linked worktrees are unsupported.');
-      // Git only accepts a directory when it is a repository. A normal checkout itself
-      // can also occur in this list while its .git directory is the selected repository.
-      const head = join(directory, 'HEAD');
-      if (!(await lstat(head).catch(missingMirrorEntry))) continue;
-      const markers = ['commondir', 'objects/info/alternates', 'objects/info/http-alternates'].map(name =>
-        join(directory, name),
-      );
-      for (const input of [
-        head,
-        ...markers,
-        ...['config', 'config.worktree', 'packed-refs', 'shallow', 'info/grafts', 'refs', 'objects', 'reftable'].map(
-          name => join(directory, name),
-        ),
-      ])
-        this.authority.admit(input);
-      await this.authority.validate();
-      for (const marker of markers) {
-        if (await lstat(marker).catch(missingMirrorEntry))
-          throw new Error(
-            'Local Git mirrors with a common directory or alternate object store require a local package import.',
-          );
+      for (const candidate of [join(location, '.git'), location]) {
+        if (!(await lstat(candidate).catch(missingMirrorEntry))) continue;
+        const directory = this.authority.admit(candidate);
+        await this.authority.validate();
+        if (!(await lstat(directory)).isDirectory())
+          throw new Error('Local Git mirrors require a self-contained repository. Linked worktrees are unsupported.');
+        if (!(await lstat(join(directory, 'HEAD')).catch(missingMirrorEntry))) continue;
+        await this.checkLocalMirror(directory, env);
+        // This read checks the repository format after all storage and config inputs have been admitted.
+        await this.execute(['rev-parse', '--resolve-git-dir', directory], 64 * 1024, env);
+        return directory;
       }
-      for (const name of ['objects', 'refs', 'reftable'])
-        await this.checkMirrorTree(this.authority.admit(join(directory, name)), new Set());
-      for (const name of ['config', 'config.worktree'])
-        await this.checkMirrorConfiguration(this.authority.admit(join(directory, name)), env);
     }
+    throw new Error('Local Git mirror does not contain a repository.');
+  }
+
+  /** Recheck the selected storage before every transport, including lazy object reads. */
+  private async checkLocalMirror(directory: string, env: NodeJS.ProcessEnv): Promise<void> {
+    const markers = ['commondir', 'objects/info/alternates', 'objects/info/http-alternates'].map(name =>
+      join(directory, name),
+    );
+    for (const input of [
+      ...markers,
+      ...[
+        'HEAD',
+        'config',
+        'config.worktree',
+        'packed-refs',
+        'shallow',
+        'info/grafts',
+        'refs',
+        'objects',
+        'reftable',
+      ].map(name => join(directory, name)),
+    ])
+      this.authority.admit(input);
+    await this.authority.validate();
+    if (!(await lstat(join(directory, 'HEAD')).catch(missingMirrorEntry)))
+      throw new Error('The selected Git mirror is no longer available. Retry the preview.');
+    for (const marker of markers) {
+      if (await lstat(marker).catch(missingMirrorEntry))
+        throw new Error(
+          'Local Git mirrors with a common directory or alternate object store require a local package import.',
+        );
+    }
+    for (const name of ['objects', 'refs', 'reftable'])
+      await this.checkMirrorTree(this.authority.admit(join(directory, name)), new Set());
+    for (const name of ['config', 'config.worktree'])
+      await this.checkMirrorConfiguration(this.authority.admit(join(directory, name)), env);
   }
 
   /** Object shards, packs and ref namespaces may themselves contain links. Inspect entries without
@@ -197,8 +192,8 @@ export class SkillRepositoryGit {
       for await (const entry of await opendir(path)) {
         this.signal.throwIfAborted();
         if (entry.isDirectory()) children.push(join(path, entry.name));
-        else if (!entry.isFile())
-          throw new Error('Local Git mirrors require self-contained object and reference files.');
+        else if (entry.isFile()) this.authority.admit(join(path, entry.name));
+        else throw new Error('Local Git mirrors require self-contained object and reference files.');
       }
       listing = { revision, children };
       this.mirrorDirectories.set(path, listing);
@@ -326,25 +321,4 @@ export class SkillRepositoryGit {
 function missingMirrorEntry(error: NodeJS.ErrnoException): undefined {
   if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return undefined;
   throw error;
-}
-
-/** Git accepts local paths and file URLs as fetch transports. Require an unambiguous absolute mirror location. */
-function localMirrorPath(remote: string): string | undefined {
-  const invalid = new Error('Local Git mirrors require an absolute repository path or local file URL.');
-  if (!remote || /[\u0000-\u001F\u007F]/u.test(remote)) throw invalid;
-  let path = remote;
-  if (remote.startsWith('file://')) {
-    // Git decodes URL escapes before interpreting the path. Reject forms whose URL and filesystem
-    // interpretations differ, including home-directory expansion and traversing beyond a linked parent.
-    if (!/^file:\/\/(?:localhost)?\//u.test(remote) || /[?#\\]/u.test(remote)) throw invalid;
-    const decoded = decodeURIComponent(remote.slice(remote.indexOf('/', 'file://'.length)));
-    if (decoded.startsWith('/~') || decoded.split('/').includes('..') || decoded.includes('\0')) throw invalid;
-    path = fileURLToPath(remote);
-  } else if (!isAbsolute(path)) {
-    // All remaining network transports are still subject to Git's explicit protocol allowlist.
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//u.test(remote) || /^[^/]+:/u.test(remote)) return undefined;
-    throw invalid;
-  }
-  if (path.replaceAll(sep, '/').split('/').includes('..')) throw invalid;
-  return path;
 }

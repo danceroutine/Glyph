@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
@@ -9,6 +9,10 @@ import { Deferred } from '#src/shared/Deferred.js';
 import { captureRepositoryEnvironment } from '#src/skills/SkillRepositoryConfiguration.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 
+vi.mock('node:os', async importOriginal => {
+  const os = await importOriginal<typeof import('node:os')>();
+  return { ...os, userInfo: vi.fn(os.userInfo) };
+});
 const parser = vi.hoisted(() => ({
   replies: [] as (string | Error)[],
   executionDirectory: '/fixture/git-core' as string | Error,
@@ -185,22 +189,68 @@ it('holds a cancelled configuration process lease until child close, including a
   await expect(f.capture()).resolves.toHaveProperty('GIT_CONFIG_GLOBAL');
 });
 
-it.each(['missing', 'denied'])('allows only HTTPS and file when the trusted SSH installation is %s', async kind => {
+it.each(['missing', 'denied'])('refuses the selected SSH transport when its client is %s', async kind => {
   const f = await fixture();
   parser.sshAvailable = kind !== 'missing';
-  parser.replies.push('');
+  parser.replies.push('', 'git@mirror.invalid:fixture.git\n');
   const metadata = {
     ...testFilesystemMetadata,
     assertHostPaths: async (paths: readonly string[]) => {
       if (paths.includes('/fixture/ssh')) throw new Error('SSH is workspace-controlled');
     },
   };
-  const env = await captureRepositoryEnvironment([], f.root, new AbortController().signal, metadata);
-  expect(env.GIT_ALLOW_PROTOCOL).toBe('https:file');
-  expect(env.GIT_SSH_COMMAND).toBeUndefined();
-  expect(parser.commands.some(args => args.includes('config'))).toBe(true);
+  await expect(
+    captureRepositoryEnvironment(
+      [],
+      f.root,
+      new AbortController().signal,
+      metadata,
+      'source.git',
+      new HostExecutionAuthority([], metadata),
+      vi.fn(),
+    ),
+  ).rejects.toThrow(/SSH (?:is workspace-controlled|unavailable)/u);
 });
 
+it('rejects an account home that OpenSSH would interpret as an environment reference', async () => {
+  const f = await fixture();
+  parser.replies.push('', 'ssh://fixture.invalid/package\n');
+  vi.mocked(userInfo).mockReturnValueOnce({ ...userInfo(), homedir: f.root + '/${INVOCATION}' });
+  await expect(
+    captureRepositoryEnvironment(
+      [],
+      f.root,
+      new AbortController().signal,
+      testFilesystemMetadata,
+      'source.git',
+      undefined,
+      vi.fn(),
+    ),
+  ).rejects.toThrow('literal OpenSSH file names');
+});
+
+it.each([undefined, 'C:\\KnownData'])(
+  'leases the Windows system SSH host-key files with ProgramData %s',
+  async data => {
+    const f = await fixture();
+    parser.replies.push('', 'ssh://fixture.invalid/package\n');
+    vi.stubEnv('ProgramData', data);
+    vi.stubEnv('SSH_AUTH_SOCK', undefined);
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    const env = await captureRepositoryEnvironment(
+      [],
+      f.root,
+      new AbortController().signal,
+      testFilesystemMetadata,
+      'source.git',
+      undefined,
+      vi.fn(),
+    );
+    expect(env.GIT_SSH_COMMAND).toContain('GlobalKnownHostsFile=');
+    expect(env.GIT_SSH_COMMAND).toContain(data ? 'KnownData' : 'ProgramData');
+    expect(env.GIT_ALLOW_PROTOCOL).toBe('ssh');
+  },
+);
 it('settles a parser whose input pipe closes before Git completes', async () => {
   const f = await fixture();
   parser.inputError = true;

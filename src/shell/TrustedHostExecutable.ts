@@ -62,7 +62,7 @@ export function repositoryEnvironment(roots: readonly string[]): NodeJS.ProcessE
         : '/usr/bin:/bin:/usr/sbin:/sbin',
     GIT_TERMINAL_PROMPT: '0',
     GIT_LFS_SKIP_SMUDGE: '1',
-    GIT_ALLOW_PROTOCOL: 'https:file',
+    GIT_ALLOW_PROTOCOL: 'https',
   };
   for (const key of [
     'HOME',
@@ -70,7 +70,6 @@ export function repositoryEnvironment(roots: readonly string[]): NodeJS.ProcessE
     'XDG_CONFIG_HOME',
     'GIT_CONFIG_GLOBAL',
     'GIT_CONFIG_NOSYSTEM',
-    'SSH_AUTH_SOCK',
     'LANG',
     'HTTPS_PROXY',
     'HTTP_PROXY',

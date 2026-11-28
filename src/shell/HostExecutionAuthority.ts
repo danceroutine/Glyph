@@ -12,6 +12,7 @@ export type { HostWorkspaceRoots } from './HostProcessLeases.ts';
  * launchers consume the guard from validate at their handoff.
  */
 export class HostExecutionAuthority {
+  private readonly sockets = new Set<string>();
   private readonly paths = new Set<string>();
 
   private readonly processes: HostProcessLeases;
@@ -33,19 +34,16 @@ export class HostExecutionAuthority {
     return physical;
   }
 
-  executable(name: HostExecutable): string {
-    return this.admit(trustedHostExecutable(name, this.workspaceRoots));
+  /** Admit the operating system's SSH agent socket as a socket only, retaining its logical and physical routes. */
+  admitSocket(path: string): string {
+    const physical = this.admit(path);
+    this.sockets.add(path);
+    this.sockets.add(physical);
+    return physical;
   }
 
-  /** Enable an optional transport only when its installation has independent native authority. */
-  async optionalExecutable(name: HostExecutable): Promise<string | undefined> {
-    try {
-      const path = trustedHostExecutable(name, this.workspaceRoots);
-      await this.checkPaths([path], this.workspaceRoots);
-      return this.admit(path);
-    } catch {
-      return undefined;
-    }
+  executable(name: HostExecutable): string {
+    return this.admit(trustedHostExecutable(name, this.workspaceRoots));
   }
 
   /** Reauthorize at handoff. The operation settles after its child closes or its temporary store is removed. */
@@ -65,7 +63,14 @@ export class HostExecutionAuthority {
 
   private async checkPaths(paths: readonly string[], roots: readonly string[]): Promise<void> {
     for (const path of paths) outsideWorkspace(path, roots);
-    await this.host.assertHostPaths(paths, roots);
+    // Keep large local object inventories within the native request frame. Every batch shares this root snapshot.
+    if (paths.length === 0) return this.host.assertHostPaths([], roots);
+    for (let start = 0; start < paths.length; start += 256) {
+      const batch = paths.slice(start, start + 256);
+      const sockets = batch.filter(path => this.sockets.has(path));
+      if (sockets.length > 0) await this.host.assertHostPaths(batch, roots, sockets);
+      else await this.host.assertHostPaths(batch, roots);
+    }
   }
 
   private async guard(paths: readonly string[]): Promise<() => void> {
