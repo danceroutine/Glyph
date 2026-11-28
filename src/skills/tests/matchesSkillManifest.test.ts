@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
-import { matchesSkillManifest } from '../matchesSkillManifest.ts';
+import { matchesSkillManifest } from '#src/skills/matchesSkillManifest.js';
 
 it('admits an authorized root alias and checks the actual manifest and every containing directory', () => {
   const root = mkdtempSync(join(tmpdir(), 'glyph-skill-open-'));
