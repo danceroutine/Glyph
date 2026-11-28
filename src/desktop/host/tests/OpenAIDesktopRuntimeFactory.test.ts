@@ -689,7 +689,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     const runtime = await test.create([app, other], event => {
       events.push(event);
     });
-    await runtime.handle({ type: GlyphWorkbenchCommandType.RESTORE_CHECKPOINT, chatId: 'saved-chat', turnId: 'old' });
+    await runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: 'saved-chat', turnId: 'old' });
     const restored = events.find(event => event.type === GlyphHostEventType.CHAT_RESTORED)!;
     const composer = new GlyphComposerState();
     composer.restoreDraft(
