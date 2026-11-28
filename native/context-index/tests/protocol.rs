@@ -159,6 +159,30 @@ fn verifies_metadata_for_inherited_descriptors() {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn verifies_host_path_authority_for_complete_and_bounded_frames() {
+    let root = tempfile::tempdir().unwrap();
+    let input = serde_json::json!({"paths":[root.path().join("future")],"workspaceRoots":[root.path().join("workspace")]}).to_string();
+    let send = |input: &str| {
+        run_with_input(input, |cmd| {
+            cmd.arg("--assert-host-paths");
+        })
+    };
+    let result = send(&input);
+    assert!(result.status.success());
+    assert_eq!(result.stdout, b"verified\n");
+    for invalid in [
+        "{}".to_owned(),
+        " ".repeat(2 * 1024 * 1024 + 1),
+        serde_json::json!({"paths":[root.path()],"workspaceRoots":[root.path()]}).to_string(),
+    ] {
+        let result = send(&invalid);
+        assert!(!result.status.success());
+        assert!(result.stdout.is_empty());
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn admits_a_workspace_path_and_rechecks_its_opened_identity() {
@@ -177,6 +201,11 @@ fn admits_a_workspace_path_and_rechecks_its_opened_identity() {
         })
     };
     assert_eq!(check(&request).stdout, b"verified\n");
+    let mut mutation = request.clone();
+    mutation["managedDirectories"] = serde_json::json!([root.path()]);
+    assert!(!check(&mutation).status.success());
+    mutation["managedDirectories"] = serde_json::json!(["relative"]);
+    assert!(!check(&mutation).status.success());
     let mut stale = request;
     stale["identity"] = serde_json::json!(["0", "0"]);
     assert!(!check(&stale).status.success());
@@ -194,6 +223,14 @@ fn reports_the_visible_routes_of_an_editor_source() {
     assert!(result.status.success());
     let aliases: Vec<std::path::PathBuf> = serde_json::from_slice(&result.stdout).unwrap();
     assert!(aliases.contains(&path));
+    let prospective = path.join("future/SKILL.md");
+    let inventory = serde_json::json!([[path, prospective], false]);
+    let result = run_with_input(&inventory.to_string(), |cmd| {
+        cmd.arg("--source-path-aliases");
+    });
+    assert!(result.status.success());
+    let aliases: Vec<std::path::PathBuf> = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(aliases.contains(&path) && aliases.contains(&prospective));
 }
 
 #[cfg(target_os = "linux")]
@@ -251,6 +288,15 @@ fn checks_bound_private_and_ordinary_trees_through_the_cli() {
         let original = inspect_origins();
         assert_eq!(original.status.success(), admitted);
         if admitted {
+            let inventory =
+                serde_json::json!([[source.join("data"), source.join("future/SKILL.md")], false]);
+            let result = run_with_input(&inventory.to_string(), |cmd| {
+                cmd.arg("--source-path-aliases");
+            });
+            assert!(result.status.success());
+            let aliases: Vec<std::path::PathBuf> = serde_json::from_slice(&result.stdout).unwrap();
+            assert!(aliases.contains(&view.join("data")));
+            assert!(aliases.contains(&view.join("future/SKILL.md")));
             // The same directory and file inode exposed through a replacement mount is a new route.
             let original: Value = serde_json::from_slice(&original.stdout).unwrap();
             assert!(Command::new("mount")
@@ -397,4 +443,43 @@ fn pins_source_locations_across_regular_saves_and_checks_current_reservations() 
     fs::remove_file(&other).unwrap();
     fs::hard_link(&file, &other).unwrap();
     assert!(!inspect(&[&file], &[]).status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn distinguishes_removed_and_renamed_import_sources_and_pins_their_parent() {
+    use std::fs::{self, File};
+    let base = tempfile::tempdir().unwrap();
+    let parent = base.path().canonicalize().unwrap();
+    let directory = parent.join("source");
+    fs::create_dir(&directory).unwrap();
+    let held = File::open(&directory).unwrap();
+    let inspect = |file: File| {
+        Command::new(env!("CARGO_BIN_EXE_glyph-context-index"))
+            .arg("--assert-unlinked-directory")
+            .stdin(file)
+            .output()
+            .unwrap()
+    };
+    assert!(!inspect(held.try_clone().unwrap()).status.success());
+    let moved = parent.join("moved");
+    fs::rename(&directory, &moved).unwrap();
+    assert!(!inspect(held.try_clone().unwrap()).status.success());
+    fs::remove_dir(&moved).unwrap();
+    assert!(inspect(held).status.success());
+    let ordinary = parent.join("ordinary");
+    fs::write(&ordinary, b"fixture").unwrap();
+    assert!(!inspect(File::open(&ordinary).unwrap()).status.success());
+    let directories = serde_json::json!({"paths":[parent], "privatePaths":[], "directories":true});
+    assert!(run_with_input(&directories.to_string(), |cmd| {
+        cmd.arg("--source-origins");
+    })
+    .status
+    .success());
+    let files = serde_json::json!({"paths":[ordinary], "privatePaths":[], "directories":true});
+    assert!(!run_with_input(&files.to_string(), |cmd| {
+        cmd.arg("--source-origins");
+    })
+    .status
+    .success());
 }

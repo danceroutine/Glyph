@@ -30,6 +30,7 @@ import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 import { WorkspaceReadLimitError } from './WorkspaceReadLimitError.ts';
 import { assertWellFormedWorkspacePath } from './assertWellFormedWorkspacePath.ts';
 import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
+import type { FilesystemMetadata } from './FilesystemMetadata.ts';
 
 /** A revocable disk write stages its bytes and checks the initiating command immediately before publication. */
 type DiskPublicationOptions = WorkspaceMutationOptions & { readonly signal?: AbortSignal };
@@ -44,6 +45,7 @@ const fileSystemWorkspaceTextStoreOptionsSchema = z
         'assertWorkspacePath' in value &&
         typeof value.assertWorkspacePath === 'function',
     ),
+    managedDirectories: z.custom<readonly string[] | (() => readonly string[])>().optional(),
   })
   .strict();
 
@@ -90,13 +92,18 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     return normalized;
   }
 
-  async canonicalPath(input: string): Promise<string> {
-    const key = (await this.resolvePath(input)).split(sep).join('/');
+  async canonicalPath(
+    input: string,
+    mutation = false,
+    onManagedPathAdmitted?: (physicalPath: string) => void,
+  ): Promise<string> {
+    const key = (await this.resolvePath(input, mutation)).split(sep).join('/');
+    if (mutation && this.options.managedDirectories) onManagedPathAdmitted?.(key);
     return this.caseSensitive ? key : key.toLocaleLowerCase('en-US');
   }
 
   /** Authorized physical path with the spelling required by filesystem operations. */
-  async resolvePath(input: string): Promise<string> {
+  async resolvePath(input: string, mutation = false): Promise<string> {
     const operation = this.options.access.beginOperation();
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, true);
@@ -110,7 +117,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         const existing = await realpath(cursor);
         const canonical = resolve(existing, ...missing);
         assertInsideRoot(root, canonical, path);
-        await this.assertPhysicalAccess(canonical);
+        await this.assertPhysicalAccess(canonical, undefined, mutation);
         this.normalizePath(relative(root, canonical));
         operation.assertCurrent();
         return canonical;
@@ -202,7 +209,10 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     return { files, truncated };
   }
 
-  async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
+  async read(
+    input: string,
+    options: WorkspaceReadOptions & { readonly metadata?: FilesystemMetadata } = {},
+  ): Promise<WorkspaceTextSnapshot> {
     const snapshot = await this.readBytes(input, options);
     return toSnapshot(snapshot.path, snapshot.bytes, snapshot.mode, snapshot.identity, snapshot.revision);
   }
@@ -210,7 +220,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   /** Read bounded binary assets through the same policy, identity, and no-symlink checks as text. */
   async readBytes(
     input: string,
-    options: WorkspaceReadOptions = {},
+    options: WorkspaceReadOptions & { readonly metadata?: FilesystemMetadata } = {},
   ): Promise<{ path: string; bytes: Buffer; mode: number; identity: string; revision: string }> {
     const operation = this.options.access.beginOperation();
     const { path, resolvedFile, identity } = await this.inspectReadPath(input, options.interruptedRename);
@@ -244,6 +254,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         throw new EditError(EditFailureReason.STALE, 'The file changed while opening it for reading.', { path });
       }
       await this.assertPhysicalAccess(resolvedFile, handle);
+      await options.metadata?.inspect(handle, 'replaceable');
       // Keep loading bound to the same validated descriptor even if the path is
       // renamed again. A snapshot's mode and identity describe these bytes.
       const bytes =
@@ -252,6 +263,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           : await this.readBounded(handle, path, options.maxBytes, Number(info.size));
       await this.assertPhysicalAccess(resolvedFile, handle);
       const revision = createHash('sha256').update(bytes).digest('hex');
+      await options.metadata?.inspect(handle, 'replaceable');
       if (info.nlink !== 1n && revision !== options.interruptedRename!.revision) {
         throw new EditError(EditFailureReason.STALE, 'The interrupted rename no longer contains the reviewed bytes.', {
           path,
@@ -291,8 +303,12 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   /** Enforces disk access policy without loading stale content ahead of an authoritative editor read. */
-  async validateAccess(input: string, retainFile?: (path: string, identity: string) => Promise<void>): Promise<void> {
-    await this.assertPhysicalAccess(resolve(this.root, this.normalizePath(input)));
+  async validateAccess(
+    input: string,
+    mutation = false,
+    retainFile?: (path: string, identity: string) => Promise<void>,
+  ): Promise<void> {
+    await this.assertPhysicalAccess(resolve(this.root, this.normalizePath(input)), undefined, mutation);
     let inspected;
     try {
       inspected = await this.inspectReadPath(input);
@@ -305,7 +321,10 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     await retainFile?.(inspected.resolvedFile, inspected.identity);
   }
 
-  async readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined> {
+  async readOptional(
+    path: string,
+    options?: WorkspaceReadOptions & { readonly metadata?: FilesystemMetadata },
+  ): Promise<WorkspaceTextSnapshot | undefined> {
     try {
       return await this.read(path, options);
     } catch (error) {
@@ -326,7 +345,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, true);
     const absolute = resolve(this.root, path);
-    await this.assertPhysicalAccess(absolute);
+    await this.assertPhysicalAccess(absolute, undefined, true);
     const created = await this.createParents(dirname(absolute), operation.assertCurrent);
     try {
       if (options?.inspectBeforeWrite || options?.signal) {
@@ -349,7 +368,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
             await handle.writeFile(toBytes(text, byteOrderMark));
             await options.beforePublish?.();
             if (!(await ownsStagedEntry())) throw new Error('The staged create file changed before publication.');
-            await this.assertPhysicalAccess(absolute);
+            await this.assertPhysicalAccess(absolute, undefined, true);
             operation.assertCurrent();
             options.signal?.throwIfAborted();
             await link(staged, absolute);
@@ -361,11 +380,11 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         }
       } else {
         await options?.beforePublish?.();
-        await this.assertPhysicalAccess(absolute);
+        await this.assertPhysicalAccess(absolute, undefined, true);
         operation.assertCurrent();
         const handle = await open(absolute, 'wx', mode);
         try {
-          await this.assertPhysicalAccess(absolute, handle);
+          await this.assertPhysicalAccess(absolute, handle, true);
           await handle.chmod(mode);
           operation.assertCurrent();
           await handle.writeFile(toBytes(text, byteOrderMark));
@@ -393,7 +412,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     expectedRevision: string,
     text: string,
     byteOrderMark: boolean,
-    options?: DiskPublicationOptions,
+    options?: DiskPublicationOptions & { readonly temporaryDirectory?: string },
   ): Promise<WorkspaceTextSnapshot> {
     const operation = this.options.access.beginOperation();
     // POSIX filesystems do not expose compare-and-swap replacement by content
@@ -403,7 +422,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const path = this.normalizePath(input);
     const current = await this.assertRevision(path, expectedRevision);
     const absolute = resolve(this.root, path);
-    const temporary = resolve(dirname(absolute), `.${randomUUID()}.glyph.tmp`);
+    await this.assertPhysicalAccess(absolute, undefined, true);
+    if (options?.temporaryDirectory !== undefined) {
+      const root = await realpath(this.root);
+      assertInsideRoot(root, options.temporaryDirectory, path);
+      await this.assertNoSymlinkSegments(relative(root, options.temporaryDirectory).split(sep).join('/'), false);
+    }
+    const temporary = resolve(options?.temporaryDirectory ?? dirname(absolute), `.${randomUUID()}.glyph.tmp`);
     try {
       await this.assertPhysicalAccess(absolute);
       operation.assertCurrent();
@@ -418,7 +443,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           { path },
         );
       await options?.beforeReplace?.(temporary);
-      await this.assertPhysicalAccess(absolute);
+      await this.assertPhysicalAccess(absolute, undefined, true);
       operation.assertCurrent();
       options?.signal?.throwIfAborted();
       await rename(temporary, absolute);
@@ -444,14 +469,14 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         retry: 'Choose a different target or submit a new proposal.',
       });
     }
-    await this.assertPhysicalAccess(resolve(this.root, target));
+    await this.assertPhysicalAccess(resolve(this.root, target), undefined, true);
     const created = await this.createParents(dirname(resolve(this.root, target)), operation.assertCurrent);
     try {
       await this.assertRevision(source, expectedRevision);
       // link(2) is exclusive at the target, unlike rename(2), which would
       // silently overwrite a collaborator-created target on POSIX.
-      await this.assertPhysicalAccess(resolve(this.root, source));
-      await this.assertPhysicalAccess(resolve(this.root, target));
+      await this.assertPhysicalAccess(resolve(this.root, source), undefined, true);
+      await this.assertPhysicalAccess(resolve(this.root, target), undefined, true);
       operation.assertCurrent();
       await link(resolve(this.root, source), resolve(this.root, target));
       await unlink(resolve(this.root, source));
@@ -476,7 +501,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     await this.assertRevision(path, expectedRevision, options);
     await options?.beforePublish?.();
     try {
-      await this.assertPhysicalAccess(resolve(this.root, path));
+      await this.assertPhysicalAccess(resolve(this.root, path), undefined, true);
       operation.assertCurrent();
       options?.signal?.throwIfAborted();
       await unlink(resolve(this.root, path));
@@ -485,13 +510,14 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
   }
 
-  private async assertPhysicalAccess(absolute: string, handle?: FileHandle): Promise<void> {
+  private async assertPhysicalAccess(absolute: string, handle?: FileHandle, mutation = false): Promise<void> {
     const access = this.options.access.beginOperation();
-    await this.options.physicalAccess.assertWorkspacePath(
-      absolute,
-      access.privatePaths,
-      handle ? { handle } : undefined,
-    );
+    const managed = mutation ? this.options.managedDirectories : undefined;
+    const managedDirectories = typeof managed === 'function' ? managed() : managed;
+    await this.options.physicalAccess.assertWorkspacePath(absolute, access.privatePaths, {
+      ...(handle ? { handle } : {}),
+      ...(managedDirectories ? { managedDirectories } : {}),
+    });
     access.assertCurrent();
   }
 

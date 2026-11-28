@@ -1,3 +1,5 @@
+import { SkillChangeApprovalPolicy } from '#src/skills/SkillChangeApprovalPolicy.js';
+import type { SkillPreview } from '#src/skills/SkillLifecycle.js';
 import { shellPermissionChoices } from '#src/shell/shellPermissionChoices.js';
 import { Approval } from '#src/interaction/approvals/Approval.js';
 import { ApprovalCapability } from '#src/interaction/approvals/ApprovalCapability.js';
@@ -145,6 +147,52 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
         });
       },
     );
+  }
+
+  async presentSkillChange(preview: SkillPreview, signal: AbortSignal): Promise<boolean> {
+    const identity = this.requireRun();
+    const policy = new SkillChangeApprovalPolicy();
+    const detail = [
+      escapeDisplayControls(preview.source, true),
+      'Revision: ' + preview.revision,
+      'Destination (' + preview.destination.scope + '): ' + escapeDisplayControls(preview.destination.label, true),
+      escapeDisplayControls(preview.destination.path, true),
+      `${preview.files.length} files. Review the complete file comparisons below.`,
+      ...(preview.createdParentDirectories ?? []).map(
+        path => 'Create installation directory ' + escapeDisplayControls(path, true) + '/',
+      ),
+      ...(preview.directories ?? []).map(directory =>
+        [
+          escapeDisplayControls(directory.path, true) + '/ (' + directory.status + ')',
+          ...[directory.beforeMode, directory.afterMode].flatMap(mode =>
+            mode === undefined ? [] : ['directory mode ' + mode.toString(8)],
+          ),
+        ].join('\n'),
+      ),
+      ...preview.files.map(file =>
+        [
+          `${escapeDisplayControls(file.path, true)} (${file.status})`,
+          ...[file.beforeInfo, file.afterInfo].flatMap(info =>
+            info ? [`${info.encoding}, ${info.size} bytes, mode ${info.mode.toString(8)}, SHA-256 ${info.digest}`] : [],
+          ),
+        ].join('\n'),
+      ),
+    ].join('\n');
+    const approval = new Approval(
+      policy.createRequest({
+        workspace: this.workspace,
+        operation: { title: `${preview.action} skill ${preview.name}?`, detail, revision: preview.revision },
+      }),
+    );
+    const result = await this.resolveApproval(approval, policy, identity, signal, () => {
+      this.emit({
+        type: GlyphHostEventType.APPROVAL,
+        ...identity,
+        approval: { id: approval.id, title: approval.request.title, detail, sandboxed: false, skillChange: preview },
+      });
+    });
+    if (result.admission === 'failed' || result.admission === 'cancelled') throw result.error;
+    return result.admission === 'authorized';
   }
 
   presentGoalProposal(objective: string, signal: AbortSignal): Promise<boolean> {
@@ -363,3 +411,4 @@ const modeSwapPolicySchema = z
     timeoutSeconds: z.number().int().min(5).max(300).default(15),
   })
   .strict();
+import { escapeDisplayControls } from '#src/shared/presentation/escapeDisplayControls.js';

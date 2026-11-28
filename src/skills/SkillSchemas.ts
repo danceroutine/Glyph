@@ -17,16 +17,20 @@ export const skillDescriptorSchema: z.ZodType<SkillDescriptor> = z
     status: z.enum(['active', 'error', 'discovery-error']),
     revision: z.string().optional(),
     compatibility: z.string().optional(),
+    installedFrom: z.string().optional(),
+    packageRevision: z.string().optional(),
     allowedTools: z.array(z.string()),
     uri: z.string(),
     message: z.string().optional(),
   })
   .strict()
-  .transform(({ revision, compatibility, message, ...descriptor }) => ({
+  .transform(({ revision, compatibility, message, installedFrom, packageRevision, ...descriptor }) => ({
     ...descriptor,
     ...(revision !== undefined ? { revision } : {}),
     ...(compatibility !== undefined ? { compatibility } : {}),
     ...(message !== undefined ? { message } : {}),
+    ...(installedFrom !== undefined ? { installedFrom } : {}),
+    ...(packageRevision !== undefined ? { packageRevision } : {}),
   }));
 
 /** Retain the exact activated body and accessed resources; discovery descriptors alone cannot reconstruct history. */

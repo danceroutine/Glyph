@@ -12,6 +12,20 @@ import { ShutdownSignal } from '#src/terminal/ShutdownSignal.js';
 const repositoryRoot = resolve(import.meta.dirname, '..', '..');
 
 describe('glyph command line', () => {
+  it('keeps an existing user profile private in the shell sandbox', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'glyph-cli-user-profile-'));
+    vi.stubEnv('GLYPH_USER_DIRECTORY', directory);
+    onTestFinished(async () => {
+      vi.unstubAllEnvs();
+      await rm(directory, { recursive: true, force: true });
+    });
+    const cli = prepareCli();
+    await cli.start();
+    await cli.finished;
+    const [launcher] = cli.instances('NativeShellSandboxLauncher');
+    const options = launcher!.args[0] as { accessPolicy: { privatePaths: readonly string[] } };
+    expect(options.accessPolicy.privatePaths).toEqual(expect.arrayContaining([directory, '/state/glyph/trace.log']));
+  });
   it('prints usage help without starting a terminal session', async () => {
     const cli = prepareCli({ argv: ['--help'] });
 
@@ -36,7 +50,10 @@ describe('glyph command line', () => {
   });
 
   it('runs a folder project with runtime paths excluded from the workspace', async () => {
-    vi.stubEnv('GLYPH_USER_DIRECTORY', '/home/test/.glyph');
+    vi.stubEnv('GLYPH_USER_DIRECTORY', '/profiles/current');
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const root = repositoryRoot;
     const stateDirectory = join(root, '.glyph', 'state');
     const traceFile = '/var/log/glyph/trace.log';
@@ -59,8 +76,16 @@ describe('glyph command line', () => {
     expect(selected.policy.privatePaths).not.toContain(join(process.env.GLYPH_USER_DIRECTORY!, 'rules'));
     expect(workspace?.args).toEqual([
       root,
-      { access: bound, physicalAccess: cli.instances('NativeFilesystemMetadata')[0] },
+      {
+        access: bound,
+        managedDirectories: ['/profiles/current/skills'],
+        physicalAccess: cli.instances('NativeFilesystemMetadata')[0],
+      },
     ]);
+    const mutationPolicy = cli.instances('ProjectToolRuntime')[0]?.args[5] as {
+      getDenial(path: string): string | undefined;
+    };
+    expect(mutationPolicy.getDenial('/profiles/current/skills/example/SKILL.md')).toContain('skills.propose_change');
     const cacheName = createHash('sha256').update(`${context.id}\0Repository\0${root}`).digest('hex');
     const [pathIndex] = cli.instances('RustWorkspacePathIndex');
     expect(pathIndex?.args).toEqual([
@@ -92,6 +117,7 @@ describe('glyph command line', () => {
           privatePaths: expect.arrayContaining([
             stateDirectory,
             traceFile,
+            process.env.GLYPH_USER_DIRECTORY!,
             join(process.env.GLYPH_USER_DIRECTORY!, 'rules'),
           ]),
         }),
@@ -477,7 +503,10 @@ function prepareCli({
   }));
   mock('#src/editing/configuration/getEditingReadBudget.js', () => ({ getEditingReadBudget: () => 1024 }));
   const assertPathIsolation = vi.fn();
-  mock('#src/shell/ShellRuntimePathPolicy.js', () => ({ assertShellRuntimePathIsolation: assertPathIsolation }));
+  mock('#src/shell/ShellRuntimePathPolicy.js', () => ({
+    assertShellRuntimePathIsolation: assertPathIsolation,
+    resolveAvailableIdentity: resolve,
+  }));
   const resolveProject = vi.fn(async (_options: unknown) => context);
   mock('#src/project/context/ProjectContextResolver.js', () => ({
     ProjectContextResolver: { resolve: resolveProject },

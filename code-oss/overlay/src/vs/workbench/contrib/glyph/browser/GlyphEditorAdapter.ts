@@ -1,3 +1,7 @@
+import { IWorkingCopyService } from '#vs/workbench/services/workingCopy/common/workingCopyService.js';
+import { IPathService } from '#vs/platform/path/common/pathService.js';
+import { env } from '#vs/base/common/process.js';
+import type { GlyphSkillTarget } from '#glyph/protocol/events/GlyphSkillManagement.js';
 import { UNDO_REDO_SOURCE as EXPLORER_UNDO_REDO_SOURCE } from '#vs/workbench/contrib/files/browser/explorerService.js';
 import { VSBuffer } from '#vs/base/common/buffer.js';
 import { GlyphFileMutationKind, type GlyphFileMutation } from '#glyph/protocol/editor/GlyphFileMutation.js';
@@ -9,11 +13,8 @@ import type { GlyphTextRange } from '#glyph/protocol/connection/GlyphTextRange.j
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { Progress } from '#vs/platform/progress/common/progress.js';
 import { BulkTextEdits } from '#vs/workbench/contrib/bulkEdit/browser/bulkTextEdits.js';
-import { env } from '#vs/base/common/process.js';
 import { normalizeVolumeName, type FilesystemNamePolicy } from '#vs/platform/glyph/workspace/FilesystemNamePolicy.js';
-import { extUri, extUriIgnorePathCase, type IExtUri } from '#vs/base/common/resources.js';
-import { IWorkingCopyService } from '#vs/workbench/services/workingCopy/common/workingCopyService.js';
-import { IPathService } from '#vs/platform/path/common/pathService.js';
+import { dirname, extUri, extUriIgnorePathCase, type IExtUri } from '#vs/base/common/resources.js';
 import { URI } from '#vs/base/common/uri.js';
 import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
@@ -55,6 +56,8 @@ import { GlyphEditorAdapterError } from './GlyphEditorAdapterError.js';
  * different model incarnation with coincidentally identical text.
  */
 export class GlyphEditorAdapter extends Disposable {
+  /** Registered roots can disappear during removal while their working copies remain open. */
+  private readonly verifiedSkillRoots = new Map<string, URI>();
   /** Weak keys let model disposal retire incarnation ids without manual cleanup. */
   private readonly incarnations = new WeakMap<ITextModel, string>();
   /** Receipts make operation ids idempotent across a lost renderer response. */
@@ -107,7 +110,11 @@ export class GlyphEditorAdapter extends Disposable {
   }
 
   /** Serializes failures at the process boundary while keeping typed errors inside the adapter. */
-  async handle(request: GlyphEditorRequest, checkMutation?: () => Promise<void>): Promise<GlyphEditorResponse> {
+  async handle(
+    request: GlyphEditorRequest,
+    skillTargets: readonly GlyphSkillTarget[] = [],
+    checkMutation?: () => Promise<void>,
+  ): Promise<GlyphEditorResponse> {
     const operationId =
       request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ||
       request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION
@@ -122,6 +129,8 @@ export class GlyphEditorAdapter extends Disposable {
       if (!this.trustService.isWorkspaceTrusted())
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       switch (request.type) {
+        case GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES:
+          return { operationId, ok: true, packageClean: await this.skillPackageClean(request, skillTargets) };
         case GlyphEditorRequestType.CHECK_USER_WORKING_COPIES:
           return { operationId, ok: true, workingCopiesClean: await this.userWorkingCopiesClean(request) };
         case GlyphEditorRequestType.EXISTS:
@@ -749,6 +758,81 @@ export class GlyphEditorAdapter extends Disposable {
   /** Supports recovery when an apply result was lost after the side effect completed. */
   async inspectReceipt(operationId: string): Promise<GlyphMutationReceipt | undefined> {
     return this.receipts.get(operationId);
+  }
+
+  /** Checks only dirty working copies under the authorized package or peer workspace intersection. */
+  private async skillPackageClean(
+    request: Extract<GlyphEditorRequest, { type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES }>,
+    targets: readonly GlyphSkillTarget[],
+  ): Promise<boolean> {
+    const directory = URI.parse(request.directoryUri, true);
+    if (
+      directory.scheme !== 'file' ||
+      directory.query ||
+      directory.fragment ||
+      directory.path
+        .split('/')
+        .slice(1)
+        .some(part => !part || part === '.' || part === '..' || part.includes('\\') || part.includes('\0'))
+    )
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
+    const parent = dirname(directory);
+    const identity = filesystemUriIdentity(request, this.uriIdentityService.extUri);
+    if (request.scope === 'user') {
+      const registered = targets.find(target => target.scope === 'user')?.uri;
+      // At first attach crash recovery can precede the host snapshot. Use the same local user setting as the utility process.
+      const configured = env['GLYPH_USER_DIRECTORY'];
+      const userRoot = registered
+        ? URI.parse(registered, true)
+        : configured
+          ? URI.joinPath(URI.file(configured), 'skills')
+          : URI.joinPath(this.pathService.userHome({ preferLocal: true }), '.glyph', 'skills');
+      if (!identity.isEqual(userRoot, parent)) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+    } else {
+      const owner = this.workspaceContextService.getWorkspaceFolder(directory);
+      const scope = dirname(dirname(parent));
+      if (
+        request.scope !== 'project' ||
+        !owner ||
+        (!request.peerWorkspaceIntersection &&
+          (!this.workspaceContextService.getWorkspaceFolder(scope) ||
+            !identity.isEqual(parent, URI.joinPath(scope, '.glyph', 'skills'))))
+      )
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+      if (request.physicalPackageUri) {
+        const expected = URI.parse(request.physicalPackageUri, true);
+        const root = await this.fileService.realpath(owner.uri).catch(async (error: unknown) => {
+          // A removal can delete an attached package root while its editor still owns dirty copies.
+          const missing = await this.fileService.stat(expected).then(
+            () => false,
+            (cause: unknown) => this.errorCode(cause) === GlyphDesktopErrorCode.NOT_FOUND,
+          );
+          if (!missing) throw error;
+          return this.verifiedSkillRoots.get(owner.uri.toString());
+        });
+        if (!root) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+        const physical = URI.joinPath(root, identity.relativePath(owner.uri, directory)!);
+        if (!(
+          identity.isEqual(physical, expected) ||
+          (request.peerWorkspaceIntersection &&
+            identity.isEqual(directory, owner.uri) &&
+            identity.isEqualOrParent(physical, expected))
+        ))
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+        this.verifiedSkillRoots.set(owner.uri.toString(), root);
+        if (!this.packageWorkingCopiesClean(physical, identity)) return false;
+      }
+    }
+    return this.packageWorkingCopiesClean(directory, identity);
+  }
+
+  private packageWorkingCopiesClean(directory: URI, identity: Pick<IExtUri, 'isEqualOrParent'>): boolean {
+    return !this.workingCopyService.dirtyWorkingCopies.some(copy => {
+      const resource = copy.resource;
+      if (resource.scheme === 'untitled' && this.textFileService.untitled.isUntitledWithAssociatedResource(resource))
+        return identity.isEqualOrParent(resource.with({ scheme: 'file' }), directory);
+      return resource.scheme === 'file' && identity.isEqualOrParent(resource, directory);
+    });
   }
 
   /** Save only the changed resource; skip formatters that would escape the recorded edit. */

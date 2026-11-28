@@ -21,6 +21,8 @@ export interface SkillDescriptor extends SourceOrigin {
   readonly status: 'active' | 'error' | 'discovery-error';
   readonly revision?: string;
   readonly compatibility?: string;
+  readonly installedFrom?: string;
+  readonly packageRevision?: string;
   readonly allowedTools: readonly string[];
   readonly uri: string;
   readonly message?: string;

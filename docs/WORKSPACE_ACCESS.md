@@ -16,6 +16,18 @@ process belong at the adapter.
 | Admit a window to mutate a workspace                                            | `WorkspaceOwnershipRegistry` and the desktop host                                        | When admitting the connection and when dispatching or completing work on its behalf              |
 | Authorize a shell command and launch it                                         | `ShellApprovalPolicy` and the configured `ShellProcessLauncher`                          | Match the command and working directory for approval, then enforce the granted profile at launch |
 
+Both the desktop host and CLI pin the personal Glyph store's physical location at startup.
+The startup profile verifies that identity on access. Ordinary edits to a rule
+or skill in the admitted directory remain visible. A profile symlink retarget
+leaves the running host on its original directory. Replacing the pinned object
+invalidates access.
+
+A skill package change passes through the package manager. Its preview carries
+the reviewed revision and, for local intake, the source access check. At publication
+the manager checks the source, destination and peer editors again. Ordinary
+project edits consult `SkillProjectMutationPolicy` to reserve this workflow for
+managed paths.
+
 A desktop command inherits a signal from the window's current workspace attachment.
 The desktop host grants access after checking ownership and trust. Its
 `WindowCommandAuthority` revokes outstanding commands on disconnect, detach,
@@ -90,10 +102,14 @@ checkpoint records its completion and lets the next turn read it again. Steering
 undelivered captures enters provider history after the handoff. These checks belong to the
 current turn and stay in host memory.
 
-Native search and the shell run outside the JavaScript process. Pass the host's
-policy to their adapters. An OS sandbox is established at launch. For an
-intentional move of private storage, stop existing commands that could reach the
-new location, including detached commands, before switching the boundary. Glyph verifies the startup profile's directory identity
+Native search and restricted shell commands run outside the JavaScript process.
+Pass the host's policy to their adapters. The shell view reserves the physical
+profile and the staging directory of each attached workspace, including paths
+that may be created later. The native helper applies those reservations when
+the process starts. To switch profiles, stop commands that could reach the new
+location, including detached commands, and restart the host.
+
+Glyph verifies the startup profile's directory identity
 when issuing a project, selected-file, catalog, or sandbox operation and when a
 host-mediated result is delivered. An observed removal or replacement invalidates
 outstanding operations and cached projections. New operations resume when the

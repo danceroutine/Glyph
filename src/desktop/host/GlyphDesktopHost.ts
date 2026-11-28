@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getGlyphWorkspaceRootId } from '#src/desktop/protocol/connection/getGlyphWorkspaceRootId.js';
 import type { GlyphAttachmentResource } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { existsSync, realpathSync } from 'node:fs';
+import { projectIntersection } from '#src/workspace/WorkspaceSourceRoutes.js';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphCommandResultHostEvent } from '#src/desktop/protocol/events/GlyphCommandResultHostEvent.js';
 import type { GlyphErrorHostEvent } from '#src/desktop/protocol/events/GlyphErrorHostEvent.js';
@@ -21,6 +22,7 @@ import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.j
 import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { GlyphHostStatus } from '#src/desktop/protocol/events/GlyphHostStatus.js';
 import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
+import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import { HostEventJournal } from './HostEventJournal.ts';
 import { RequestDeduplicator } from './RequestDeduplicator.ts';
 import { getWorkspaceKey, WorkspaceOwnershipRegistry } from './WorkspaceOwnershipRegistry.ts';
@@ -67,6 +69,7 @@ export class GlyphDesktopHost {
   private readonly runtimes = new Map<string, WorkspaceRuntimeRecord>();
   private readonly runtimeCreations = new Map<string, Promise<WorkspaceRuntimeRecord>>();
   private readonly runtimeStops = new Map<string, Promise<void>>();
+  private readonly repositoryProcesses = new HostProcessLeases(() => this.workspacePaths());
   private readonly ownership = new WorkspaceOwnershipRegistry();
   private readonly disconnectTimers = new Map<Connection, ReturnType<typeof setTimeout>>();
 
@@ -75,6 +78,79 @@ export class GlyphDesktopHost {
     generation = `urn:uuid:${randomUUID()}`,
   ) {
     this.generation = generation;
+  }
+
+  /** Checks trusted editors for the shared user store or a project destination, including peers in reconnection grace. */
+  trustedSkillEditors(
+    owner: GlyphConnectionIdentity,
+    projectDirectory?: string,
+    retainedAliases: readonly string[] = [],
+  ): readonly {
+    identity: GlyphConnectionIdentity;
+    connectionId: string;
+    directoryUri?: string;
+    physicalPackageUri?: string;
+  }[] {
+    const aliases =
+      projectDirectory === undefined
+        ? []
+        : [
+            ...new Set([
+              ...(this.runtimeFactory.sourcePathAliases?.(projectDirectory, true) ?? [projectDirectory]),
+              ...retainedAliases,
+            ]),
+          ];
+    const peers = [];
+    for (const peer of this.sessions.values()) {
+      if (!peer.trusted || connectionKey(peer.identity) === connectionKey(owner)) continue;
+      const directories = new Map<string | undefined, string | undefined>();
+      if (projectDirectory === undefined) {
+        directories.set(undefined, undefined);
+      } else {
+        for (const root of peer.roots) {
+          const current = physicalRoot(root);
+          const observed = peer.physicalRoots.get(root)!;
+          if (current !== undefined) observed.add(current);
+          // After removing a package, a peer attached inside it still owns its logical working-copy URIs.
+          if (current === undefined && !existsSync(projectDirectory)) {
+            const previous = aliases.find(alias =>
+              [...observed].some(physical => projectIntersection(root, physical, alias) === root.uri),
+            );
+            if (previous !== undefined) {
+              directories.set(root.uri, previous === projectDirectory ? undefined : pathToFileURL(previous).toString());
+              continue;
+            }
+          }
+          // A disappearing or retargeted alias can still own dirty working copies under its original URI.
+          const lostOverlap = [...observed].some(
+            physical =>
+              physical !== current && aliases.some(alias => projectIntersection(root, physical, alias) !== undefined),
+          );
+          if (lostOverlap || observed.size === 0)
+            throw new Error(
+              'A trusted Glyph window has an unavailable project root. Reconnect it before changing the package.',
+            );
+          if (current === undefined) continue;
+          for (const alias of aliases) {
+            const directory = projectIntersection(root, current, alias);
+            if (directory !== undefined && !directories.has(directory))
+              directories.set(directory, alias === projectDirectory ? undefined : pathToFileURL(alias).toString());
+          }
+        }
+        if (directories.size === 0) continue;
+      }
+      const connectionId = [...this.connections].find(([, current]) => current === peer)?.[0];
+      if (!connectionId || !peer.authorityKnown || peer.pendingAttachments > 0)
+        throw new Error('Another trusted Glyph window is reconnecting. Retry the skill change after it reconnects.');
+      for (const [directoryUri, physicalPackageUri] of directories)
+        peers.push({
+          identity: peer.identity,
+          connectionId,
+          ...(directoryUri === undefined ? {} : { directoryUri }),
+          ...(physicalPackageUri ? { physicalPackageUri } : {}),
+        });
+    }
+    return peers;
   }
 
   /** A trusted editor may still own user-file buffers while reconnecting or sharing another runtime. */
@@ -142,11 +218,11 @@ export class GlyphDesktopHost {
       };
       this.sessions.set(key, connection);
     }
-    connection.authorityKnown = false;
     connection.send = send;
     clearTimeout(this.disconnectTimers.get(connection));
     this.disconnectTimers.delete(connection);
     connection.ready = false;
+    connection.authorityKnown = false;
     this.connections.set(connectionId, connection);
   }
 
@@ -166,6 +242,7 @@ export class GlyphDesktopHost {
     connection.commands.disconnect();
     connection.send = undefined;
     connection.ready = false;
+    connection.authorityKnown = false;
     // Preserve replay across a renderer reload, but never leave authority or
     // background processes owned by a vanished window indefinitely.
     const timer = setTimeout(() => {
@@ -201,6 +278,12 @@ export class GlyphDesktopHost {
         'One or more desktop workspace runtimes failed to stop.',
       );
     }
+  }
+
+  private workspacePaths(): readonly string[] {
+    return [
+      ...new Set([...this.sessions.values()].flatMap(peer => observedWorkspacePaths(peer.roots, peer.physicalRoots))),
+    ];
   }
 
   private async execute(
@@ -308,6 +391,10 @@ export class GlyphDesktopHost {
     command: Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE }>,
     transport: AbortSignal,
   ): Promise<readonly GlyphHostEvent[]> {
+    const assertTransport = () => {
+      transport.throwIfAborted();
+      this.assertCurrentConnection(connection);
+    };
     const key = getWorkspaceKey(connection.identity);
     if (command.trusted !== connection.trusted || JSON.stringify(command.roots) !== JSON.stringify(connection.roots)) {
       connection.journal.discard();
@@ -325,17 +412,25 @@ export class GlyphDesktopHost {
     // New authority cannot overlap a previous owner's asynchronous shutdown.
     const stopping = this.runtimeStops.get(key);
     if (stopping) await stopping;
-    transport.throwIfAborted();
-    this.assertCurrentConnection(connection);
-    connection.authorityKnown = true;
-    connection.trusted = command.trusted;
-    connection.roots = command.roots;
-    connection.physicalRoots = new Map(
-      command.roots.map(root => {
-        const physical = physicalRoot(root);
-        return [root, new Set(physical === undefined ? [] : [physical])];
-      }),
+    assertTransport();
+    // Editor working-copy authority also exists in a window whose Glyph session
+    // cannot acquire overlapping runtime ownership. Remember its negotiated
+    // roots and trust so package publication still checks that editor.
+    const physicalRoots = new Map(command.roots.map(root => [root, new Set<string>()]));
+    const admission = this.repositoryProcesses.admitWorkspace(
+      () => observedWorkspacePaths(command.roots, physicalRoots),
+      () => {
+        assertTransport();
+        connection.trusted = command.trusted;
+        connection.roots = command.roots;
+        connection.physicalRoots = physicalRoots;
+        connection.authorityKnown = true;
+      },
     );
+    if (admission) {
+      await admission;
+      assertTransport();
+    }
     const ownership = this.ownership.acquire(connection.identity, command.roots);
     let record = this.runtimes.get(key);
     if (!record) {
@@ -350,6 +445,8 @@ export class GlyphDesktopHost {
             identity: connection.identity,
             roots: command.roots,
             trusted: command.trusted,
+            repositoryProcesses: this.repositoryProcesses,
+            hostWorkspaceRoots: () => this.workspacePaths(),
             assertTrusted: () => {
               this.assertCurrentConnection(connection);
               if (
@@ -381,8 +478,7 @@ export class GlyphDesktopHost {
       }
       record = await creating;
     }
-    transport.throwIfAborted();
-    this.assertCurrentConnection(connection);
+    assertTransport();
     if (record.trusted !== command.trusted) {
       connection.attached = false;
       connection.ready = false;
@@ -651,6 +747,22 @@ export class GlyphDesktopHost {
     if (!connection) throw new Error(`Unknown desktop connection: ${connectionId}`);
     return connection;
   }
+}
+
+/** Retain the physical selections used by admission and use those same selections when publishing the roots. */
+function observedWorkspacePaths(
+  roots: readonly GlyphWorkspaceRoot[],
+  physical: Map<GlyphWorkspaceRoot, Set<string>>,
+): string[] {
+  const paths = new Set<string>();
+  for (const root of roots) {
+    const observed = physical.get(root)!;
+    const current = physicalRoot(root);
+    if (current !== undefined) observed.add(current);
+    paths.add(root.canonicalPath);
+    for (const path of observed) paths.add(path);
+  }
+  return [...paths];
 }
 
 /** A second editor can open the same roots under different names or selected symlinks. */

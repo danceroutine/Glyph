@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ShellProgram } from './ShellProgram.ts';
 import type { ChildProcess } from 'node:child_process';
 import { stripVTControlCharacters } from 'node:util';
 import { TerminalControlFilter } from './TerminalControlFilter.ts';
@@ -24,6 +25,8 @@ interface RunningCommand {
 }
 
 interface ExecuteShellCommandOptions {
+  readonly transient?: boolean;
+  readonly readOnlyPaths?: readonly string[];
   readonly executionId?: string;
   readonly terminalId?: string;
   readonly workingDirectory?: string;
@@ -115,6 +118,68 @@ export class ShellSessionManager implements ShellSessionRegistry {
   }
 
   async execute(command: string, options: ExecuteShellCommandOptions): Promise<ShellCommandResult> {
+    return this.executeCommand(command, options);
+  }
+
+  /** Direct programs always receive a fresh one-shot decision over their exact argument vector. */
+  async executeProgram(program: ShellProgram, options: ExecuteShellCommandOptions): Promise<ShellCommandResult> {
+    return this.executeCommand(program.display, { ...options, transient: true }, program);
+  }
+
+  async writeInput(options: WriteShellInputOptions): Promise<void> {
+    options.signal?.throwIfAborted();
+    this.assertAvailable();
+    const terminal = this.requireTerminal(options.terminalId, options.ownerChatId ?? this.ownerChatId);
+    await terminal.writeInput({
+      input: `${options.input}${options.appendNewline ? '\n' : ''}`,
+      wakeOn: options.wakeOn,
+      signal: options.signal,
+    });
+  }
+
+  async close(terminalId: string, ownerChatId = this.ownerChatId): Promise<void> {
+    const terminal = this.requireTerminal(terminalId, ownerChatId);
+    await this.closeTerminal(terminal);
+  }
+
+  shutdown(): void {
+    for (const terminal of this.terminals.values()) void terminal.terminate();
+  }
+
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    const terminals = [...this.terminals.values()];
+    this.terminals.clear();
+    this.changed();
+    await Promise.all(terminals.map(terminal => terminal.terminate()));
+    this.changeListeners.clear();
+    this.wakeListeners.clear();
+  }
+
+  private async closeTerminal(terminal: ManagedShellSession): Promise<void> {
+    const terminalId = terminal.snapshot.id;
+    if (this.terminals.get(terminalId) !== terminal || this.closing.has(terminalId)) {
+      // A concurrent close or dispose still owns this process group until termination completes.
+      await terminal.terminate();
+      return;
+    }
+    this.closing.add(terminalId);
+    // Closing revokes pending matches before terminating the process.
+    for (let index = this.pendingWakes.length - 1; index >= 0; index--) {
+      if (this.pendingWakes[index]?.terminalId === terminalId) this.pendingWakes.splice(index, 1);
+    }
+    await terminal.terminate();
+    this.terminals.delete(terminalId);
+    this.closing.delete(terminalId);
+    this.changed();
+  }
+
+  private async executeCommand(
+    command: string,
+    options: ExecuteShellCommandOptions,
+    program?: ShellProgram,
+  ): Promise<ShellCommandResult> {
     options.signal.throwIfAborted();
     this.assertAvailable();
     const ownerChatId = options.ownerChatId ?? this.ownerChatId;
@@ -128,10 +193,14 @@ export class ShellSessionManager implements ShellSessionRegistry {
     const workingDirectory = existing
       ? existing.snapshot.workingDirectory
       : await this.workingDirectories.resolve(options.workingDirectory);
-    const authorization = await this.authorizer.authorize(command, workingDirectory, options.signal, {
+    const checkApproval = await program?.assertAuthority();
+    checkApproval?.();
+    const authorization = await this.authorizer.authorize(program ?? command, workingDirectory, options.signal, {
       background: options.background === true,
       existingTerminal: existing !== undefined,
+      ...(options.transient ? { transient: true } : {}),
     });
+    const checkLaunch = await program?.assertAuthority();
     options.signal.throwIfAborted();
     this.assertAvailable();
     if (existing && (this.terminals.get(existing.snapshot.id) !== existing || this.closing.has(existing.snapshot.id))) {
@@ -145,9 +214,13 @@ export class ShellSessionManager implements ShellSessionRegistry {
     try {
       // Configuration can fail before launch too; it must release a newly
       // allocated terminal just like a synchronous process-launch failure.
+      checkLaunch?.();
       completion = terminal.execute({
         command,
-        authorization,
+        program,
+        authorization: options.readOnlyPaths
+          ? { ...authorization, readOnlyPaths: options.readOnlyPaths }
+          : authorization,
         wakeOn: options.wakeOn,
         executionId: options.executionId,
       });
@@ -178,47 +251,8 @@ export class ShellSessionManager implements ShellSessionRegistry {
       if (existing) await terminal.terminate();
       throw error;
     } finally {
-      if (!existing) await this.close(terminal.snapshot.id, ownerChatId);
+      if (!existing) await this.closeTerminal(terminal);
     }
-  }
-
-  async writeInput(options: WriteShellInputOptions): Promise<void> {
-    options.signal?.throwIfAborted();
-    this.assertAvailable();
-    const terminal = this.requireTerminal(options.terminalId, options.ownerChatId ?? this.ownerChatId);
-    await terminal.writeInput({
-      input: `${options.input}${options.appendNewline ? '\n' : ''}`,
-      wakeOn: options.wakeOn,
-      signal: options.signal,
-    });
-  }
-
-  async close(terminalId: string, ownerChatId = this.ownerChatId): Promise<void> {
-    const terminal = this.requireTerminal(terminalId, ownerChatId);
-    this.closing.add(terminalId);
-    // Closing revokes pending matches before terminating the process.
-    for (let index = this.pendingWakes.length - 1; index >= 0; index--) {
-      if (this.pendingWakes[index]?.terminalId === terminalId) this.pendingWakes.splice(index, 1);
-    }
-    await terminal.terminate();
-    this.terminals.delete(terminalId);
-    this.closing.delete(terminalId);
-    this.changed();
-  }
-
-  shutdown(): void {
-    for (const terminal of this.terminals.values()) void terminal.terminate();
-  }
-
-  async dispose(): Promise<void> {
-    if (this.disposed) return;
-    this.disposed = true;
-    const terminals = [...this.terminals.values()];
-    this.terminals.clear();
-    this.changed();
-    await Promise.all(terminals.map(terminal => terminal.terminate()));
-    this.changeListeners.clear();
-    this.wakeListeners.clear();
   }
 
   private createTerminal(workingDirectory: string, background: boolean, ownerChatId?: string): ManagedShellSession {
@@ -326,11 +360,13 @@ class ManagedShellSession {
 
   execute({
     command,
+    program,
     authorization,
     wakeOn,
     executionId,
   }: {
     readonly command: string;
+    readonly program?: ShellProgram | undefined;
     readonly executionId?: string | undefined;
     readonly authorization: ShellExecutionAuthorization;
     readonly wakeOn: string | undefined;
@@ -351,7 +387,9 @@ class ManagedShellSession {
     this.exitCode = undefined;
     let child: ChildProcess;
     try {
-      child = this.options.processLauncher.launch(normalized, this.options.workingDirectory, authorization);
+      child = program
+        ? this.options.processLauncher.launch(normalized, this.options.workingDirectory, authorization, program)
+        : this.options.processLauncher.launch(normalized, this.options.workingDirectory, authorization);
     } catch (error) {
       this.status = ShellSessionStatus.IDLE;
       this.options.changed();

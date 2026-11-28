@@ -11,6 +11,7 @@ import { WebHttpClient } from './web/WebHttpClient.ts';
 import { WebFetchService } from './web/WebFetchService.ts';
 import { DuckDuckGoSearch } from './web/DuckDuckGoSearch.ts';
 import { createHash } from 'node:crypto';
+import { SkillProjectMutationPolicy } from './skills/SkillProjectMutationPolicy.ts';
 import { join, resolve } from 'node:path';
 import { GlyphService } from './application/GlyphService.ts';
 import { ChatSessionManager } from './chat/sessions/ChatSessionManager.ts';
@@ -99,7 +100,7 @@ async function main(): Promise<void> {
     process.platform === 'win32' ? 'glyph-shell-sandbox.exe' : 'glyph-shell-sandbox',
   );
   using profile = new StartupUserProfile(process.env.GLYPH_USER_DIRECTORY ?? join(homedir(), '.glyph'));
-  const hostPrivate = [configuration.stateDirectory, configuration.traceFile];
+  const hostPrivate = [configuration.stateDirectory, configuration.traceFile, join(profile.path, 'skill-state.json')];
   const installation = [indexExecutable, shellSandboxExecutable];
   if (
     projectContext.roots.some(root =>
@@ -107,7 +108,12 @@ async function main(): Promise<void> {
     )
   )
     throw new ConfigurationError('Glyph state, trace, and native-worker paths must not be the project root.');
-  const access = new WorkspaceContentAccess(profile, () => hostPrivate, installation);
+  const access = new WorkspaceContentAccess(
+    profile,
+    () => hostPrivate,
+    installation,
+    projectContext.roots.map(root => root.path),
+  );
   using selections = new WorkspaceRootSelections();
   const metadata = new NativeFilesystemMetadata(indexExecutable);
   const { workspace, selectedFiles, pathIndex } = await createProjectRuntime(
@@ -115,6 +121,7 @@ async function main(): Promise<void> {
     configuration.stateDirectory,
     indexExecutable,
     access,
+    profile.path,
     selections,
     metadata,
   );
@@ -162,6 +169,10 @@ async function main(): Promise<void> {
     new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
     proposalReviews,
     logger,
+    undefined,
+    new SkillProjectMutationPolicy([
+      { store: { root: profile.path, caseSensitive: workspace.caseSensitive }, directory: 'skills' },
+    ]),
   );
   const webApproval = new WebApprovalService(
     { workspaceId: projectContext.id, mutationScope: projectContext.mutationIdentity },
@@ -260,6 +271,7 @@ async function createProjectRuntime(
   stateDirectory: string,
   indexExecutable: string,
   policy: WorkspaceContentAccess,
+  profilePath: string,
   selections: WorkspaceRootSelections,
   physicalAccess: NativeFilesystemMetadata,
 ): Promise<{ workspace: WorkspaceTextStore; selectedFiles: WorkspaceTextStore; pathIndex: WorkspacePathIndex }> {
@@ -269,7 +281,11 @@ async function createProjectRuntime(
   );
   const roots = context.roots.map((root, i) => {
     const access = new WorkspaceRootAccess(policy.project, root.path, casing[i]!, [], selected[i]!.assertCurrent);
-    const workspace = new FileSystemWorkspaceTextStore(root.path, { access, physicalAccess });
+    const workspace = new FileSystemWorkspaceTextStore(root.path, {
+      access,
+      physicalAccess,
+      managedDirectories: [join(profilePath, 'skills')],
+    });
     const selectedFiles = new FileSystemWorkspaceTextStore(root.path, {
       access: new WorkspaceRootAccess(policy.selectedFile, root.path, casing[i]!, [], selected[i]!.assertCurrent),
       physicalAccess,

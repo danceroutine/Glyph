@@ -120,13 +120,15 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
             ],
           } as never;
           return;
-        case WorkbenchCommandType.REFRESH_CONTEXT_CATALOGS:
-          this.emit({ type: HostEventType.INSTRUCTION_SOURCES_CHANGED, sources: this.snapshot().instructionSources });
-          this.emit({ type: HostEventType.SKILLS_CHANGED, skills: this.snapshot().skills ?? [] });
-          return;
         case WorkbenchCommandType.REQUEST_SNAPSHOT:
           this.emit({ type: HostEventType.INITIAL_STATE, state: this.snapshot() });
           return;
+        case WorkbenchCommandType.REFRESH_CONTEXT_CATALOGS: {
+          const state = this.snapshot() as GlyphDesktopSnapshot;
+          this.emit({ type: HostEventType.INSTRUCTION_SOURCES_CHANGED, sources: state.instructionSources ?? [] });
+          this.emit({ type: HostEventType.SKILLS_CHANGED, skills: state.skills ?? [] });
+          return;
+        }
         case WorkbenchCommandType.CREATE_CHAT: {
           const summary = {
             id: `created-${++this.created}`,
@@ -502,13 +504,14 @@ describe(NativeGlyphWorkbenchService, () => {
     ]);
   });
   it('wires editor and composer context callbacks into the desktop adapters', async () => {
-    const { service, host, editor, context } = await workbench();
+    const skillTargets = [{ id: 'project', label: 'Project', uri: 'file:///project/.glyph/skills' }];
+    const { service, host, editor, context } = await workbench({ extra: { skillTargets } });
     const request = { operationId: 'read', type: GlyphEditorRequestType.READ_SNAPSHOT, path: 'notes.md' } as const;
     const checkMutation = vi.fn(async () => {});
 
     await host.handleEditorRequest(request, checkMutation);
 
-    expect(editor.handle).toHaveBeenCalledWith(request, checkMutation);
+    expect(editor.handle).toHaveBeenCalledWith(request, skillTargets, checkMutation);
     expect((context.composer as unknown as () => unknown)()).toBe(service.composer);
     expect(service.ideContext).toBe((context as unknown as { ide: unknown }).ide);
   });
@@ -1177,6 +1180,33 @@ describe(NativeGlyphWorkbenchService, () => {
     const [refresh] = context.setInstructionRefresh.mock.calls[0];
     await refresh();
     expect(host.request).toHaveBeenCalledTimes(2);
+  });
+  it('routes revision-bound skill management requests and publishes native skill watch roots', async () => {
+    const { service, host, context } = await workbench({
+      extra: {
+        instructionWatchRoots: ['file:///project/.glyph/skills'],
+        skillTargets: [
+          { id: 'project', label: 'Project', uri: 'file:///project/.glyph/skills' },
+          { id: 'other', label: 'Other' },
+        ],
+      },
+    });
+    host.request.mockClear();
+    const source = { kind: 'local' as const, path: '/selected/example' };
+    await service.previewSkill('project', { source });
+    await service.applySkill('preview');
+    await service.discardSkillPreview('discard');
+    await service.setSkillEnabled('skill', false);
+    expect(host.request.mock.calls.map(([command]) => command as GlyphWorkbenchCommand)).toEqual([
+      { type: GlyphWorkbenchCommandType.PREVIEW_SKILL, targetId: 'project', source },
+      { type: GlyphWorkbenchCommandType.APPLY_SKILL, previewId: 'preview' },
+      { type: GlyphWorkbenchCommandType.DISCARD_SKILL_PREVIEW, previewId: 'discard' },
+      { type: GlyphWorkbenchCommandType.SET_SKILL_ENABLED, skillId: 'skill', enabled: false },
+    ]);
+    const [sources] = context.setSkillSources.mock.calls[0];
+    const [, roots] = context.setInstructionRefresh.mock.calls[0];
+    expect(sources()).toEqual([]);
+    expect(roots()).toEqual(['file:///project/.glyph/skills']);
   });
 
   it('reports a failed catalog refresh and allows a later retry', async () => {

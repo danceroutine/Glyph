@@ -59,3 +59,70 @@ export const Catalog: Story = {};
 export const Empty: Story = { args: { skills: [] } };
 export const Filtered: Story = { args: { query: 'Project skill' } };
 export const NoMatches: Story = { args: { query: 'not found' } };
+
+const management = {
+  targets: [
+    { id: 'project', label: 'Project skills' },
+    { id: 'user', label: 'User skills' },
+  ],
+  previewDraft: fn(async () => {}),
+  installLocal: fn(async () => {}),
+  previewRepository: fn(async () => {}),
+  setEnabled: fn(async () => {}),
+  remove: fn(async () => {}),
+  apply: fn(async () => {}),
+  discard: fn(async () => {}),
+};
+export const Manage: Story = { args: { management } };
+export const ReviewUpdate: Story = {
+  args: {
+    management: {
+      ...management,
+      preview: {
+        id: 'preview',
+        action: 'update',
+        targetId: 'project',
+        destination: { label: 'Project skills', scope: 'project' as const, path: '/app/.glyph/skills/review' },
+        name: 'review',
+        source: 'https://example.test/skills@pinned-commit:review',
+        revision: 'a45f094d1e',
+        directories: [{ path: 'templates/attachments', status: 'added', afterMode: 0o750 }],
+        files: [
+          {
+            path: 'SKILL.md',
+            status: 'modified',
+            before: 'Review changes.',
+            after: 'Review changes and run the targeted tests.',
+          },
+          { path: 'templates/report.md', status: 'added', after: '# Findings\n\nDescribe actionable issues.' },
+        ],
+      },
+    },
+  },
+};
+export const RefreshNotice: Story = {
+  args: {
+    management: {
+      ...management,
+      message: 'The package was changed successfully. Refresh Skills to update the catalog.',
+    },
+  },
+};
+
+export const VisibleControlCharacters: Story = {
+  args: {
+    management: {
+      ...management,
+      preview: {
+        id: 'controls',
+        action: 'install',
+        targetId: 'project',
+        name: 'review',
+        source: 'Local package\u202Efrom disk',
+        revision: 'reviewed-bytes',
+        destination: { label: 'Project skills', scope: 'project', path: '/app/.glyph/skills/review' },
+        files: [{ path: 'report\u202Ejs\n.txt', status: 'added', after: '# مرحبا\nconst value = "\u2066hidden";' }],
+      },
+    },
+  },
+};

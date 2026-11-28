@@ -74,6 +74,7 @@ await mkdir(nativeDirectory, { recursive: true });
 for (const name of [
   process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
   process.platform === 'win32' ? 'glyph-shell-sandbox.exe' : 'glyph-shell-sandbox',
+  process.platform === 'win32' ? 'glyph-workspace-mutations.exe' : 'glyph-workspace-mutations',
 ]) {
   await cp(join(repositoryRoot, 'target', 'release', name), join(nativeDirectory, name));
 }

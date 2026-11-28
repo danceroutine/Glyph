@@ -1,0 +1,73 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
+import { resolve } from 'node:path';
+import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
+import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
+import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
+import { SkillStateStore } from '#src/skills/SkillStateStore.js';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
+
+const [root, scenario] = process.argv.slice(2);
+const store = fixtureWorkspace(root);
+const testFilesystemMetadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
+const mutations = await NativeWorkspaceMutations.open(resolve('target/release/glyph-workspace-mutations'), root);
+const state = new SkillStateStore(store.root, testFilesystemMetadata, () => mutations);
+if (scenario === 'first-preference') {
+  const publish = mutations.renameExclusive.bind(mutations);
+  mutations.renameExclusive = async (...args) => {
+    await publish(...args);
+    process.exit(53);
+  };
+  await state.setEnabled('example', false, new AbortController().signal);
+}
+await state.initialize();
+const location = {
+  id: 'user:glyph',
+  scope: 'user',
+  label: 'User skills',
+  directory: 'skills',
+  store,
+  workspace: store,
+  mutations,
+  listFiles: () => store.list(10000, 'skills/**/*'),
+  refreshIndex: async () => {},
+};
+const provider = new FileSkillDiscoveryProvider({
+  ...location,
+  origin: { id: location.id, scope: location.scope, label: location.label, compatibility: 'glyph' },
+  binaryStore: store,
+  uriForPath: path => path,
+});
+const catalog = new SkillCatalog([provider], { profile: state });
+const manager = new SkillPackageManager([location], catalog, state);
+await catalog.refresh();
+const installed = catalog.skills[0];
+if (scenario === 'crash') {
+  state.record = async () => process.exit(53);
+  const draft = new SkillPackageDraft({
+    name: 'example',
+    source: 'Child import',
+    files: [
+      {
+        path: 'SKILL.md',
+        content: '---\nname: example\ndescription: Crash fixture\n---\nChanged in child',
+        encoding: 'utf8',
+      },
+    ],
+  });
+  const preview = await manager.prepare(location.id, draft, installed.id);
+  await manager.apply(preview.id);
+} else {
+  const forget = state.forget.bind(state);
+  state.forget = async id => {
+    process.send('removed');
+    await new Promise(accept => {
+      process.once('message', accept);
+    });
+    return forget(id);
+  };
+  const preview = await manager.prepareRemoval(installed.id);
+  await manager.apply(preview.id);
+  process.disconnect();
+}

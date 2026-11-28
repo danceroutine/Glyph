@@ -1,3 +1,4 @@
+import type { GlyphSkillPreview, GlyphSkillTarget } from './GlyphSkillManagement.ts';
 import type { GlyphSkill } from './GlyphSkill.ts';
 import type { AgentReview } from '#src/reviewing/AgentReview.js';
 import type { GlyphBackgroundShell } from './GlyphBackgroundShell.ts';
@@ -23,6 +24,7 @@ import type { GlyphInstructionSource } from './GlyphInstructionSource.ts';
 
 /** Discriminants for host events projected into a workbench window. */
 export enum GlyphHostEventType {
+  SKILL_MANAGEMENT_CHANGED = 'skill_management_changed',
   COMMAND_RESULT = 'command_result',
   INITIAL_STATE = 'initial_state',
   CHAT_UPDATED = 'chat_updated',
@@ -48,6 +50,12 @@ export enum GlyphHostEventType {
 
 /** Closed event union used to keep every host-to-renderer transition exhaustively typed. */
 export type GlyphHostEvent =
+  | {
+      readonly type: GlyphHostEventType.SKILL_MANAGEMENT_CHANGED;
+      readonly targets: readonly GlyphSkillTarget[];
+      readonly message?: string;
+      readonly preview?: GlyphSkillPreview;
+    }
   | { readonly type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED; readonly lookupId: string; readonly skillId?: string }
   | { readonly type: GlyphHostEventType.SKILLS_CHANGED; readonly skills: readonly GlyphSkill[] }
   | {

@@ -26,12 +26,17 @@ export interface OneShotChoiceEffect {
   readonly grant: null;
 }
 export interface ApprovalDefinitions {
+  [ApprovalCapability.SKILL_CHANGE]: {
+    readonly operation: { readonly title: string; readonly detail: string; readonly revision: string };
+    readonly effect: OneShotChoiceEffect;
+  };
   [ApprovalCapability.SHELL]: {
     readonly operation: {
       readonly command: string;
       readonly workingDirectory: string;
       readonly background: boolean;
       readonly existingTerminal: boolean;
+      readonly transient?: boolean;
     };
     readonly effect: ShellChoiceEffect;
   };

@@ -33,6 +33,7 @@ enum PathIndexMethod {
   GLOB = 'glob',
   LIST_SKILL_PACKAGES = 'listSkillPackages',
   FILTER_PATHS = 'filterPaths',
+  LIST_DIRECTORIES = 'listDirectories',
   ASSERT_REPLACEABLE_METADATA = 'assertReplaceableMetadata',
   CONTENT_SEARCH = 'contentSearch',
   CANCEL = 'cancel',
@@ -364,6 +365,15 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     check();
   }
 
+  /** Fresh package directories admitted by the same native ignore policy as file capture. */
+  async listDirectories(signal?: AbortSignal): Promise<readonly string[]> {
+    const check = this.beginResultAccess();
+    await this.initialize(signal);
+    const result = z.array(z.string()).parse(await this.request(PathIndexMethod.LIST_DIRECTORIES, {}, signal));
+    check();
+    return result;
+  }
+
   /** Metadata-only intersection with the catalog, including ignore and sensitive-file exclusions. */
   async filterPaths(paths: readonly string[], signal?: AbortSignal): Promise<readonly string[]> {
     const operation = this.access.beginOperation();
@@ -584,7 +594,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
 }
 
 function startProcess(binaryPath: string): SidecarProcess {
-  return spawn(binaryPath, [], { shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+  return spawn(binaryPath, [], { env: {}, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
 function toAbortError(signal: AbortSignal | undefined): Error {

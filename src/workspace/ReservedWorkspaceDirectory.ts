@@ -4,7 +4,8 @@ import { normalizeVolumeName } from './FilesystemNamePolicy.ts';
 import { workspaceCaseSensitivity } from './workspaceCaseSensitivity.ts';
 
 /** Native transaction directory names. Actual entry and parent-volume identity decide alternate spellings. */
-export const privateDirectories = ['.skill-staging'];
+export const skillExecutionDirectory = '.glyph-skill-run';
+export const privateDirectories = ['.skill-staging', skillExecutionDirectory];
 
 export function isPrivateDirectory(
   name: string,

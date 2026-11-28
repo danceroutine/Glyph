@@ -75,7 +75,9 @@ function editorServices() {
   const dirty = new Set<string>();
   const find = (resource: URI) => models.find(model => model.uri.toString() === resource.toString());
   const inside = (resource: URI) =>
-    workspace.folders.find(folder => resource.path.startsWith(`${folder.uri.path}/`)) ?? null;
+    workspace.folders
+      .filter(folder => extUri.isEqualOrParent(resource, folder.uri))
+      .toSorted((a, b) => b.uri.path.length - a.uri.path.length)[0] ?? null;
   const writeText = (edit: ResourceTextEdit, reason: unknown) => {
     const model = find(edit.resource)!;
     const { range, text, eol } = edit.textEdit;
@@ -101,7 +103,15 @@ function editorServices() {
     disk.delete(edit.oldResource.path);
     models.splice(models.indexOf(find(edit.oldResource)!), 1);
   };
+  const pendingCopies: { resource: URI }[] = [];
   const services = {
+    pendingCopies,
+    workingCopyService: {
+      get dirtyWorkingCopies() {
+        return pendingCopies;
+      },
+    },
+    pathService: { userHome: () => URI.file('/local-home') },
     state,
     workspace,
     models,
@@ -150,10 +160,8 @@ function editorServices() {
       getModels: () => models,
       getModel: vi.fn((resource: URI) => find(resource) ?? null),
     },
-    workingCopyService: { dirtyWorkingCopies: [] as { resource: URI }[] },
-    pathService: { userHome: () => URI.file('/home/test') },
     textFileService: {
-      untitled: { isUntitledWithAssociatedResource: (resource: URI) => resource.path.startsWith('/') },
+      untitled: { isUntitledWithAssociatedResource: (uri: URI) => uri.path.startsWith('/') },
       isDirty: vi.fn((resource: URI) => dirty.has(resource.path)),
       files: {
         resolve: vi.fn(async (resource: URI) => {
@@ -251,11 +259,11 @@ function fileMutation(
 }
 
 function applyText(adapter: GlyphEditorAdapter, mutation: GlyphTextMutation) {
-  return adapter.handle({ type: GlyphEditorRequestType.APPLY_TEXT_MUTATION, mutation }, async () => {});
+  return adapter.handle({ type: GlyphEditorRequestType.APPLY_TEXT_MUTATION, mutation }, [], async () => {});
 }
 
 function applyFile(adapter: GlyphEditorAdapter, mutation: GlyphFileMutation) {
-  return adapter.handle({ type: GlyphEditorRequestType.APPLY_FILE_MUTATION, mutation }, async () => {});
+  return adapter.handle({ type: GlyphEditorRequestType.APPLY_FILE_MUTATION, mutation }, [], async () => {});
 }
 
 function readSnapshot(adapter: GlyphEditorAdapter, path: string) {
@@ -1060,7 +1068,7 @@ describe(GlyphEditorAdapter, () => {
         await (edits[0] as ResourceFileEdit & { validate(): Promise<void> }).validate();
         return { isApplied: true };
       });
-      expect((await adapter.handle(request, check)).ok).toBe(false);
+      expect((await adapter.handle(request, [], check)).ok).toBe(false);
       expect(check).toHaveBeenCalledTimes(2);
       expect(services.disk.has('/workspace/b.ts')).toBe(false);
     });
@@ -1698,6 +1706,192 @@ it('reads consistent dirty catalog snapshots from logical and physical buffers a
   expect(await adapter.handle(command)).toEqual({ operationId: 'source', ok: true });
 });
 
+describe('skill package working-copy checks', () => {
+  const project = '/workspace/nested/.glyph/skills/example';
+  async function check(
+    adapter: GlyphEditorAdapter,
+    scope: 'user' | 'project',
+    directory: string,
+    userRoot = '/private/approved/skills',
+  ) {
+    return adapter.handle(
+      {
+        type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
+        operationId: 'check',
+        scope,
+        directoryUri: URI.file(directory).toString(),
+      },
+      [{ id: 'test-user', scope: 'user', label: 'User skills', uri: URI.file(userRoot).toString() }],
+    );
+  }
+  it('authorizes the original project when the package is also attached and checks its physical and logical buffers', async () => {
+    const services = editorServices();
+    services.workspace.folders.push({ name: 'package', uri: URI.file(project) });
+    const adapter = createAdapter(services);
+    const physical = '/original/.glyph/skills/example';
+    const request = {
+      type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES as const,
+      operationId: 'scope',
+      scope: 'project' as const,
+      directoryUri: URI.file(project).toString(),
+      physicalPackageUri: URI.file(physical).toString(),
+    };
+    services.fileService.realpath.mockResolvedValue(URI.file(physical));
+    await expect(adapter.handle(request)).resolves.toMatchObject({ packageClean: true });
+    services.pendingCopies.push({ resource: URI.file(physical + '/new.txt') });
+    await expect(adapter.handle(request)).resolves.toMatchObject({ packageClean: false });
+    services.pendingCopies.splice(0);
+    services.pendingCopies.push({ resource: URI.file(project + '/new.txt') });
+    await expect(adapter.handle(request)).resolves.toMatchObject({ packageClean: false });
+    services.fileService.realpath.mockRejectedValue(new Error('ENOENT: realpath failed after removal'));
+    services.fileService.stat.mockRejectedValueOnce(
+      new FileOperationError('Removed', FileOperationResult.FILE_NOT_FOUND),
+    );
+    expect((await adapter.handle(request)).packageClean).toBe(false);
+    expect((await adapter.handle(request)).ok).toBe(false);
+    services.fileService.realpath.mockRejectedValueOnce(new Error('Unknown working-copy root'));
+    services.fileService.stat.mockRejectedValueOnce(new Error('Cannot inspect the physical package'));
+    expect((await adapter.handle(request)).ok).toBe(false);
+    services.fileService.realpath.mockResolvedValue(undefined);
+    await expect(adapter.handle(request)).resolves.toMatchObject({ ok: false });
+    services.fileService.realpath.mockResolvedValue(URI.file('/unrelated'));
+    await expect(adapter.handle(request)).resolves.toMatchObject({ ok: false });
+    services.fileService.realpath.mockResolvedValue(URI.file(physical + '/scripts'));
+    await expect(adapter.handle({ ...request, peerWorkspaceIntersection: true })).resolves.toMatchObject({
+      packageClean: false,
+    });
+    await expect(
+      adapter.handle({
+        ...request,
+        directoryUri: URI.file(project + '/file').toString(),
+        peerWorkspaceIntersection: true,
+      }),
+    ).resolves.toMatchObject({ ok: false });
+  });
+  it('checks unsaved project resources and associated untitled files without opening any document', async () => {
+    const services = editorServices();
+    const adapter = createAdapter(services);
+    services.pendingCopies.push(
+      { resource: URI.file(project + '-other/note') },
+      { resource: URI.parse('untitled:Untitled-1') },
+    );
+    await expect(check(adapter, 'project', project)).resolves.toEqual({
+      operationId: 'check',
+      ok: true,
+      packageClean: true,
+    });
+    services.pendingCopies.push({ resource: URI.file(project + '/new.md').with({ scheme: 'untitled' }) });
+    await expect(check(adapter, 'project', project)).resolves.toEqual({
+      operationId: 'check',
+      ok: true,
+      packageClean: false,
+    });
+    expect(services.fileService.readFile).not.toHaveBeenCalled();
+    expect(services.textModelService.createModelReference).not.toHaveBeenCalled();
+  });
+  it('checks host-mapped peer package intersections only inside the current trusted workspace', async () => {
+    const services = editorServices();
+    services.workspace.folders = [
+      { name: 'references', uri: URI.file('/reference-alias') },
+      { name: 'skill store', uri: URI.file('/store-alias') },
+    ];
+    const adapter = createAdapter(services);
+    const intersection = (directory: string) =>
+      adapter.handle({
+        type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
+        operationId: 'peer',
+        scope: 'project',
+        directoryUri: URI.file(directory).toString(),
+        peerWorkspaceIntersection: true,
+      });
+    services.pendingCopies.push({ resource: URI.file('/store-alias/other/notes.md') });
+    for (const path of ['/reference-alias', '/store-alias/example']) {
+      await expect(intersection(path)).resolves.toEqual({ operationId: 'peer', ok: true, packageClean: true });
+      await expect(check(adapter, 'project', path)).resolves.toMatchObject(failure(GlyphDesktopErrorCode.UNAUTHORIZED));
+      services.pendingCopies.push({ resource: URI.file(path + '/unsaved.md') });
+      await expect(intersection(path)).resolves.toEqual({ operationId: 'peer', ok: true, packageClean: false });
+    }
+    await expect(intersection('/reference-alias-other')).resolves.toMatchObject(
+      failure(GlyphDesktopErrorCode.UNAUTHORIZED),
+    );
+    services.state.trusted = false;
+    await expect(intersection('/reference-alias')).resolves.toMatchObject(
+      failure(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE),
+    );
+    expect(services.fileService.readFile).not.toHaveBeenCalled();
+    expect(services.textModelService.createModelReference).not.toHaveBeenCalled();
+  });
+  it.each([undefined, '/configured-profile'])(
+    'uses the local user package root for recovery before targets arrive (configured directory %s)',
+    async configured => {
+      const original = env['GLYPH_USER_DIRECTORY'];
+      onTestFinished(() => {
+        if (original === undefined) delete env['GLYPH_USER_DIRECTORY'];
+        else env['GLYPH_USER_DIRECTORY'] = original;
+      });
+      if (configured) env['GLYPH_USER_DIRECTORY'] = configured;
+      else delete env['GLYPH_USER_DIRECTORY'];
+
+      const services = editorServices();
+      const adapter = createAdapter(services);
+      const directory = (configured ?? '/local-home/.glyph') + '/skills/example';
+      const request = (path: string) =>
+        adapter.handle({
+          type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
+          operationId: 'recovery',
+          scope: 'user',
+          directoryUri: URI.file(path).toString(),
+        });
+      await expect(request(directory)).resolves.toMatchObject({ ok: true, packageClean: true });
+      services.pendingCopies.push({ resource: URI.file(directory + '/SKILL.md') });
+      await expect(request(directory)).resolves.toMatchObject({ ok: true, packageClean: false });
+      const other = configured ? '/local-home/.glyph' : '/configured-profile';
+      await expect(request(other + '/skills/example')).resolves.toMatchObject(
+        failure(GlyphDesktopErrorCode.UNAUTHORIZED),
+      );
+    },
+  );
+  it('checks only the approved user target and rejects foreign roots, traversal, and untrusted requests', async () => {
+    const services = editorServices();
+    const adapter = createAdapter(services);
+    services.pendingCopies.push({ resource: URI.file('/private/approved/skills/example/SKILL.md') });
+    await expect(check(adapter, 'user', '/private/approved/skills/example')).resolves.toMatchObject({
+      ok: true,
+      packageClean: false,
+    });
+    for (const [scope, path] of [
+      ['user', '/foreign/skills/example'],
+      ['user', '/private/approved/skills/nested/example'],
+      ['project', '/outside/.glyph/skills/example'],
+      ['project', '/workspace/ordinary'],
+      ['project', '/workspace/.cursor/skills/example'],
+    ] as const)
+      await expect(check(adapter, scope, path)).resolves.toMatchObject({
+        ok: false,
+        error: { code: GlyphDesktopErrorCode.UNAUTHORIZED },
+      });
+    for (const directoryUri of [
+      'https://example.test/work',
+      'file:///workspace/.glyph/skills/%2E%2E',
+      'file:///workspace/.glyph/skills/example?q=x',
+    ])
+      await expect(
+        adapter.handle({
+          type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
+          operationId: 'invalid',
+          scope: 'project',
+          directoryUri,
+        }),
+      ).resolves.toMatchObject({ ok: false });
+    services.state.trusted = false;
+    await expect(check(adapter, 'user', '/private/approved/skills/example')).resolves.toMatchObject({
+      ok: false,
+      error: { code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE },
+    });
+    expect(services.fileService.readFile).not.toHaveBeenCalled();
+  });
+});
+
 it('accepts dirty text only from the matching filesystem spelling', async () => {
   const services = editorServices();
   const adapter = createAdapter(services);
@@ -1725,9 +1919,9 @@ it('checks exact rules and complete skill packages across configured, physical, 
     { name: 'another', uri: URI.file('/other') },
   );
   const adapter = createAdapter(services);
-  const copies = services.workingCopyService.dirtyWorkingCopies;
+  const copies = services.pendingCopies;
   services.fileService.realpath.mockImplementation(async resource => {
-    if (resource.path === '/home/test/.glyph') return URI.file('/volume/profile');
+    if (resource.path === '/local-home/.glyph') return URI.file('/volume/profile');
     if (resource.path === '/workspace') return URI.file('/volume');
     return undefined;
   });
@@ -1742,7 +1936,7 @@ it('checks exact rules and complete skill packages across configured, physical, 
   expect((await check('rule', 'one.mdc')).workingCopiesClean).toBe(true);
   for (const value of ['', '.', '..', 'test/one.mdc', 'one.txt']) expect((await check('rule', value)).ok).toBe(false);
   for (const path of [
-    '/home/test/.glyph/rules/one.mdc',
+    '/local-home/.glyph/rules/one.mdc',
     '/volume/profile/rules/one.mdc',
     '/workspace/profile/rules/one.mdc',
   ]) {
@@ -1848,4 +2042,28 @@ it('discovers an existing dirty instruction buffer through a filesystem alias an
   expect((await adapter.handle(command)).ok).toBe(false);
   services.fileService.realpath.mockResolvedValue(undefined);
   expect((await adapter.handle(command)).ok).toBe(false);
+});
+
+it('checks project and peer-intersection skill buffers with the host volume policy', async () => {
+  const services = editorServices();
+  const adapter = createAdapter(services);
+  const directory = URI.file('/workspace/.glyph/skills/ss');
+  const command = {
+    type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES as const,
+    operationId: 'project',
+    scope: 'project' as const,
+    directoryUri: directory.toString(),
+    physicalPackageUri: directory.toString(),
+  };
+  const namePolicy = { caseSensitive: false, normalizesUnicode: true, foldsUnicode: true };
+  const sensitive = { caseSensitive: true, normalizesUnicode: false, foldsUnicode: false };
+  const dirty = URI.file('/workspace/.glyph/skills/ß/references/café.md');
+  for (const scheme of ['file', 'untitled']) {
+    services.workingCopyService.dirtyWorkingCopies.splice(0, Infinity, { resource: dirty.with({ scheme }) });
+    expect((await adapter.handle({ ...command, namePolicy })).packageClean).toBe(false);
+    expect((await adapter.handle({ ...command, namePolicy: sensitive })).packageClean).toBe(true);
+    expect((await adapter.handle({ ...command, peerWorkspaceIntersection: true, namePolicy })).packageClean).toBe(
+      false,
+    );
+  }
 });

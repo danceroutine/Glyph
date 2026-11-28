@@ -83,9 +83,12 @@ describe(EditorWorkspaceTextStore, () => {
       listPaths: async () => ({ files: [], truncated: false }),
     });
     await expect(store.canonicalPath('new/./file')).resolves.toBe('/canonical/project/new/file');
-    expect(canonicalPath).toHaveBeenCalledWith('new/file');
+    expect(canonicalPath).toHaveBeenCalledWith('new/file', undefined, undefined);
+    const admitted = vi.fn();
+    await store.canonicalPath('new/file', true, admitted);
+    expect(canonicalPath).toHaveBeenLastCalledWith('new/file', true, admitted);
     expect(() => store.canonicalPath('../escape')).toThrow();
-    expect(canonicalPath).toHaveBeenCalledTimes(1);
+    expect(canonicalPath).toHaveBeenCalledTimes(2);
     expect(request).not.toHaveBeenCalled();
   });
   it.each([true, false, undefined])(

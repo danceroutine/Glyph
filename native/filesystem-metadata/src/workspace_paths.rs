@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Default)]
 pub struct WorkspacePaths {
     private: BTreeSet<PathBuf>,
+    managed: Option<BTreeSet<PathBuf>>,
     /// Preserve the host's authority spelling as well as its current physical destination.
     configured: Vec<(PathBuf, Reservation)>,
     #[cfg(target_os = "linux")]
@@ -158,7 +159,30 @@ fn name_matches(path: &Path, expected: &str) -> bool {
 
 /// Match host-reserved components using the containing filesystem's actual filename semantics.
 pub fn private_name(path: &Path) -> bool {
-    name_matches(path, ".skill-staging")
+    name_matches(path, ".skill-staging") || name_matches(path, ".glyph-skill-run")
+}
+
+fn package_marker(path: &Path) -> bool {
+    name_matches(path, ".glyph") || name_matches(path, ".cursor")
+}
+
+fn managed_name(path: &Path) -> bool {
+    name_matches(path, "skills") && path.parent().is_some_and(package_marker)
+}
+
+/// Project both whole managed packages and a marker's managed child across Linux bind mounts.
+#[cfg(target_os = "linux")]
+pub fn project_managed_mounts(
+    table: &crate::mount_table::MountTable<'_>,
+    paths: &mut BTreeSet<PathBuf>,
+) {
+    for (root, point) in table.locations() {
+        if root.ancestors().chain(point.ancestors()).any(managed_name) {
+            table.aliases(point, true, paths);
+        } else if package_marker(root) || package_marker(point) {
+            table.aliases(&point.join("skills"), true, paths);
+        }
+    }
 }
 
 /// Check physical spelling only when unequal components could be filesystem aliases.
@@ -189,7 +213,16 @@ fn contains(root: &Path, candidate: &Path) -> bool {
 
 impl WorkspacePaths {
     pub fn current(private: &[PathBuf]) -> io::Result<Self> {
-        if private.iter().any(|p| !p.is_absolute()) {
+        Self::for_operation(private, None)
+    }
+
+    /// Managed package directories remain readable during ordinary project operations.
+    pub fn for_operation(private: &[PathBuf], managed: Option<&[PathBuf]>) -> io::Result<Self> {
+        if private
+            .iter()
+            .chain(managed.unwrap_or_default())
+            .any(|p| !p.is_absolute())
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Workspace access boundaries must be absolute.",
@@ -206,6 +239,14 @@ impl WorkspacePaths {
                 .map(|(_, target)| target.path().clone())
                 .collect(),
             configured,
+            managed: managed
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .map(|path| canonical_location(path))
+                        .collect::<io::Result<_>>()
+                })
+                .transpose()?,
             #[cfg(target_os = "linux")]
             mounts: None,
         };
@@ -218,6 +259,12 @@ impl WorkspacePaths {
             let table = crate::mount_table::MountTable::parse(&data)?;
             for path in policy.private.clone() {
                 table.aliases(&path, true, &mut policy.private);
+            }
+            if let Some(paths) = &mut policy.managed {
+                for path in paths.clone() {
+                    table.aliases(&path, true, paths);
+                }
+                project_managed_mounts(&table, paths);
             }
             policy.include_private_mounts(&table);
             policy.mounts = Some(std::sync::Arc::new(file));
@@ -265,7 +312,13 @@ impl WorkspacePaths {
     }
 
     pub fn excludes(&self, path: &Path) -> bool {
-        path.ancestors().any(private_name) || self.private.iter().any(|p| contains(p, path))
+        path.ancestors().any(private_name)
+            || self.private.iter().any(|p| contains(p, path))
+            || self.managed.as_ref().is_some_and(|paths| {
+                path.ancestors().any(managed_name)
+                    || package_marker(path)
+                    || paths.iter().any(|p| contains(p, path) || contains(path, p))
+            })
     }
 
     pub fn assert_path(&self, path: &Path, identity: Option<(&str, &str)>) -> io::Result<()> {
@@ -405,6 +458,24 @@ mod tests {
         assert_eq!(future_name("e\u{301}", true, false, true), "é");
         assert_eq!(future_name("A", false, false, false), "a");
         assert_eq!(future_name("ẞı", true, true, false), "ssı");
+        let mutation =
+            WorkspacePaths::for_operation(&[], Some(std::slice::from_ref(&store))).unwrap();
+        for reserved in [
+            &store,
+            &dir,
+            &dir.join(".glyph"),
+            &dir.join(".cursor/skills/key"),
+            &dir.join("nested/.glyph/skills/example"),
+        ] {
+            assert!(mutation.assert_path(reserved, None).is_err());
+        }
+        mutation.assert_path(&visible, None).unwrap();
+        mutation
+            .assert_path(&dir.join(".cursor/rules/example"), None)
+            .unwrap();
+        assert!(admitted
+            .assert_path(&dir.join(".glyph-skill-run/tool"), None)
+            .is_err());
         let renamed = dir.join("cataloG");
         assert_eq!(admitted.excludes(&renamed), same_inode(&renamed, &store));
         let name = dir.join("ſample");

@@ -1,6 +1,11 @@
 import { rebindFolderAttachmentText } from '#src/desktop/workbench/formatFolderContextOutline.js';
 import { contentRevision } from '#src/desktop/workspace/EditorWorkspaceTextStore.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+import { z } from 'zod';
+import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
+import { skillPackageSourceSchema, type SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
+import type { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
+import type { SkillPreview } from '#src/skills/SkillLifecycle.js';
 import { matchesSkillManifest } from '#src/skills/matchesSkillManifest.js';
 import type { TurnContextSnapshot } from '#src/context/turns/TurnContextEnvelope.js';
 import type { SkillCatalog } from '#src/skills/SkillCatalog.js';
@@ -88,6 +93,9 @@ interface ActiveRun {
 /** Adapts the existing application service to desktop commands without moving provider logic into Electron. */
 export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   private readonly unsubscribeSkills: (() => void) | undefined;
+  private skillPreviewRevision = 0;
+  private skillManagementMessage: string | undefined;
+  private skillPreview: SkillPreview | undefined;
   private connected = true;
   private readonly unsubscribeAgentReviews: (() => void) | undefined;
   private readonly pendingShellEvents = new Map<
@@ -142,11 +150,14 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       readonly restoreAttachmentPath?: (path: string, uri?: string) => string;
       readonly referenceResources?: (path: string) => NonNullable<GlyphInstructionSource['referenceResources']>;
       readonly instructionWatchRoots?: readonly string[];
+      readonly skillManager?: SkillPackageManager;
+      readonly skillSources?: SkillPackageSourceReader;
       readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'> &
         Partial<Pick<AgentInstructionCatalog, 'paths'>>;
       readonly userRules?: UserAgentRuleManager;
       readonly emit: (event: GlyphHostEvent) => void;
       readonly ownerWindowId: string;
+      /** Restricted windows can read ordinary history without restoring privileged instruction or tool payloads. */
       readonly trusted?: boolean;
     },
   ) {
@@ -199,7 +210,13 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     for (const proposal of this.options.glyph.proposalReviews?.retainedReviews ?? [])
       this.proposals.set(proposal.id, toProposal(proposal));
     return {
+      ...(this.options.instructionWatchRoots ? { instructionWatchRoots: this.options.instructionWatchRoots } : {}),
       ...(skills ? { skills } : {}),
+      ...(this.options.skillManager ? { skillTargets: this.options.skillManager.targets } : {}),
+      ...(this.skillPreview && this.options.skillManager?.hasPreview(this.skillPreview.id)
+        ? { skillPreview: this.skillPreview }
+        : {}),
+      ...(this.skillManagementMessage ? { skillManagementMessage: this.skillManagementMessage } : {}),
       agentReviews: this.options.agentReviews?.reviews ?? [],
       ...(this.options.instructionWatchRoots ? { instructionWatchRoots: this.options.instructionWatchRoots } : {}),
       ...(instructionSources
@@ -403,6 +420,69 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       case GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS:
         await this.options.refreshCatalogs?.(commandSignal);
         return;
+      case GlyphWorkbenchCommandType.PREVIEW_SKILL: {
+        const manager = this.options.skillManager;
+        if (!manager) throw new Error('Skill management requires a trusted workspace.');
+        const revision = ++this.skillPreviewRevision;
+        const previous = this.skillPreview;
+        let preview: SkillPreview;
+        this.skillManagementMessage = undefined;
+        if (command.removeId) preview = await manager.prepareRemoval(command.removeId, commandSignal);
+        else {
+          const draft = command.draft
+            ? new SkillPackageDraft(command.draft)
+            : command.source && this.options.skillSources
+              ? await this.options.skillSources.read(skillPackageSourceSchema.parse(command.source), commandSignal)
+              : undefined;
+          if (!draft) throw new Error('Choose a skill package or draft.');
+          commandSignal.throwIfAborted();
+          preview = await manager.prepare(command.targetId, draft, command.replaceId, commandSignal);
+        }
+        if (commandSignal.aborted || this.disposed || revision !== this.skillPreviewRevision) {
+          manager.discard(preview.id);
+          commandSignal.throwIfAborted();
+          throw new Error('A newer skill preview replaced this request.');
+        }
+        if (previous) manager.discard(previous.id);
+        this.skillPreview = preview;
+        this.publish({
+          type: GlyphHostEventType.SKILL_MANAGEMENT_CHANGED,
+          targets: manager.targets,
+          preview: this.skillPreview,
+        });
+        return;
+      }
+      case GlyphWorkbenchCommandType.APPLY_SKILL:
+      case GlyphWorkbenchCommandType.DISCARD_SKILL_PREVIEW: {
+        const manager = this.options.skillManager;
+        if (!manager || this.skillPreview?.id !== command.previewId) throw new Error('Skill preview expired.');
+        let message: string | undefined;
+        try {
+          if (command.type === GlyphWorkbenchCommandType.APPLY_SKILL)
+            message = (await manager.apply(command.previewId, commandSignal)).refreshError;
+          manager.discard(command.previewId);
+        } catch (error) {
+          message = error instanceof Error ? error.message : 'Skill change failed. Preview the change again.';
+          throw error;
+        } finally {
+          // Completion belongs to this token; an overlapping preview can already own the Settings panel.
+          if (this.skillPreview?.id === command.previewId && !manager.hasPreview(command.previewId)) {
+            this.skillPreview = undefined;
+            this.skillManagementMessage = message;
+            this.publish({
+              type: GlyphHostEventType.SKILL_MANAGEMENT_CHANGED,
+              targets: manager.targets,
+              ...(message ? { message } : {}),
+            });
+          }
+        }
+        return;
+      }
+      case GlyphWorkbenchCommandType.SET_SKILL_ENABLED:
+        if (!this.options.skillManager) throw new Error('Skill management requires a trusted workspace.');
+        await this.options.skillManager.setEnabled(command.skillId, z.boolean().parse(command.enabled), commandSignal);
+        return;
+
       case GlyphWorkbenchCommandType.CREATE_USER_RULE:
         if (!this.options.userRules) throw new Error('User rules are unavailable.');
         await this.options.userRules.create(commandSignal, command.name, command.activation, command.condition);
@@ -849,6 +929,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   private async stop(): Promise<void> {
     this.disposed = true;
+    if (this.skillPreview) this.options.skillManager?.discard(this.skillPreview.id);
+    this.skillPreview = undefined;
     // Revoke all workspace execution together. A provider or pending decision
     // must not keep background shells or agent review alive while it drains.
     const stopped = await Promise.allSettled([
@@ -863,6 +945,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     this.unsubscribe?.();
     this.unsubscribeInstructions?.();
     this.unsubscribeSkills?.();
+    this.options.skillManager?.dispose();
+    this.options.skills?.dispose();
     this.unsubscribeShells();
     this.unsubscribeWakes();
     await this.options.glyph.dispose();

@@ -12,6 +12,7 @@ import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/e
 import type { WebToolRuntime } from '#src/web/WebToolRuntime.js';
 const ApprovalDecision = { DENY: 'deny', ALLOW_ONCE: 'allow_once', ALLOW_EVERYTHING: 'allow_everything' } as const;
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
+import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 
 const captured = vi.hoisted(() => ({
   tools: [] as WebToolRuntime[],
@@ -74,6 +75,12 @@ describe('security: production desktop web consent', () => {
     });
     vi.spyOn(RustWorkspacePathIndex, 'filesystemCaseSensitive').mockResolvedValue(true);
     vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
+    const openMutations = NativeWorkspaceMutations.open;
+    // This consent test never publishes a skill package. Keep the native-client
+    // identity check independent of an installed desktop artifact.
+    vi.spyOn(NativeWorkspaceMutations, 'open').mockImplementation((_executable, boundRoot) =>
+      openMutations(process.execPath, boundRoot),
+    );
     const exchange = vi.fn(async () => new Response('fixture page', { headers: { 'content-type': 'text/plain' } }));
     vi.stubGlobal('fetch', exchange);
     const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, join(directory, 'user'));

@@ -72,7 +72,12 @@ fn propagates_the_exit_status_of_the_sandboxed_command() {
 
     let output = workspace.run("printf sandboxed; exit 7");
 
-    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "sandbox stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "sandboxed");
 }
 

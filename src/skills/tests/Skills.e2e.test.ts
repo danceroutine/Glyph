@@ -31,20 +31,27 @@ describe('Native skills discovery and model disclosure', () => {
     const store = fixtureWorkspace(root, { accessPolicy });
     let revoke = false;
     const read = () =>
-      listSkillPackageFiles(store, directory, (packageRoot, maxFiles) => {
-        const index = fixtureIndex({
-          root: packageRoot,
-          maxFiles,
-          accessPolicy,
-          binaryPath: resolve('target/release/glyph-context-index'),
-        });
-        const close = index.dispose.bind(index);
-        vi.spyOn(index, 'dispose').mockImplementation(async () => {
-          await close();
-          if (revoke) reserved = [path];
-        });
-        return index;
-      });
+      listSkillPackageFiles(
+        store,
+        directory,
+        (packageRoot, caseSensitive, respectGitIgnore) => {
+          const index = fixtureIndex({
+            root: packageRoot,
+            maxFiles: 257,
+            caseSensitive,
+            respectGitIgnore,
+            accessPolicy,
+            binaryPath: resolve('target/release/glyph-context-index'),
+          });
+          const close = index.dispose.bind(index);
+          vi.spyOn(index, 'dispose').mockImplementation(async () => {
+            await close();
+            if (revoke) reserved = [path];
+          });
+          return index;
+        },
+        true,
+      );
     await expect(read()).resolves.toMatchObject({ files: [directory + '/SKILL.md'] });
     revoke = true;
     await expect(read()).rejects.toThrow('Workspace access changed');

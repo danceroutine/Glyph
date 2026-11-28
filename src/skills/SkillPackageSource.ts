@@ -1,0 +1,238 @@
+import { LocalSkillSourceAuthority } from './LocalSkillSourceAuthority.ts';
+import type { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
+import { outsideWorkspace } from '#src/shell/TrustedHostExecutable.js';
+import { SkillRepositoryGit } from './SkillRepositoryGit.ts';
+import { indexedPackageDirectories, type SkillFileIndex } from './listSkillPackageFiles.ts';
+import { inventoryPackage } from './skillPackageInventory.ts';
+import { basename, dirname, join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { mkdir, rm, lstat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { z } from 'zod';
+import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { SkillPackageDraft } from './SkillPackageDraft.ts';
+import { optionalStat } from './SkillPackageStorage.ts';
+import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
+import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
+import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
+import type { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
+import type { WorkspacePathAccess } from '#src/workspace/WorkspacePathAccess.js';
+import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
+
+export const skillPackageSourceSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('local'), path: z.string().min(1) }).strict(),
+  z
+    .object({
+      kind: z.literal('repository'),
+      url: z.url().startsWith('https://'),
+      revision: z.string().min(1).max(200),
+      directory: z.string().max(1000),
+    })
+    .strict(),
+]);
+export type SkillPackageSource = z.infer<typeof skillPackageSourceSchema>;
+/** The host binds a user-selected local directory to its live private exclusions and physical file authority.
+ * The intake operation owns the bounded index; the returned store authenticates each captured file descriptor. */
+export type OpenLocalSkillSource = (root: string) => {
+  readonly store: Pick<FileSystemWorkspaceTextStore, 'resolvePath' | 'readBytes'>;
+  readonly index: SkillFileIndex;
+};
+/** Reads selected packages without checking out repositories, following symlinks, or executing package code. */
+export class SkillPackageSourceReader {
+  constructor(
+    private readonly openLocal: OpenLocalSkillSource,
+    private readonly metadata: FilesystemMetadata &
+      HostFilesystemAuthority &
+      WorkspacePathAccess &
+      Pick<NativeFilesystemMetadata, 'sourceOrigins' | 'assertUnlinkedDirectory'>,
+    private readonly accessPolicy: WorkspaceAccessPolicy,
+    private readonly repositoryProcesses: HostProcessLeases,
+  ) {}
+  async read(input: SkillPackageSource, signal?: AbortSignal): Promise<SkillPackageDraft> {
+    const source = skillPackageSourceSchema.parse(input);
+    if (source.kind === 'local') {
+      const root = resolve(source.path);
+      const revision = this.accessPolicy.revision;
+      const assertGeneration = () => {
+        if (revision !== this.accessPolicy.revision)
+          throw new Error('Host-private locations changed during this local import. Preview the source again.');
+      };
+      // The complete imported tree must remain disjoint from private names, including newly mounted aliases.
+      // Recheck the native namespace for each disclosure and publication; an unchanged path list alone cannot prove it.
+      const assertSourceCurrent = async () => {
+        assertGeneration();
+        await this.metadata.assertWorkspacePath(root, this.accessPolicy.privatePaths);
+        await this.metadata.assertHostPaths([root], this.accessPolicy.privatePaths);
+        assertGeneration();
+      };
+      await assertSourceCurrent();
+      if ((await lstat(root)).isSymbolicLink()) throw new Error('Skill sources cannot be symlinked directories.');
+      await inspectFileMetadata(this.metadata, root, 'replaceable');
+      const directories = await this.metadata.sourceOrigins(
+        [dirname(root), root],
+        this.accessPolicy.privatePaths,
+        signal,
+        true,
+      );
+      const { store, index } = this.openLocal(root);
+      try {
+        const state = await index.refresh(signal);
+        if (state.truncated) throw new Error('Skill source exceeds the file budget.');
+        const list = await index.glob('**/*', { limit: 257, ...(signal ? { signal } : {}) });
+        if (list.truncated) throw new Error('Skill source exceeds the file budget.');
+        const inventory = await inventoryPackage(root, signal);
+        const modes = await indexedPackageDirectories(index, path => store.resolvePath(path), signal);
+        for (const path of modes.keys())
+          await inspectFileMetadata(this.metadata, await store.resolvePath(path), 'replaceable');
+        const indexed = new Set(list.files);
+        if (
+          indexed.size !== inventory.files.length ||
+          inventory.files.some(path => !indexed.has(path)) ||
+          inventory.directories.some(path => !modes.has(path))
+        )
+          throw new Error('Skill source contains excluded or unindexed files.');
+        // Only the captured file identified by the standard manifest path gets the portable name.
+        const manifest = await optionalStat(join(root, 'SKILL.md'));
+        const manifestIdentity = manifest && `${manifest.dev}:${manifest.ino}`;
+        const files = [];
+        const reads = new Map<string, string>();
+        let bytes = 0;
+        for (const path of list.files) {
+          signal?.throwIfAborted();
+          const file = await store.readBytes(path, { maxBytes: 1024 * 1024, metadata: this.metadata });
+          reads.set(join(root, path), file.identity);
+          bytes += file.bytes.byteLength;
+          if (bytes > 8 * 1024 * 1024) throw new Error('Skill source exceeds 8 MiB.');
+          files.push({
+            path: !path.includes('/') && file.identity === manifestIdentity ? 'SKILL.md' : path,
+            mode: file.mode,
+            content: Buffer.from(file.bytes).toString('base64'),
+            encoding: 'base64' as const,
+          });
+        }
+        await assertSourceCurrent();
+        return new SkillPackageDraft(
+          {
+            name: basename(root),
+            source: root,
+            files,
+            directories: [...modes].map(([path, mode]) => ({ path, mode })),
+          },
+          await LocalSkillSourceAuthority.capture(
+            this.metadata,
+            this.accessPolicy,
+            root,
+            directories,
+            reads,
+            assertSourceCurrent,
+            signal,
+          ),
+        );
+      } finally {
+        await index.dispose();
+      }
+    }
+    const url = new URL(source.url);
+    if (url.username || url.password || url.search || url.hash)
+      throw new Error(
+        'Use a repository URL without embedded credentials, query parameters, or fragments. Configure Git authentication separately.',
+      );
+    if (
+      source.directory.split('/').some(part => part === '..') ||
+      /[\\\0:]/u.test(source.directory) ||
+      source.directory.startsWith('/')
+    )
+      throw new Error('Repository package directory must be relative.');
+    const directory = source.directory
+      .split('/')
+      .filter(part => part !== '' && part !== '.')
+      .join('/');
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/u.test(source.revision) || source.revision.includes('..'))
+      throw new Error('Select a commit, branch or tag.');
+    return this.withRepositoryStore(signal, async (storage, processSignal) => {
+      const transport = new SkillRepositoryGit(storage, processSignal, this.repositoryProcesses, this.metadata);
+      const git = async (...args: string[]) => {
+        const bytes = await transport.run(args);
+        try {
+          return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+        } catch {
+          throw new Error(
+            'Repository paths must use valid UTF-8. Rename the affected file before importing the skill.',
+          );
+        }
+      };
+      await transport.initialize(source.url);
+      await git(
+        '--git-dir=source.git',
+        'fetch',
+        '--depth=1',
+        '--no-tags',
+        '--filter=blob:none',
+        '--no-recurse-submodules',
+        'origin',
+        source.revision,
+      );
+      const revision = (
+        await git('--git-dir=source.git', 'rev-parse', '--verify', '--end-of-options', 'FETCH_HEAD^{commit}')
+      ).trim();
+      const tree = directory ? `${revision}:${directory}` : revision;
+      const entries = (await git('--git-dir=source.git', 'ls-tree', '-r', '-t', '-z', tree))
+        .split('\0')
+        .filter(Boolean);
+      if (entries.length > 8450) throw new Error('Skill source exceeds its directory budget.');
+      const directories = [];
+      const blobs = [];
+      for (const entry of entries) {
+        const subtree = /^040000 tree [a-f0-9]+\t(.+)$/su.exec(entry);
+        if (subtree) directories.push({ path: subtree[1]!, mode: 0o755 });
+        else blobs.push(entry);
+      }
+      if (blobs.length > 256) throw new Error('Skill source exceeds 256 files.');
+      const files = [];
+      let bytes = 0;
+      for (const entry of blobs) {
+        const match = /^(100644|100755) blob ([a-f0-9]+)\t(.+)$/su.exec(entry);
+        if (!match) throw new Error('Skill repositories cannot contain symlinks or submodules.');
+        const blob = await transport.run(['--git-dir=source.git', 'cat-file', 'blob', match[2]!], 1024 * 1024);
+        bytes += blob.byteLength;
+        if (bytes > 8 * 1024 * 1024) throw new Error('Skill source exceeds 8 MiB.');
+        files.push({
+          path: match[3]!,
+          mode: match[1] === '100755' ? 0o755 : 0o644,
+          content: blob.toString('base64'),
+          encoding: 'base64' as const,
+        });
+      }
+      return new SkillPackageDraft({
+        name: basename(directory || url.pathname.replace(/\/+$/u, '').replace(/\.git$/u, '')),
+        source: `Requested repository ${source.url}@${revision}${source.directory ? `:${source.directory}` : ''}`,
+        files,
+        directories,
+      });
+    });
+  }
+
+  /** Reserve the private directory from creation through recursive cleanup, including gaps between Git children. */
+  private async withRepositoryStore<T>(
+    signal: AbortSignal | undefined,
+    read: (storage: string, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const authority = new HostExecutionAuthority(this.repositoryProcesses, this.metadata);
+    const parent = outsideWorkspace(tmpdir(), authority.workspaceRoots);
+    const temporary = authority.admit(join(parent, 'glyph-skill-repository-' + randomUUID()));
+    const deadline = AbortSignal.timeout(60_000);
+    return authority.run(signal ? AbortSignal.any([signal, deadline]) : deadline, async processSignal => {
+      await mkdir(temporary, { mode: 0o700 });
+      try {
+        await inspectPrivateDirectory(this.metadata, temporary);
+        const storage = join(temporary, '.skill-staging');
+        await mkdir(storage, { mode: 0o700 });
+        await inspectPrivateDirectory(this.metadata, storage);
+        return await read(storage, processSignal);
+      } finally {
+        await rm(temporary, { recursive: true, force: true });
+      }
+    });
+  }
+}

@@ -1,9 +1,8 @@
 import { describe, expect, beforeEach, it, onTestFinished, vi, type Mock } from 'vitest';
-import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, rm, realpath, rename } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Deferred } from '#src/shared/Deferred.js';
-import { tmpdir } from 'node:os';
 vi.mock('#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.ts', () => ({
   isGlyphRequestEnvelope: vi.fn(),
 }));
@@ -16,6 +15,10 @@ import type { GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent
 import type { GlyphHostEventEnvelope } from '#src/desktop/protocol/events/GlyphHostEventEnvelope.js';
 import type { GlyphRequestEnvelope } from '#src/desktop/protocol/GlyphRequestEnvelope.js';
 import type { GlyphWorkbenchCommand } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
+import { assertSkillPackageClean } from '#src/desktop/workspace/assertSkillPackageClean.js';
+import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
+import { Deferred } from '#src/shared/Deferred.js';
+import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
 import { GlyphDesktopHost } from '#src/desktop/host/GlyphDesktopHost.js';
 import {
   type GlyphDesktopWorkspaceRuntime,
@@ -80,6 +83,84 @@ describe(GlyphDesktopHost, () => {
     expect(next.aborted).toBe(true);
     expect(first.aborted).toBe(true);
   });
+  it.each(['connected', 'disconnected', 'reconnected'] as const)(
+    'drains conflicting repository children while the peer is %s',
+    async state => {
+      const fixture = new HostFixture();
+      onTestFinished(() => fixture.host.dispose());
+      fixture.connect('first', owner);
+      const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+      await fixture.receive('first', owner, 'owner', attach);
+      const input = fixture.factory.create.mock.calls[0]![0] as Parameters<
+        GlyphDesktopWorkspaceRuntimeFactory['create']
+      >[0];
+      const helper = '/host/credential-helper';
+      const alias = '/mounted-tools';
+      // The production native authority can recognize an overlapping bind mount with a different spelling.
+      const native = {
+        assertHostPaths: async (paths: readonly string[], proposed: readonly string[]) => {
+          if (paths.includes(helper) && proposed.includes(alias)) throw new Error('Mounted host input');
+        },
+      };
+      const authority = new HostExecutionAuthority(input.repositoryProcesses!, native);
+      authority.admit(helper);
+      const close = new Deferred<void>();
+      const started = new Deferred<void>();
+      const cancelled = new Deferred<void>();
+      const signal = new AbortController().signal;
+      const child = authority.run(signal, processSignal => {
+        started.resolve();
+        processSignal.addEventListener(
+          'abort',
+          () => {
+            cancelled.resolve();
+          },
+          { once: true },
+        );
+        return close.promise;
+      });
+      const rejected = expect(child).rejects.toThrow('workspace is attaching');
+      await started.promise;
+      const send = vi.fn();
+      const peerIdentity = (path: string) => ({ ...peer, windowId: path, workspaceId: path });
+      const open = (path: string) => {
+        const identity = peerIdentity(path);
+        fixture.host.connect(path, identity, send);
+        return fixture.receive(path, identity, 'attach', {
+          ...attach,
+          trusted: false,
+          roots: [{ name: 'peer', canonicalPath: path, uri: pathToFileURL(path).toString() }],
+        });
+      };
+      await open('/unrelated');
+      expect(input.hostWorkspaceRoots!()).toContain('/unrelated');
+      const admission = open(alias);
+      await cancelled.promise;
+      expect(input.hostWorkspaceRoots!()).not.toContain(alias);
+      if (state !== 'connected') await fixture.host.disconnect(alias);
+      // A host may reuse its delivery callback on a fresh port for the same window.
+      if (state === 'reconnected') fixture.host.connect('next', peerIdentity(alias), send);
+      const delivered = send.mock.calls.length;
+      const retry = vi.fn(async () => 'started');
+      await expect(authority.run(signal, retry)).rejects.toThrow('Mounted host input');
+      expect(retry).not.toHaveBeenCalled();
+      const other = new HostExecutionAuthority(input.repositoryProcesses!, native);
+      other.admit('/host/unrelated');
+      await expect(other.run(signal, retry)).resolves.toBe('started');
+      close.resolve();
+      await rejected;
+      await admission;
+      if (state !== 'connected') {
+        expect(send).toHaveBeenCalledTimes(delivered);
+        expect(input.hostWorkspaceRoots!()).not.toContain(alias);
+        await expect(authority.run(signal, retry)).resolves.toBe('started');
+        return;
+      }
+      expect(input.hostWorkspaceRoots!()).toContain(alias);
+      await expect(authority.run(signal, retry)).rejects.toThrow('Mounted host input');
+      expect(retry).toHaveBeenCalledOnce();
+    },
+  );
 
   it('withdraws queued commands when trust changes while an earlier attach is collecting a snapshot', async () => {
     const fixture = new HostFixture();
@@ -471,8 +552,266 @@ describe(GlyphDesktopHost, () => {
     });
     await fixture.receive('owner', owner, 'restricted', command);
     expect(fixture.events('owner').at(-1)?.event).toMatchObject({ type: GlyphHostEventType.ERROR });
+    await fixture.host.dispose();
+  });
+  it.each([false, true])(
+    'requires peers to match the owning runtime trust (%s) before sharing snapshots or events',
+    async trusted => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      fixture.connect('peer', peer);
+      await fixture.receive('owner', owner, 'owner-attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted,
+      });
+      await fixture.receive('peer', peer, 'peer-attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: !trusted,
+      });
+      expect(fixture.events('peer').some(envelope => envelope.event.type === GlyphHostEventType.INITIAL_STATE)).toBe(
+        false,
+      );
+      fixture.runtime.emit({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: [] });
+      expect(
+        fixture.events('peer').some(envelope => envelope.event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED),
+      ).toBe(false);
+      expect(fixture.events('peer').at(-1)?.event).toMatchObject({
+        type: GlyphHostEventType.ERROR,
+        error: { message: expect.stringContaining('workspace trust') },
+      });
+      await fixture.host.dispose();
+    },
+  );
+  it('checks project editors using their logical aliases and blocks publication throughout reconnection grace', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'glyph-peer-roots-'));
+    onTestFinished(() => rm(parent, { recursive: true, force: true }));
+    const root = join(parent, 'project');
+    const alias = join(parent, 'alias');
+    await mkdir(root);
+    await symlink(root, alias);
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    const describeRoot = (path: string) => [
+      { name: 'project', uri: pathToFileURL(path).toString(), canonicalPath: path },
+    ];
+    await fixture.receive('owner', owner, 'owner', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: describeRoot(root),
+      trusted: true,
+    });
+    await fixture.receive('peer', peer, 'peer', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: describeRoot(alias),
+      trusted: true,
+    });
+    const destination = join(await realpath(root), '.glyph/skills/example');
+    const hostRoots = (
+      fixture.factory.create.mock.calls[0]![0] as Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0]
+    ).hostWorkspaceRoots!;
+    expect(hostRoots()).toEqual(expect.arrayContaining([root, alias, await realpath(root)]));
+    expect(fixture.host.trustedSkillEditors(owner, destination)).toEqual([
+      {
+        identity: peer,
+        connectionId: 'peer',
+        directoryUri: pathToFileURL(join(alias, '.glyph/skills/example')).toString(),
+      },
+    ]);
+    expect(fixture.host.trustedSkillEditors(owner, join(parent, 'outside'))).toEqual([]);
+    await rm(alias);
+    expect(hostRoots()).toEqual(expect.arrayContaining([root, alias]));
+    expect(() => fixture.host.trustedSkillEditors(owner, destination)).toThrow('unavailable project root');
+    await symlink(root, alias);
+    await fixture.host.disconnect('peer');
+    expect(() => fixture.host.trustedSkillEditors(owner, destination)).toThrow('reconnecting');
+    expect(() => fixture.host.trustedSkillEditors(owner)).toThrow('reconnecting');
+    await fixture.host.dispose();
+  });
+  it('blocks publication on a dirty peer opened inside the package and checks each overlapping logical alias', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'glyph-nested-peer-'));
+    onTestFinished(() => rm(parent, { recursive: true, force: true }));
+    const project = join(parent, 'project');
+    const store = join(project, '.glyph', 'skills');
+    const destination = join(store, 'example');
+    await mkdir(join(destination, 'references'), { recursive: true });
+    await mkdir(join(destination, 'scripts'));
+    await mkdir(join(store, 'example-sibling'));
+    const references = join(parent, 'reference-alias');
+    const scripts = join(parent, 'script-alias');
+    const storeAlias = join(parent, 'store-alias');
+    const unrelated = join(parent, 'other-alias');
+    await symlink(join(destination, 'references'), references);
+    await symlink(join(destination, 'scripts'), scripts);
+    await symlink(store, storeAlias);
+    await symlink(join(store, 'example-sibling'), unrelated);
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const describeRoot = (path: string) => ({ name: path, uri: pathToFileURL(path).toString(), canonicalPath: path });
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    const attachPeer = async (id: string, paths: string[]) =>
+      fixture.receive('peer', peer, id, {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots: paths.map(path => describeRoot(path)),
+        trusted: true,
+      });
+    await fixture.receive('owner', owner, 'owner', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: [describeRoot(project)],
+      trusted: true,
+    });
+    await attachPeer('peer', [references, scripts, storeAlias, unrelated]);
+    const physical = await realpath(destination);
+    expect(fixture.host.trustedSkillEditors(owner, physical).map(value => value.directoryUri)).toEqual(
+      [references, scripts, join(storeAlias, 'example')].map(path => pathToFileURL(path).toString()),
+    );
+    let dirty = true;
+    const check = () =>
+      assertSkillPackageClean(
+        {
+          trustedSkillEditors: fixture.host.trustedSkillEditors.bind(fixture.host),
+          request: async (identity, input) => {
+            if (input.type !== GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES)
+              throw new Error('Unexpected editor request.');
+            return {
+              operationId: input.operationId,
+              ok: true,
+              packageClean: !(
+                dirty &&
+                identity.windowId === peer.windowId &&
+                input.directoryUri === pathToFileURL(scripts).toString()
+              ),
+            };
+          },
+        },
+        owner,
+        'project',
+        physical,
+      );
+    await expect(check()).rejects.toThrow('unsaved');
+    dirty = false;
+    await rm(unrelated);
+    await check();
+    await symlink(join(destination, 'references'), unrelated);
+    await check();
+    expect(fixture.host.trustedSkillEditors(owner, physical).map(value => value.directoryUri)).toContain(
+      pathToFileURL(unrelated).toString(),
+    );
+    // Removed directories no longer resolve, but the connected editor can still own dirty resources there.
+    const moved = join(parent, 'saved-package');
+    await rename(physical, moved);
+    expect(fixture.host.trustedSkillEditors(owner, physical).map(editor => editor.directoryUri)).toContain(
+      pathToFileURL(scripts).toString(),
+    );
+    await rename(moved, physical);
+    await rm(scripts);
+    await symlink(join(store, 'example-sibling'), scripts);
+    expect(fixture.host.trustedSkillEditors(owner, join(parent, 'another-project'))).toEqual([]);
+    await expect(check()).rejects.toThrow('unavailable project root');
+    await attachPeer('unknown', [references, join(parent, 'never-resolved')]);
+    await expect(check()).rejects.toThrow('unavailable project root');
+    await attachPeer('reconnect', [references]);
+    await fixture.host.disconnect('peer');
+    await expect(check()).rejects.toThrow('reconnecting');
+  });
+  it('projects a mounted package into a disjoint editor root and keeps its pre-swap route', async () => {
+    const parent = await realpath(await mkdtemp(join(tmpdir(), 'glyph-peer-mount-')));
+    onTestFinished(() => rm(parent, { recursive: true, force: true }));
+    const registered = join(parent, 'peer');
+    const target = join(parent, 'owner', 'package');
+    const alias = join(registered, 'mount');
+    await mkdir(target, { recursive: true });
+    await mkdir(alias, { recursive: true });
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const lookup = vi.fn(() => [target, alias]);
+    Object.assign(fixture.factory, { sourcePathAliases: lookup });
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    for (const [key, identity, path] of [
+      ['owner', owner, join(parent, 'owner')],
+      ['peer', peer, registered],
+    ] as const) {
+      await fixture.receive(key, identity, 'attach-' + key, {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots: [{ name: key, uri: pathToFileURL(path).toString(), canonicalPath: path }],
+        trusted: true,
+      });
+    }
+    const editor = {
+      identity: peer,
+      connectionId: 'peer',
+      directoryUri: pathToFileURL(alias).toString(),
+      physicalPackageUri: pathToFileURL(alias).toString(),
+    };
+    expect(fixture.host.trustedSkillEditors(owner, target)).toEqual([editor]);
+    lookup.mockReturnValue([target]);
+    expect(fixture.host.trustedSkillEditors(owner, target, [alias])).toEqual([editor]);
+    expect(fixture.host.trustedSkillEditors(owner, target)).toEqual([]);
+    await fixture.receive('peer', peer, 'inside', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: [{ name: 'inside', uri: pathToFileURL(alias).toString(), canonicalPath: alias }],
+      trusted: true,
+    });
+    await rm(target, { recursive: true });
+    await rm(alias, { recursive: true });
+    expect(fixture.host.trustedSkillEditors(owner, target, [alias])).toEqual([editor]);
+  });
+  it('does not invoke trusted snapshot work for a rejected observer', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    await fixture.receive('owner', owner, 'attach-owner', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.receive('peer', peer, 'attach-peer', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+    });
+    const snapshot = vi.spyOn(fixture.runtime, 'snapshot');
+    await fixture.receive('peer', peer, 'snapshot-rejected', {
+      type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
+      afterSequence: 0,
+    });
+    expect(snapshot).not.toHaveBeenCalled();
+    await fixture.host.dispose();
   });
 
+  it('withholds live broadcasts from a replacement port until its attachment is authorized', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'attach', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.host.disconnect('owner');
+    fixture.connect('replacement', owner);
+    fixture.runtime.emit({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: [] });
+    expect(fixture.events('replacement')).toEqual([]);
+    await fixture.receive('replacement', owner, 'restricted', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+    });
+    const after = fixture.events('replacement').at(-1)!.sequence;
+    await fixture.receive('replacement', owner, 'resume-restricted', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+      resumeHostGeneration: fixture.host.generation,
+      resumeAfterSequence: after - 1,
+    });
+    expect(
+      fixture.events('replacement').some(value => value.event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED),
+    ).toBe(false);
+    await fixture.host.dispose();
+  });
   it('keeps user-file checks conservative when owner or peer folder aliases change', async () => {
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-user-root-')));
     const fixture = new HostFixture();
@@ -698,6 +1037,45 @@ describe(GlyphDesktopHost, () => {
   });
   beforeEach(() => {
     vi.mocked(isGlyphRequestEnvelope).mockReturnValue(true);
+  });
+
+  it('selects currently trusted windows sharing the physical user store across profiles and fails closed during their attachment transitions', async () => {
+    const fixture = new HostFixture();
+    const windowRoots = (id: string) => [{ name: id, uri: 'file:///' + id, canonicalPath: '/' + id }];
+    const trusted = { ...peer, workspaceId: 'other-root' };
+    const foreign = { ...trusted, profileId: 'other-profile', windowId: 'foreign' };
+    const restricted = { ...trusted, windowId: 'restricted', workspaceId: 'third-root' };
+    for (const [id, identity, trust] of [
+      ['owner', owner, true],
+      ['trusted', trusted, true],
+      ['foreign', foreign, true],
+      ['restricted', restricted, false],
+    ] as const) {
+      fixture.connect(id, identity);
+      await fixture.receive(id, identity, 'attach-' + id, {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots: windowRoots(id),
+        trusted: trust,
+      });
+    }
+    expect(fixture.host.trustedSkillEditors(owner)).toEqual([
+      { identity: trusted, connectionId: 'trusted' },
+      { identity: foreign, connectionId: 'foreign' },
+    ]);
+    const resync = fixture.receive('trusted', trusted, 'resync', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: windowRoots('trusted'),
+      trusted: true,
+    });
+    expect(() => fixture.host.trustedSkillEditors(owner)).toThrow('reconnecting');
+    await resync;
+    await fixture.receive('trusted', trusted, 'revoke', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: windowRoots('trusted'),
+      trusted: false,
+    });
+    expect(fixture.host.trustedSkillEditors(owner)).toEqual([{ identity: foreign, connectionId: 'foreign' }]);
+    await fixture.host.dispose();
   });
 
   describe(GlyphDesktopHost.prototype.receive, () => {

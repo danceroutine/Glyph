@@ -32,8 +32,12 @@ interface UtilityProcess extends NodeJS.Process {
 const parentPort = (process as UtilityProcess).parentPort;
 if (!parentPort) throw new Error('The Glyph desktop host must run as an Electron utility process.');
 
-const editors = new EditorRpcRouter((owner, sourcePath, aliases) =>
-  host.trustedUserEditors(owner, sourcePath, aliases),
+const editors: EditorRpcRouter = new EditorRpcRouter(
+  (owner, projectDirectory, retainedAliases) =>
+    projectDirectory === undefined
+      ? host.trustedSkillEditors(owner)
+      : host.trustedSkillEditors(owner, projectDirectory, retainedAliases),
+  (owner, sourcePath, aliases) => host.trustedUserEditors(owner, sourcePath, aliases),
 );
 const transport =
   process.env.GLYPH_DESKTOP_TEST_RUNTIME === 'scripted'

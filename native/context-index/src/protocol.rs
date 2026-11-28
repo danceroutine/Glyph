@@ -45,6 +45,7 @@ enum Request {
     Glob(GlobParams),
     ListSkillPackages(Option<String>),
     FilterPaths(Vec<String>),
+    ListDirectories,
     AssertReplaceableMetadata(String),
     ContentSearch(ContentSearchParams),
     Cancel(CancelParams),
@@ -309,6 +310,9 @@ fn service_loop(
                     Request::FilterPaths(paths) => {
                         (result_response(id, service.filter_paths(paths)), false)
                     }
+                    Request::ListDirectories => {
+                        (result_response(id, service.list_directories()), false)
+                    }
                     Request::ListSkillPackages(marker) => (
                         result_response(id, service.list_skill_packages(marker.as_deref())),
                         false,
@@ -469,6 +473,14 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
             envelope.params,
             Some(envelope.id.clone()),
         )?),
+        "listDirectories" => {
+            let _: EmptyParams = decode_params(
+                "listDirectories",
+                envelope.params,
+                Some(envelope.id.clone()),
+            )?;
+            Request::ListDirectories
+        }
         "refresh" => {
             let _: EmptyParams =
                 decode_params("refresh", envelope.params, Some(envelope.id.clone()))?;

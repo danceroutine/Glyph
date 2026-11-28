@@ -11,6 +11,27 @@ import { AgentReviewScope, AgentReviewStatus } from '#src/reviewing/AgentReview.
 import { AgentModeID } from '#src/chat/AgentMode.js';
 
 describe(GlyphWorkbenchProjection, () => {
+  it('replaces skill management previews and clears stale previews and notices', () => {
+    const projection = new GlyphWorkbenchProjection();
+    const targets = [{ id: 'user:glyph', label: 'User skills' }];
+    const preview = {
+      id: 'preview',
+      targetId: 'user:glyph',
+      destination: { label: 'User skills', scope: 'user' as const, path: '/user/.glyph/skills/review' },
+      name: 'example',
+      action: 'install' as const,
+      source: 'Fixture',
+      revision: 'revision',
+      files: [],
+    };
+    projection.accept({ type: GlyphHostEventType.SKILL_MANAGEMENT_CHANGED, targets, preview });
+    expect(projection.state).toMatchObject({ skillTargets: targets, skillPreview: preview });
+    projection.accept({ type: GlyphHostEventType.SKILL_MANAGEMENT_CHANGED, targets, message: 'Refresh Skills' });
+    expect(projection.state.skillPreview).toBeUndefined();
+    expect(projection.state.skillManagementMessage).toBe('Refresh Skills');
+    projection.accept({ type: GlyphHostEventType.SKILL_MANAGEMENT_CHANGED, targets });
+    expect(projection.state.skillManagementMessage).toBeUndefined();
+  });
   it('interrupts pending human decisions on disconnect while preserving the partial answer', () => {
     const projection = new GlyphWorkbenchProjection();
     projection.accept({

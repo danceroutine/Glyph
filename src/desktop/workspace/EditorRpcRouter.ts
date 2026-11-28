@@ -21,11 +21,21 @@ export class EditorRpcRouter {
   >();
 
   constructor(
+    readonly trustedSkillEditors: (
+      owner: GlyphConnectionIdentity,
+      projectDirectory?: string,
+      retainedAliases?: readonly string[],
+    ) => readonly {
+      identity: GlyphConnectionIdentity;
+      connectionId: string;
+      directoryUri?: string;
+      physicalPackageUri?: string;
+    }[] = () => [],
     readonly trustedUserEditors: (
       owner: GlyphConnectionIdentity,
       sourcePath?: string,
       sourceAliases?: readonly string[],
-    ) => readonly { identity: GlyphConnectionIdentity; connectionId: string }[] = () => [],
+    ) => readonly { identity: GlyphConnectionIdentity; connectionId: string }[] = owner => trustedSkillEditors(owner),
   ) {}
 
   /** Revalidate the mutation endpoints and retain approval only while the issuing port still owns the pending RPC. */

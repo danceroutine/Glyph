@@ -7,6 +7,65 @@ afterEach(cleanup);
 
 describe(WiredGlyphApprovalCard, () => {
   it.each([
+    ['Keep unchanged', GlyphApprovalDecision.DENY],
+    ['Apply change', GlyphApprovalDecision.ALLOW_ONCE],
+  ] as const)('offers %s for the exact skill package comparison without reusable grants', (label, decision) => {
+    const decideApproval = vi.fn(async () => {});
+    render(
+      <WiredGlyphApprovalCard
+        request={{
+          id: 'approval',
+          title: 'Install example?',
+          detail: 'Package proposal',
+          sandboxed: false,
+          skillChange: {
+            id: 'preview',
+            targetId: 'project',
+            destination: {
+              label: 'App project skills',
+              scope: 'project' as const,
+              path: '/project/.glyph/skills/review',
+            },
+            action: 'install',
+            name: 'example',
+            source: 'Agent proposal',
+            revision: 'revision',
+            createdParentDirectories: ['/project/.glyph'],
+            directories: [
+              { path: 'empty', status: 'added', afterMode: 0o750 },
+              { path: 'old', status: 'removed', beforeMode: 0o700 },
+            ],
+            files: [
+              { path: 'SKILL.md', status: 'added', after: 'Reviewed instructions' },
+              { path: 'removed', status: 'removed', before: 'Old contents' },
+              {
+                path: 'image.bin',
+                status: 'modified',
+                beforeInfo: { encoding: 'binary', size: 3, digest: 'original-binary-sha', mode: 0o600 },
+                afterInfo: { encoding: 'binary', size: 3, digest: 'reviewed-binary-sha', mode: 0o600 },
+              },
+            ],
+          },
+        }}
+        chatId="chat"
+        runId="run"
+        actions={{ decideApproval }}
+        disabled={false}
+      />,
+    );
+    expect(screen.getByRole('region', { name: 'Skill change approval' }).textContent).toContain(
+      'Reviewed instructions',
+    );
+    expect(screen.getByText('/project/.glyph/skills/review')).toBeDefined();
+    expect(screen.getByText('Create installation directory /project/.glyph/')).toBeDefined();
+    expect(screen.getByText('After · directory · mode 0750')).toBeDefined();
+    expect(screen.getByText('Before · directory · mode 0700')).toBeDefined();
+    expect(screen.getByText('reviewed-binary-sha')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Always Run' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    expect(decideApproval).toHaveBeenCalledWith('chat', 'run', 'approval', decision);
+  });
+  it.each([
     ['Start goal', GlyphApprovalDecision.ALLOW_ONCE],
     ['Decline', GlyphApprovalDecision.DENY],
   ] as const)('offers an explicit %s decision for a proposed goal', (label, decision) => {

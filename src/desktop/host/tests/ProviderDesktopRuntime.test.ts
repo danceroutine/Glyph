@@ -2,11 +2,18 @@ import { restoreGlyphPrompt } from '#src/desktop/workbench/restoreGlyphPrompt.js
 import { toGlyphPromptText } from '#src/desktop/workbench/GlyphPromptDocument.js';
 import { formatFolderAttachment } from '#src/desktop/workbench/formatFolderContextOutline.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+import { withSkillLock } from '#src/skills/SkillPackageStorage.js';
+import { testSkillSource } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
 import { DesktopAttachmentAccess } from '#src/desktop/host/DesktopAttachmentAccess.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
+import { aSkillDraft, aSkillLifecycle } from '#src/skills/tests/fixtures/aSkillLifecycle.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
@@ -87,8 +94,11 @@ async function fixture(
     readonly reportsTurnAdmission?: boolean;
     readonly agentReviews?: AgentReviewService;
     readonly trusted?: boolean;
-    readonly records?: readonly ChatSessionRecord[];
+    readonly skillManager?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skillManager'];
+    readonly skillSources?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skillSources'];
+    readonly skillCatalog?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skills'];
     readonly refreshCatalogs?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['refreshCatalogs'];
+    readonly records?: readonly ChatSessionRecord[];
     readonly restoreAttachmentPath?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['restoreAttachmentPath'];
     readonly referenceResources?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['referenceResources'];
     readonly instructionCatalog?: NonNullable<
@@ -228,6 +238,10 @@ async function fixture(
     ...(extras.referenceResources ? { referenceResources: extras.referenceResources } : {}),
     ...(extras.instructionCatalog ? { instructionCatalog: extras.instructionCatalog } : {}),
     ...(extras.userRules ? { userRules: extras.userRules as never } : {}),
+    ...(extras.skillManager ? { skillManager: extras.skillManager } : {}),
+    ...(extras.skillSources ? { skillSources: extras.skillSources } : {}),
+    ...(extras.skillCatalog ? { skills: extras.skillCatalog } : {}),
+    ...(extras.refreshCatalogs ? { refreshCatalogs: extras.refreshCatalogs } : {}),
   });
   await runtime.handle({ type: Command.CREATE_CHAT, accountProvider: 'fixture', accountId: 'account', model: 'model' });
   const chatId = (await runtime.snapshot()).chats.find(
@@ -253,6 +267,69 @@ async function fixture(
     },
   };
 }
+
+it('keeps ordinary saved chat visible after trust revocation without privileged context or tool payloads', async () => {
+  const record = chatRecord({
+    transcript: [
+      {
+        userText: 'Review this',
+        assistantText: 'Ordinary answer',
+        reasoningSummary: '',
+        attachmentPaths: [],
+        createdAt: '2026-10-01T00:00:00.000Z',
+        context: {
+          schema: 'glyph.turn-context.v1',
+          turnId: 'prior',
+          sources: [
+            {
+              id: 'private',
+              kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+              label: 'User',
+              path: '~/.glyph/rules/private.mdc',
+              scope: '.',
+              status: AgentInstructionSourceStatus.ACTIVE,
+              content: 'PRIVATE RULE BODY',
+            },
+          ],
+          activations: [],
+          candidates: [],
+        },
+        tools: [
+          {
+            callId: 'resource',
+            name: 'skills.read_resource',
+            phase: ToolActivityPhase.COMPLETED,
+            arguments: 'PRIVATE ARGS',
+            output: 'PRIVATE RESOURCE',
+            shell: { command: 'PRIVATE COMMAND', output: 'PRIVATE SHELL HISTORY', background: false },
+          },
+        ],
+      },
+    ],
+  });
+  const harness = await fixture(async () => {}, 'owner', undefined, { records: [record], trusted: false });
+  await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: record.id });
+  const state = await harness.runtime.snapshot();
+  const run = state.runs.find(run => run.chatId === record.id)!;
+  expect(run.text).toBe('Ordinary answer');
+  expect(run).not.toHaveProperty('context');
+  expect(run.tools).toEqual([
+    { id: 'resource', name: 'skills.read_resource', status: GlyphToolActivityStatus.COMPLETED },
+  ]);
+  expect(JSON.stringify(run)).not.toContain('PRIVATE');
+  await harness.runtime.dispose();
+});
+
+it('releases the profile subscription of its skill catalog on disposal', async () => {
+  const unsubscribe = vi.fn();
+  const subscribe = vi.fn(() => unsubscribe);
+  const catalog = new SkillCatalog([], { profile: { onDidChange: subscribe } });
+  const harness = await fixture(async () => {}, 'owner', undefined, { skillCatalog: catalog });
+  expect(subscribe).toHaveBeenCalledOnce();
+  expect(unsubscribe).not.toHaveBeenCalled();
+  await harness.runtime.dispose();
+  expect(unsubscribe).toHaveBeenCalledOnce();
+});
 
 it('refreshes only the instruction catalog while preserving connected chat runs', async () => {
   const refreshCatalogs = vi.fn(async () => {});
@@ -680,6 +757,67 @@ describe(ProviderDesktopRuntime, () => {
       await expect(harness.runtime.handle(command)).rejects.toThrow();
     } finally {
       gate.resolve();
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('publishes an admission failure on the queued message before the run finishes and persists it', async () => {
+    const entered = deferredVoid();
+    const admit = deferredVoid();
+    const reported = deferredVoid();
+    const finish = deferredVoid();
+    const harness = await fixture(async options => {
+      entered.resolve();
+      await admit.promise;
+      const [request] = options.takeSteering!(false);
+      options.onSteeringRejected!(request!, new Error('secret workflow disappeared'));
+      reported.resolve();
+      await finish.promise;
+      options.onText('Ordinary answer');
+    });
+    try {
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'run',
+        text: 'Start',
+        attachments: [],
+      });
+      await entered.promise;
+      await harness.runtime.handle({
+        type: Command.STEER,
+        chatId: harness.chatId,
+        runId: 'run',
+        messageId: 'rejected-id',
+        text: 'Activate it',
+        attachments: [],
+      });
+      admit.resolve();
+      await reported.promise;
+      const rejected = { id: 'rejected-id', text: 'Activate it', rejection: '[REDACTED] workflow disappeared' };
+      expect((await harness.runtime.snapshot()).runs[0]).toMatchObject({
+        status: GlyphRunStatus.STREAMING,
+        steering: [rejected],
+      });
+      expect(harness.events).toContainEqual(
+        expect.objectContaining({
+          type: GlyphHostEventType.RUN_STATE,
+          run: expect.objectContaining({
+            status: GlyphRunStatus.STREAMING,
+            steering: [expect.objectContaining(rejected)],
+          }),
+        }),
+      );
+      finish.resolve();
+      await vi.waitFor(() => {
+        expect(harness.saved.get(harness.chatId)?.transcript[0]).toMatchObject({
+          assistantText: 'Ordinary answer',
+          steering: [rejected],
+        });
+      });
+    } finally {
+      admit.resolve();
+      finish.resolve();
       await harness.runtime.dispose();
     }
   });
@@ -4935,6 +5073,247 @@ describe('goal continuation', () => {
   });
 });
 
+describe('Skill lifecycle host commands', () => {
+  it('refreshes only instruction catalogs, without emitting reconnect snapshots or replacing runs', async () => {
+    const refreshCatalogs = vi.fn(async () => {});
+    const { runtime, events } = await fixture(async () => {}, 'owner', undefined, { refreshCatalogs });
+    onTestFinished(() => runtime.dispose());
+    events.length = 0;
+    await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
+    expect(refreshCatalogs).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
+    expect(events.some(event => event.type === GlyphHostEventType.INITIAL_STATE)).toBe(false);
+    refreshCatalogs.mockRejectedValueOnce(new Error('Discovery failed'));
+    await expect(runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS })).rejects.toThrow('Discovery failed');
+  });
+  it('restores pinned skill provenance when reopening a saved conversation', async () => {
+    const activation = {
+      descriptor: aSkillDescriptor(),
+      revision: 'pinned',
+      reason: 'manual' as const,
+      explanation: 'Selected by the user',
+      body: 'Retained instructions',
+      resources: [],
+    };
+    const record = chatRecord({
+      transcript: [
+        {
+          userText: 'Use the workflow',
+          attachmentPaths: [],
+          assistantText: 'Done',
+          reasoningSummary: '',
+          createdAt: '2026-10-20T12:00:00Z',
+          options: { turnId: 'skills-history' },
+          context: {
+            schema: 'glyph.turn-context.v1',
+            turnId: 'skills-history',
+            sources: [],
+            activations: [],
+            candidates: [],
+            skills: [activation],
+          },
+        },
+      ],
+    });
+    const { runtime } = await fixture(async () => {}, 'owner', undefined, { records: [record] });
+    onTestFinished(() => runtime.dispose());
+    await runtime.handle({ type: Command.OPEN_CHAT, chatId: record.id });
+    expect((await runtime.snapshot()).runs.find(run => run.chatId === record.id)?.context?.skills).toEqual([
+      activation,
+    ]);
+  });
+  async function setup() {
+    const lifecycle = await aSkillLifecycle();
+    const sources = testSkillSource('unused', [], testFilesystemMetadata, new WorkspaceAccessPolicy());
+    const harness = await fixture(async () => {}, 'owner', undefined, {
+      skillManager: lifecycle.manager,
+      skillCatalog: lifecycle.catalog,
+      skillSources: sources,
+    });
+    onTestFinished(() => harness.runtime.dispose());
+    return { ...lifecycle, ...harness, sources };
+  }
+  it('cancels a queued profile preference write when its window disconnects', async () => {
+    const { runtime, state, install } = await setup();
+    const skill = await install();
+    const stored = (await state.preferences.read())?.text;
+    const setEnabled = vi.spyOn(state, 'setEnabled');
+    await withSkillLock(state.metadata, state.userDirectory, 'preferences', async () => {
+      const pending = runtime.handle({ type: Command.SET_SKILL_ENABLED, skillId: skill.id, enabled: false });
+      const rejected = expect(pending).rejects.toThrow();
+      await vi.waitFor(() => {
+        expect(setEnabled).toHaveBeenCalledOnce();
+      });
+      await runtime.connectionLost('owner');
+      await rejected;
+    });
+    expect((await state.preferences.read())?.text).toBe(stored);
+    expect(state.enabled.has(skill.id)).toBe(false);
+  });
+  it('previews exact bytes, applies the token, persists enablement, and previews removal', async () => {
+    const { runtime, manager, provider, catalog, state, sources } = await setup();
+    vi.spyOn(sources, 'read').mockResolvedValue(aSkillDraft());
+    await runtime.handle({
+      type: Command.PREVIEW_SKILL,
+      targetId: provider.id,
+      source: { kind: 'local', path: '/selected/example' },
+    });
+    const preview = (await runtime.snapshot()).skillPreview!;
+    expect(preview.files.some(file => file.path === 'SKILL.md')).toBe(true);
+    expect((await runtime.snapshot()).skillTargets).toEqual(manager.targets);
+    await runtime.handle({ type: Command.APPLY_SKILL, previewId: preview.id });
+    expect((await runtime.snapshot()).skillPreview).toBeUndefined();
+    const skill = catalog.skills[0]!;
+    await runtime.handle({ type: Command.SET_SKILL_ENABLED, skillId: skill.id, enabled: false });
+    expect(state.enabled.get(skill.id)).toBe(false);
+    await runtime.handle({ type: Command.PREVIEW_SKILL, targetId: provider.id, removeId: skill.id });
+    const removal = (await runtime.snapshot()).skillPreview!;
+    expect(removal.action).toBe('remove');
+    await runtime.handle({ type: Command.DISCARD_SKILL_PREVIEW, previewId: removal.id });
+    await expect(manager.apply(removal.id)).rejects.toThrow('expired');
+    expect(catalog.skills).toHaveLength(1);
+  });
+  it('keeps a valid preview after a failed replacement request and reports refresh failures after apply', async () => {
+    const { runtime, provider, manager } = await setup();
+    await runtime.handle({ type: Command.PREVIEW_SKILL, targetId: provider.id, draft: aSkillDraft().toJSON() });
+    const preview = (await runtime.snapshot()).skillPreview!;
+    await expect(runtime.handle({ type: Command.PREVIEW_SKILL, targetId: provider.id })).rejects.toThrow(
+      'Choose a skill',
+    );
+    expect((await runtime.snapshot()).skillPreview?.id).toBe(preview.id);
+    vi.spyOn(manager, 'apply').mockResolvedValueOnce({ applied: true, refreshError: 'Refresh Skills' });
+    await runtime.handle({ type: Command.APPLY_SKILL, previewId: preview.id });
+    expect((await runtime.snapshot()).skillManagementMessage).toBe('Refresh Skills');
+    await expect(runtime.handle({ type: Command.APPLY_SKILL, previewId: preview.id })).rejects.toThrow('expired');
+  });
+  it('discards a preview completed after its renderer disconnected and keeps the previously delivered token', async () => {
+    const { runtime, provider, manager, events } = await setup();
+    const command = { type: Command.PREVIEW_SKILL, targetId: provider.id, draft: aSkillDraft().toJSON() } as const;
+    await runtime.handle(command);
+    const delivered = (await runtime.snapshot()).skillPreview!;
+    const delayed = await manager.prepare(provider.id, aSkillDraft('Pending preview'));
+    const started = deferredVoid();
+    const resume = deferredVoid();
+    vi.spyOn(manager, 'prepare').mockImplementationOnce(async () => {
+      started.resolve();
+      await resume.promise;
+      return delayed;
+    });
+    const rejected = expect(runtime.handle(command)).rejects.toThrow('disconnected');
+    await started.promise;
+    await runtime.connectionLost('owner');
+    resume.resolve();
+    await rejected;
+    expect(manager.hasPreview(delayed.id)).toBe(false);
+    expect(events.filter(event => event.type === GlyphHostEventType.SKILL_MANAGEMENT_CHANGED)).toHaveLength(1);
+    expect((await runtime.snapshot()).skillPreview?.id).toBe(delivered.id);
+    await runtime.handle(command);
+    expect(manager.hasPreview(delivered.id)).toBe(false);
+    expect((await runtime.snapshot()).skillPreview?.id).not.toBe(delivered.id);
+  });
+  it('discards an older preview that finishes after its replacement', async () => {
+    const { runtime, provider, manager } = await setup();
+    const older = await manager.prepare(provider.id, aSkillDraft());
+    let settle!: (value: typeof older) => void;
+    vi.spyOn(manager, 'prepare').mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          settle = resolve;
+        }),
+    );
+    const pending = runtime.handle({
+      type: Command.PREVIEW_SKILL,
+      targetId: provider.id,
+      draft: aSkillDraft().toJSON(),
+    });
+    const rejected = expect(pending).rejects.toThrow('newer skill preview');
+    await runtime.handle({
+      type: Command.PREVIEW_SKILL,
+      targetId: provider.id,
+      draft: aSkillDraft('New proposal').toJSON(),
+    });
+    const current = (await runtime.snapshot()).skillPreview!;
+    settle(older);
+    await rejected;
+    expect((await runtime.snapshot()).skillPreview?.id).toBe(current.id);
+    await expect(manager.apply(older.id)).rejects.toThrow('expired');
+  });
+  it('preserves a newer preview when an older transaction finishes', async () => {
+    const { runtime, provider, manager } = await setup();
+    await runtime.handle({ type: Command.PREVIEW_SKILL, targetId: provider.id, draft: aSkillDraft().toJSON() });
+    const previous = (await runtime.snapshot()).skillPreview!;
+    let settle!: (value: { applied: true }) => void;
+    vi.spyOn(manager, 'apply').mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          settle = resolve;
+        }),
+    );
+    const pending = runtime.handle({ type: Command.APPLY_SKILL, previewId: previous.id });
+    await runtime.handle({
+      type: Command.PREVIEW_SKILL,
+      targetId: provider.id,
+      draft: aSkillDraft('Replacement preview').toJSON(),
+    });
+    const current = (await runtime.snapshot()).skillPreview!;
+    settle({ applied: true });
+    await pending;
+    expect((await runtime.snapshot()).skillPreview?.id).toBe(current.id);
+  });
+  it('settles consumed stale previews in snapshots and change events and releases tokens on shutdown', async () => {
+    const { runtime, provider, manager, install, root, events } = await setup();
+    const skill = await install();
+    await runtime.handle({ type: Command.PREVIEW_SKILL, targetId: provider.id, removeId: skill.id });
+    const previous = (await runtime.snapshot()).skillPreview!;
+    await writeFile(join(root, 'skills/example/SKILL.md'), 'Changed after preview.');
+    await expect(runtime.handle({ type: Command.APPLY_SKILL, previewId: previous.id })).rejects.toThrow(
+      'changed after preview',
+    );
+    expect((await runtime.snapshot()).skillPreview).toBeUndefined();
+    expect(events.findLast(event => event.type === GlyphHostEventType.SKILL_MANAGEMENT_CHANGED)).toMatchObject({
+      type: GlyphHostEventType.SKILL_MANAGEMENT_CHANGED,
+      message: expect.stringContaining('changed after preview'),
+    });
+    await runtime.handle({
+      type: Command.PREVIEW_SKILL,
+      targetId: provider.id,
+      draft: aSkillDraft('Other', 'other').toJSON(),
+    });
+    const pending = (await runtime.snapshot()).skillPreview!;
+    await runtime.dispose();
+    expect(manager.hasPreview(pending.id)).toBe(false);
+  });
+  it('clears invalidated previews with readable feedback for an unstructured failure', async () => {
+    const { runtime, provider, manager } = await setup();
+    await runtime.handle({ type: Command.PREVIEW_SKILL, targetId: provider.id, draft: aSkillDraft().toJSON() });
+    const id = (await runtime.snapshot()).skillPreview!.id;
+    manager.discard(id);
+    vi.spyOn(manager, 'apply').mockRejectedValueOnce('unstructured');
+    await expect(runtime.handle({ type: Command.APPLY_SKILL, previewId: id })).rejects.toBe('unstructured');
+    expect((await runtime.snapshot()).skillManagementMessage).toContain('Preview the change again');
+  });
+  it('rejects malformed enablement at the wire boundary before mutating persisted state', async () => {
+    const { runtime, state } = await setup();
+    await expect(
+      runtime.handle({
+        type: Command.SET_SKILL_ENABLED,
+        skillId: 'unknown',
+        enabled: 'false',
+      } as unknown as GlyphRuntimeCommand),
+    ).rejects.toThrow();
+    expect(state.enabled.size).toBe(0);
+  });
+  it('requires a trusted manager for all lifecycle mutation commands', async () => {
+    const { runtime } = await fixture(async () => {});
+    onTestFinished(() => runtime.dispose());
+    await expect(runtime.handle({ type: Command.PREVIEW_SKILL, targetId: 'user' })).rejects.toThrow(
+      'trusted workspace',
+    );
+    await expect(runtime.handle({ type: Command.SET_SKILL_ENABLED, skillId: 'skill', enabled: false })).rejects.toThrow(
+      'trusted workspace',
+    );
+    await expect(runtime.handle({ type: Command.APPLY_SKILL, previewId: 'stale' })).rejects.toThrow('expired');
+  });
+});
 function fixtureAttachmentAccess() {
   const binding = WorkspaceRootAccess.forMetadataProbe('/project');
   const beginOperation = () => binding.beginOperation();

@@ -10,6 +10,7 @@ import type { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.j
 import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
 import { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
+import { ShellProgram } from '#src/shell/ShellProgram.js';
 import type { ShellWorkingDirectoryResolver } from '#src/shell/ShellWorkingDirectoryResolver.js';
 
 const managers: ShellSessionManager[] = [];
@@ -21,6 +22,54 @@ afterEach(async () => {
 });
 
 describe(ShellSessionManager, () => {
+  it('preserves direct argument bytes and requires one-shot approval even when the caller requests reuse', async () => {
+    const { manager, authorize } = await fixture();
+    const args = ['two\\\\slashes', 'trailing\\', '', "quote'", 'line\nbreak', '$(false)'];
+    const program = new ShellProgram(
+      process.execPath,
+      ['-e', 'process.stdout.write(JSON.stringify(process.argv.slice(1)))', ...args],
+      'Read argument bytes',
+    );
+    const result = await manager.executeProgram(program, { signal: new AbortController().signal, transient: false });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.output)).toEqual(args);
+    expect(authorize).toHaveBeenCalledWith(
+      program,
+      expect.any(String),
+      expect.any(AbortSignal),
+      expect.objectContaining({ transient: true }),
+    );
+  });
+  it('rejects changed program authority before approval or before allocating a process after approval', async () => {
+    const { manager, authorize } = await fixture();
+    const validate = vi.fn<() => Promise<void>>(async () => {
+      throw new Error('Host path attached');
+    });
+    const program = new ShellProgram(
+      process.execPath,
+      ['-e', 'throw new Error("must not execute")'],
+      'Reviewed',
+      validate,
+    );
+    await expect(manager.executeProgram(program, { signal: new AbortController().signal })).rejects.toThrow(
+      'Host path attached',
+    );
+    expect(authorize).not.toHaveBeenCalled();
+    validate.mockResolvedValueOnce(undefined);
+    await expect(manager.executeProgram(program, { signal: new AbortController().signal })).rejects.toThrow(
+      'Host path attached',
+    );
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(manager.sessions).toEqual([]);
+    validate.mockResolvedValue(undefined);
+    const safe = new ShellProgram(process.execPath, ['-e', 'process.stdout.write("safe")'], 'Reviewed', validate);
+    await expect(manager.executeProgram(safe, { signal: new AbortController().signal })).resolves.toMatchObject({
+      output: 'safe',
+      exitCode: 0,
+    });
+    expect(validate).toHaveBeenCalledTimes(5);
+  });
+
   describe('command lifecycle', () => {
     it('leaves the wake subscription unchanged when full-access input is rejected', async () => {
       const { manager } = await fixture(ShellSandboxProfile.FULL_ACCESS);
@@ -948,3 +997,27 @@ function deferredAuthorization(): {
     resolve,
   };
 }
+
+it('passes host-owned read-only resources to the admitted process without putting them in model input', async () => {
+  const authorize = vi.fn(async () => ({ sandboxProfile: ShellSandboxProfile.WORKSPACE_WRITE }));
+  const launch = vi.fn(() => {
+    throw new Error('Captured launch');
+  });
+  const manager = new ShellSessionManager({ authorize } as never, { resolve: async () => '/workspace' } as never, {
+    launch,
+  });
+  managers.push(manager);
+  const signal = new AbortController().signal;
+  await expect(
+    manager.execute('sh /host/package/task.sh', { signal, transient: true, readOnlyPaths: ['/host/package'] }),
+  ).rejects.toThrow('Captured launch');
+  expect(authorize).toHaveBeenCalledWith('sh /host/package/task.sh', '/workspace', signal, {
+    background: false,
+    existingTerminal: false,
+    transient: true,
+  });
+  expect(launch).toHaveBeenCalledWith('sh /host/package/task.sh', '/workspace', {
+    sandboxProfile: ShellSandboxProfile.WORKSPACE_WRITE,
+    readOnlyPaths: ['/host/package'],
+  });
+});

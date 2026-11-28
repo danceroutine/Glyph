@@ -12,6 +12,7 @@ export interface GlyphEditorResponse {
   readonly ok: boolean;
   readonly workingCopiesClean?: boolean;
   readonly exists?: boolean;
+  readonly packageClean?: boolean;
   readonly snapshot?: GlyphEditorTextSnapshot;
   readonly workingCopies?: readonly GlyphEditorTextSnapshot[];
   readonly workingCopyPaths?: readonly string[];

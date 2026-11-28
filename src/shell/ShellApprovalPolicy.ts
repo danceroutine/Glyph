@@ -28,23 +28,27 @@ export class ShellApprovalPolicy implements ApprovalCapabilityPolicy<ApprovalCap
     if (!command) throw new Error('Shell command cannot be empty.');
     const operation = { ...input.operation, command };
     const safe = this.isInspection(operation);
+    const workspaceWrite =
+      process.platform === 'linux'
+        ? 'Linux permits in-place edits to existing workspace files. Use temporary storage for new files and project edit tools to change workspace paths.'
+        : 'Workspace directories retain their identity during sandboxed execution.';
     const choices: ApprovalChoice<ApprovalCapability.SHELL>[] = [
       {
         id: ShellPermissionDecision.ALLOW_ONCE,
         label: 'Allow once',
-        description: 'Run this command in the workspace-write sandbox.',
+        description: `Run this command in the workspace-write sandbox. ${workspaceWrite}`,
         effect: { disposition: 'allow', sandbox: ShellSandboxProfile.WORKSPACE_WRITE, grant: null },
       },
       {
         id: ShellPermissionDecision.ALWAYS_ALLOW,
         label: 'Always allow this command',
-        description: 'Remember this exact command and directory; keep it sandboxed.',
+        description: `Remember this sandboxed command for this directory. ${workspaceWrite}`,
         effect: { disposition: 'allow', sandbox: ShellSandboxProfile.WORKSPACE_WRITE, grant: 'exact_command' },
       },
       {
         id: ShellPermissionDecision.ALLOW_SAFE,
         label: 'Allow & enable safe commands',
-        description: `Run this command ${safe ? 'read-only' : 'in the workspace-write sandbox'}; automatically allow future recognized inspections read-only.`,
+        description: `Run this command ${safe ? 'read-only' : 'in the workspace-write sandbox'}; automatically allow future recognized inspections read-only.${safe ? '' : ' ' + workspaceWrite}`,
         effect: {
           disposition: 'allow',
           sandbox: safe ? ShellSandboxProfile.READ_ONLY : ShellSandboxProfile.WORKSPACE_WRITE,
@@ -83,14 +87,16 @@ export class ShellApprovalPolicy implements ApprovalCapabilityPolicy<ApprovalCap
       title: 'Allow shell command?',
       detail: `${command}\nWorking directory: ${operation.workingDirectory}`,
       timeout: null,
-      choices: choices.filter(choice => this.availableChoices.includes(choice.id)),
+      choices: choices.filter(
+        choice => this.availableChoices.includes(choice.id) && (!operation.transient || choice.effect.grant === null),
+      ),
     };
   }
   matchGrant(
     request: ApprovalRequest<ApprovalCapability.SHELL>,
     permission: GrantPermission,
   ): ApprovalGrantMatch<ApprovalCapability.SHELL> | null {
-    if (permission.capability !== this.capability) return null;
+    if (permission.capability !== this.capability || request.operation.transient) return null;
     switch (permission.kind) {
       case 'all_shell_commands':
         return {

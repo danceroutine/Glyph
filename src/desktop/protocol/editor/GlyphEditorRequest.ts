@@ -9,6 +9,7 @@ export enum GlyphEditorRequestType {
   EXISTS = 'exists',
   READ_SNAPSHOT = 'read_snapshot',
   READ_OPEN_SNAPSHOT = 'read_open_snapshot',
+  CHECK_SKILL_WORKING_COPIES = 'check_skill_working_copies',
   LIST_WORKING_COPIES = 'list_working_copies',
   LIST_WORKING_COPY_PATHS = 'list_working_copy_paths',
   SEARCH_WORKING_COPIES = 'search_working_copies',
@@ -19,6 +20,16 @@ export enum GlyphEditorRequestType {
 
 /** Closed renderer-side RPC union; requests remain structured-clone-safe DTOs. */
 export type GlyphEditorRequest =
+  | {
+      readonly type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES;
+      readonly operationId: string;
+      readonly scope: 'user' | 'project';
+      /** The host resolved this project-package intersection against the peer's physical workspace roots. */
+      readonly peerWorkspaceIntersection?: true;
+      readonly directoryUri: string;
+      readonly physicalPackageUri?: string;
+      readonly namePolicy?: FilesystemNamePolicy;
+    }
   | {
       readonly type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES;
       readonly operationId: string;

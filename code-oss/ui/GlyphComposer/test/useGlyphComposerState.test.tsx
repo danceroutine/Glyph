@@ -452,6 +452,34 @@ describe(useGlyphComposerState, () => {
     expect(actions.context.captureFile).toHaveBeenCalledWith('file:///workspace/src/a.ts');
   });
 
+  it('updates an open slash picker when the host catalog changes', async () => {
+    const actions = composerActions();
+    let changed: (() => void) | undefined;
+    const unsubscribe = vi.fn();
+    actions.context.onDidChangeInstructions = listener => {
+      changed = listener;
+      return unsubscribe;
+    };
+    const view = renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
+    await openPicker(actions, '/type', [
+      { uri: 'glyph-rule:old', path: 'Old workflow', kind: GlyphContextCandidateKind.RULE, ruleId: 'old' },
+    ]);
+    vi.mocked(actions.context.searchInstructions).mockResolvedValue([
+      { uri: 'glyph-skill:new', path: 'New workflow', kind: GlyphContextCandidateKind.SKILL, skillId: 'new' },
+    ]);
+    act(() => {
+      changed?.();
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: 'New workflow' })).toBeDefined();
+    }, patience);
+    expect(screen.queryByRole('option', { name: 'Old workflow' })).toBeNull();
+    view.unmount();
+    await waitFor(() => {
+      expect(unsubscribe).toHaveBeenCalledOnce();
+    });
+  });
+
   it('inserts a manual rule as a composer-only context badge', async () => {
     const actions = composerActions();
     renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
@@ -484,6 +512,47 @@ describe(useGlyphComposerState, () => {
         },
       },
     ]);
+  });
+  it('inserts a selected skill with its stable origin identity and current revision', async () => {
+    const actions = composerActions();
+    renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
+    await openPicker(actions, '/review', [
+      {
+        uri: 'glyph-skill:project-review',
+        path: 'review',
+        name: 'Review workflow',
+        kind: GlyphContextCandidateKind.SKILL,
+        skillId: 'project-review',
+        revision: 'pinned',
+      },
+    ]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('option', { name: 'review' }));
+    });
+    expect(actions.composer.snapshot.document.parts).toMatchObject([
+      {
+        type: 'attachment',
+        attachment: {
+          kind: GlyphContextAttachmentKind.SKILL,
+          path: 'Review workflow',
+          skillId: 'project-review',
+          contentRevision: 'pinned',
+        },
+      },
+    ]);
+    expect(actions.context.captureFile).not.toHaveBeenCalled();
+  });
+  it('rejects skill candidates without a stable identity', async () => {
+    const actions = composerActions();
+    const { result } = renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
+    await act(() =>
+      result.current.choose({
+        uri: 'glyph-skill:missing',
+        path: 'Missing skill',
+        kind: GlyphContextCandidateKind.SKILL,
+      }),
+    );
+    expect(screen.getByRole('alert').textContent).toBe('This skill cannot be selected.');
   });
 
   it('rejects manual rule candidates without a selection position or stable id', async () => {

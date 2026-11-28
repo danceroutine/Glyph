@@ -18,7 +18,7 @@ export async function withPrivateFileLock<T>(
   await inspectPrivateDirectory(metadata, directory);
   for (const suffix of ['-journal', '-shm', '-wal'])
     if (await optionalStat(path + suffix)) throw new Error('Invalid lock sidecar.');
-  await inspectPrivateDatabase(metadata, path, true);
+  await inspectPrivateDatabase(metadata, path, 'lock');
   const db = new Database(path, { timeout: 0 });
   try {
     const deadline = Date.now() + 30000;

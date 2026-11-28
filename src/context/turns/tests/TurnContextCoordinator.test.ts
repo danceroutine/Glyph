@@ -65,6 +65,24 @@ const sources = [
 const catalog = () => ({ refresh: vi.fn(async () => sources) });
 
 describe(TurnContextCoordinator, () => {
+  it('supports manual activation through the instruction contribution port', () => {
+    const rule = source(
+      'manual-port',
+      AgentInstructionSourceKind.GLYPH_USER_RULE,
+      '.',
+      AgentInstructionActivationMode.MANUAL,
+    );
+    const session = new TurnContextSession({
+      turnId: 'manual-port',
+      sources: [rule],
+      manualRuleIds: [],
+      attachmentPaths: [],
+    });
+    expect(
+      session.activateRule(rule.id, AgentInstructionActivationReason.MANUAL)?.sources.map(value => value.id),
+    ).toEqual([rule.id]);
+  });
+
   it('retains file-pattern sources with no patterns as inactive across attachments and later reads', async () => {
     const rule = source(
       'empty',

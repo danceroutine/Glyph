@@ -116,6 +116,11 @@ describe('build-desktop-artifact', () => {
       ['mkdir', native, { recursive: true }],
       ['cp', join(repositoryRoot, 'target', 'release', 'glyph-context-index'), join(native, 'glyph-context-index')],
       ['cp', join(repositoryRoot, 'target', 'release', 'glyph-shell-sandbox'), join(native, 'glyph-shell-sandbox')],
+      [
+        'cp',
+        join(repositoryRoot, 'target', 'release', 'glyph-workspace-mutations'),
+        join(native, 'glyph-workspace-mutations'),
+      ],
       ['exec', 'git', ['rev-parse', 'HEAD']],
       ['exec', 'git', ['status', '--porcelain']],
       ['writeFile', join(staging, 'glyph-artifact.json'), expect.any(String)],
@@ -188,6 +193,7 @@ describe('build-desktop-artifact', () => {
     expect(operations.filter(([kind]) => kind === 'cp').map(([, source]) => source)).toEqual([
       join(repositoryRoot, 'target', 'release', 'glyph-context-index.exe'),
       join(repositoryRoot, 'target', 'release', 'glyph-shell-sandbox.exe'),
+      join(repositoryRoot, 'target', 'release', 'glyph-workspace-mutations.exe'),
     ]);
   });
 

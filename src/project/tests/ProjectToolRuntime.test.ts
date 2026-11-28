@@ -1,3 +1,6 @@
+import { AgentModeID } from '#src/chat/AgentMode.js';
+import { ToolExecutor } from '#src/tools/ToolExecutor.js';
+import { ToolRegistry } from '#src/tools/ToolRegistry.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 import { EditProposal } from '#src/editing/proposals/EditProposal.js';
@@ -26,7 +29,7 @@ describe(ProjectToolRuntime, () => {
         activeReviews.push(staged);
       });
       const runtime = new ProjectToolRuntime(
-        { definitions: [] } as unknown as ProjectAccess,
+        { tools: [], definitions: [] } as unknown as ProjectAccess,
         {
           proposePatch: vi.fn(async () => proposal),
           assertModeAllows: vi.fn(async () => {}),
@@ -85,7 +88,7 @@ describe(ProjectToolRuntime, () => {
         })
         .mockReturnValueOnce(undefined);
       const runtime = new ProjectToolRuntime(
-        { definitions: [] } as unknown as ProjectAccess,
+        { tools: [], definitions: [] } as unknown as ProjectAccess,
         {
           proposePatch: vi.fn(async () => proposal),
           assertModeAllows: vi.fn(async () => {}),
@@ -94,15 +97,23 @@ describe(ProjectToolRuntime, () => {
         new NullLogger(),
         { disclosePaths },
       );
-      const context = { turnId: 'turn-1' };
-
-      await expect(runtime.execute(ProjectToolName.PROPOSE_PATCH, 'patch', undefined, context)).resolves.toContain(
-        'INSTRUCTION_CONTEXT_REQUIRED',
-      );
+      const context = { turnId: 'turn-1', mode: AgentModeID.AGENT };
+      const onActivity = vi.fn();
+      const executor = new ToolExecutor(new ToolRegistry(runtime.tools));
+      const call = { id: 'write', namespace: 'project', name: ProjectToolName.PROPOSE_PATCH, input: 'patch' };
+      const options = { signal: new AbortController().signal, context, roundCallCount: 1, onActivity, trace: vi.fn() };
+      const reply = await executor.execute(call, options);
+      expect(reply.output).toContain('INSTRUCTION_CONTEXT_REQUIRED');
+      expect(disclosePaths).toHaveBeenNthCalledWith(1, 'turn-1', ['src/new.ts'], options.signal);
+      expect(onActivity).not.toHaveBeenCalled();
       expect(stage).not.toHaveBeenCalled();
-      await runtime.execute(ProjectToolName.PROPOSE_PATCH, 'patch', undefined, context);
+      await executor.execute({ ...call, id: 'retry' }, options);
       expect(stage).toHaveBeenCalledOnce();
-      expect(disclosePaths).toHaveBeenCalledWith('turn-1', ['src/new.ts'], undefined);
+      expect(onActivity).toHaveBeenCalledTimes(2);
+      const structured = runtime.tools.find(tool => tool.name === 'propose_edits')!;
+      expect(structured.activityPresentation?.show(reply.output)).toBe(false);
+      expect(structured.activityPresentation?.show('{"error":{"code":"STALE"}}')).toBe(true);
+      expect(disclosePaths).toHaveBeenNthCalledWith(2, 'turn-1', ['src/new.ts'], options.signal);
     });
 
     it('reports an unknown tool as a failed tool call', async () => {

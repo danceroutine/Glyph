@@ -178,6 +178,11 @@ export class WorkspaceSourceRoutes {
   equivalents(route: string): string[] {
     const target = this.physicalPath(route);
     if (target === undefined || this.roots.length === 1) return [route];
+    return this.routesForPhysicalPath(target);
+  }
+
+  /** Project an absolute destination into every attached root that contains it. */
+  routesForPhysicalPath(target: string): string[] {
     return this.roots
       .flatMap(root => {
         const key = (value: string) => {
@@ -201,7 +206,9 @@ export class WorkspaceSourceRoutes {
         return [{ root, spelling: tail.join('/') }];
       })
       .toSorted((a, b) => b.root.path.length - a.root.path.length)
-      .map(({ root, spelling }) => (spelling ? root.name + '/' + spelling : root.name));
+      .map(({ root, spelling }) =>
+        this.roots.length === 1 ? spelling || '.' : spelling ? root.name + '/' + spelling : root.name,
+      );
   }
 
   /** Reconstruct a saved file URI's route under today's workspace folder names. Use only the physical
@@ -297,6 +304,13 @@ export class WorkspaceSourceRoutes {
     this.filenameKeys.set(id, result);
     return result;
   }
+}
+
+/** Intersection of a physical package with a registered editor root, expressed in that editor's URI space. */
+export function projectIntersection(root: { uri: string }, physical: string, directory: string): string | undefined {
+  const within = relative(physical, directory);
+  if (contained(within)) return pathToFileURL(join(fileURLToPath(root.uri), within)).toString();
+  return contained(relative(directory, physical)) ? root.uri : undefined;
 }
 
 function contained(path: string) {

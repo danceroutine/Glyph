@@ -1,16 +1,55 @@
+import { GlyphSkillFileComparison } from './GlyphSkillFileComparison.tsx';
+import { useState } from 'preact/hooks';
+import type { GlyphSkillsManagement } from '#src/desktop/workbench/GlyphSkillsManagement.js';
 import { Pencil, Sparkles, TriangleAlert } from 'lucide-preact';
 import type { GlyphSkill } from '#src/desktop/protocol/events/GlyphSkill.js';
 import { Button, ButtonAppearance, ButtonSize } from '#code-oss/ui/Button/Button.tsx';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 
 const styles = {
+  toolbar: css({ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12, margin: '16px 0' }),
+  scope: css({ display: 'inline-flex', alignItems: 'center', gap: 8 }),
+  select: css({
+    maxWidth: '100%',
+    minHeight: 28,
+    padding: '4px 8px',
+    font: 'inherit',
+    color: tokens.dropdown.foreground,
+    background: tokens.dropdown.background,
+    border: tokens.dropdown.border,
+    borderRadius: tokens.dropdown.radius,
+    cursor: 'pointer',
+    '&:focus-visible': { outline: tokens.focus.ring, outlineOffset: 2 },
+  }),
+  form: css({
+    display: 'grid',
+    gap: 16,
+    margin: '20px 0',
+    '& label': { display: 'grid', gap: 6 },
+    '& input, & textarea': {
+      background: 'var(--vscode-input-background)',
+      color: 'var(--vscode-input-foreground)',
+      border: '1px solid var(--vscode-input-border, transparent)',
+      borderRadius: 4,
+      padding: 8,
+      font: 'inherit',
+    },
+  }),
+  preview: css({
+    padding: 20,
+    border: tokens.border.default,
+    borderRadius: 6,
+    margin: '24px 0',
+    '& summary': { padding: '10px 0' },
+    '& pre': { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', padding: 12, maxHeight: 400, overflow: 'auto' },
+  }),
   root: css({ height: '100%', overflow: 'auto', color: tokens.text.primary }),
   content: css({ maxWidth: 820, margin: '0 auto', padding: '28px 32px 48px', boxSizing: 'border-box' }),
   heading: css({ margin: '0 0 8px', fontSize: 22, fontWeight: tokens.font.weight.semibold }),
   intro: css({ margin: '0 0 24px', lineHeight: 1.5, color: tokens.text.muted }),
   list: css({ padding: 0, margin: 0, listStyle: 'none' }),
   row: css({ padding: '16px 0', borderTop: tokens.border.default }),
-  header: css({ display: 'flex', alignItems: 'center', gap: 10 }),
+  header: css({ flexWrap: 'wrap', display: 'flex', alignItems: 'center', gap: 10 }),
   name: css({
     margin: 0,
     fontSize: 14,
@@ -33,11 +72,36 @@ const styles = {
 export interface GlyphSkillsProps {
   readonly skills: readonly GlyphSkill[];
   readonly query?: string;
+  readonly management?: GlyphSkillsManagement;
   readonly edit: (skill: GlyphSkill) => void;
 }
 
 /** Renderer-only Skills settings, driven by the authoritative host catalog. */
-export function GlyphSkills({ skills, query = '', edit }: GlyphSkillsProps) {
+export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkillsProps) {
+  const [form, setForm] = useState<'create' | 'repository' | undefined>();
+  const [target, setTarget] = useState('');
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [body, setBody] = useState('');
+  const [url, setUrl] = useState('');
+  const [revision, setRevision] = useState('');
+  const [directory, setDirectory] = useState('');
+  const [replacement, setReplacement] = useState<{ id: string; target: string }>();
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const installTargets = management?.targets.filter(location => !location.updateOnly) ?? [];
+  const selectedTarget = target || installTargets[0]?.id || '';
+  const perform = async (operation: () => Promise<void>) => {
+    setBusy(true);
+    setError('');
+    try {
+      await operation();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setBusy(false);
+    }
+  };
   const search = query.trim().toLocaleLowerCase();
   const visible = skills.filter(skill =>
     [skill.name, skill.description, skill.path, skill.origin.label, skill.message ?? ''].some(value =>
@@ -52,6 +116,207 @@ export function GlyphSkills({ skills, query = '', edit }: GlyphSkillsProps) {
           Reusable workflows for your agent. Select a skill with / in chat, or let the agent choose one from its
           description. Instructions load when activated; resources enter context only when requested.
         </p>
+        {management && (
+          <div class={styles.toolbar}>
+            <label class={styles.scope}>
+              Install in{' '}
+              <select
+                class={styles.select}
+                aria-label="Skill installation scope"
+                value={selectedTarget}
+                disabled={busy}
+                onChange={event => {
+                  setTarget(event.currentTarget.value);
+                }}
+              >
+                {installTargets.map(item => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button
+              disabled={busy || !selectedTarget}
+              onClick={() => {
+                setForm('create');
+              }}
+            >
+              Create skill
+            </Button>
+            <Button
+              disabled={busy || !selectedTarget}
+              onClick={() => {
+                void perform(() => management.installLocal(selectedTarget));
+              }}
+            >
+              Install local package
+            </Button>
+            <Button
+              disabled={busy || !selectedTarget}
+              onClick={() => {
+                setReplacement(undefined);
+                setForm('repository');
+              }}
+            >
+              Install from repository
+            </Button>
+          </div>
+        )}
+        {management?.message && <p role="status">{management.message}</p>}
+        {error && (
+          <p role="alert" class={styles.error}>
+            {error}
+          </p>
+        )}
+        {management && form && (
+          <form
+            class={styles.form}
+            onSubmit={event => {
+              event.preventDefault();
+              void perform(async () => {
+                if (form === 'create')
+                  await management.previewDraft(selectedTarget, {
+                    name,
+                    source: 'Created in Settings',
+                    files: [
+                      {
+                        path: 'SKILL.md',
+                        encoding: 'utf8',
+                        content: `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n${body}`,
+                      },
+                    ],
+                  });
+                else
+                  await management.previewRepository(
+                    replacement?.target ?? selectedTarget,
+                    { kind: 'repository', url, revision, directory },
+                    replacement?.id,
+                  );
+                setForm(undefined);
+              });
+            }}
+          >
+            {form === 'create' ? (
+              <>
+                <label>
+                  Name
+                  <input
+                    required
+                    value={name}
+                    onInput={event => {
+                      setName(event.currentTarget.value);
+                    }}
+                  />
+                </label>
+                <label>
+                  Description
+                  <input
+                    required
+                    value={description}
+                    onInput={event => {
+                      setDescription(event.currentTarget.value);
+                    }}
+                  />
+                </label>
+                <label>
+                  Instructions
+                  <textarea
+                    required
+                    rows={8}
+                    value={body}
+                    onInput={event => {
+                      setBody(event.currentTarget.value);
+                    }}
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <label>
+                  Repository URL
+                  <input
+                    required
+                    type="url"
+                    value={url}
+                    onInput={event => {
+                      setUrl(event.currentTarget.value);
+                    }}
+                  />
+                </label>
+                <label>
+                  Revision
+                  <input
+                    required
+                    placeholder="Commit or tag"
+                    value={revision}
+                    onInput={event => {
+                      setRevision(event.currentTarget.value);
+                    }}
+                  />
+                </label>
+                <label>
+                  Package directory
+                  <input
+                    value={directory}
+                    onInput={event => {
+                      setDirectory(event.currentTarget.value);
+                    }}
+                  />
+                </label>
+              </>
+            )}
+            <div class={styles.toolbar}>
+              <Button type="submit" disabled={busy}>
+                Preview package
+              </Button>
+              <Button
+                onClick={() => {
+                  setForm(undefined);
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        )}
+        {management?.preview && (
+          <section aria-label="Skill change preview" class={styles.preview}>
+            <h3>
+              {management.preview.action} {escapeDisplayControls(management.preview.name, true)}
+            </h3>
+            <p class={styles.metadata}>
+              {escapeDisplayControls(management.preview.source, true)} · {management.preview.revision.slice(0, 12)}
+            </p>
+            {management.preview.destination && (
+              <p>
+                Destination ({management.preview.destination.scope}) ·{' '}
+                {escapeDisplayControls(management.preview.destination.label, true)}
+                <br />
+                <code>{escapeDisplayControls(management.preview.destination.path, true)}</code>
+              </p>
+            )}
+            <GlyphSkillFileComparison {...management.preview} />
+            <div class={styles.toolbar}>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  void perform(() => management.apply(management.preview!.id));
+                }}
+              >
+                Apply {management.preview.action}
+              </Button>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  void perform(() => management.discard(management.preview!.id));
+                }}
+              >
+                Discard preview
+              </Button>
+            </div>
+          </section>
+        )}
         {visible.length === 0 ? (
           <p class={styles.empty}>
             {search
@@ -93,6 +358,56 @@ export function GlyphSkills({ skills, query = '', edit }: GlyphSkillsProps) {
                   {skill.path}
                   {skill.revision ? ` · ${skill.revision.slice(0, 8)}` : ''}
                 </p>
+                {management && skill.directory && skill.path && (
+                  <div class={styles.toolbar}>
+                    <Button
+                      disabled={busy || skill.status === 'error'}
+                      appearance={ButtonAppearance.BORDERLESS_GHOST}
+                      onClick={() => {
+                        void perform(() => management.setEnabled(skill.id, !skill.enabled));
+                      }}
+                    >
+                      {skill.enabled ? 'Disable' : 'Enable'}
+                    </Button>
+                    {management.targets.some(location => location.id === skill.origin.id) && (
+                      <>
+                        <Button
+                          disabled={busy}
+                          appearance={ButtonAppearance.BORDERLESS_GHOST}
+                          onClick={() => {
+                            void perform(() => management.installLocal(skill.origin.id, skill.id));
+                          }}
+                        >
+                          Update
+                        </Button>
+                        <Button
+                          disabled={busy}
+                          appearance={ButtonAppearance.BORDERLESS_GHOST}
+                          onClick={() => {
+                            setReplacement({ id: skill.id, target: skill.origin.id });
+                            setForm('repository');
+                          }}
+                        >
+                          Update from repository
+                        </Button>
+                        <Button
+                          disabled={busy}
+                          appearance={ButtonAppearance.BORDERLESS_GHOST}
+                          onClick={() => {
+                            void perform(() => management.remove(skill.id));
+                          }}
+                        >
+                          Uninstall
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                )}
+                {skill.installedFrom && (
+                  <p class={styles.metadata}>
+                    Installed from {skill.installedFrom} · {skill.packageRevision?.slice(0, 12)}
+                  </p>
+                )}
                 {skill.compatibility && <p class={styles.metadata}>Compatibility: {skill.compatibility}</p>}
                 {skill.message && (
                   <p class={styles.error} role="status">
@@ -107,3 +422,4 @@ export function GlyphSkills({ skills, query = '', edit }: GlyphSkillsProps) {
     </section>
   );
 }
+import { escapeDisplayControls } from '#src/shared/presentation/escapeDisplayControls.js';

@@ -37,6 +37,17 @@ export class UserSkillDirectory {
     return false;
   }
 
+  previousPackageIds(directory: string): readonly string[] {
+    return [
+      ...new Set(
+        [...this.projectRoutes(directory)].flatMap(({ identity, route }) => [
+          identity.forDirectory(route),
+          ...identity.legacyIds(route),
+        ]),
+      ),
+    ];
+  }
+
   private *projectRoutes(directory: string) {
     for (const entry of this.store.projectEntries(basename(directory))) {
       const location = this.store.projectMarker(entry);

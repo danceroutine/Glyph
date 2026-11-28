@@ -27,7 +27,7 @@ describe(DesktopAttachmentAccess, () => {
     const state = 'host/state.json';
     const privatePaths = [join(root, state)];
     const profile = new StartupUserProfile(join(root, 'personal'));
-    const policy = new WorkspaceContentAccess(profile, () => privatePaths, []);
+    const policy = new WorkspaceContentAccess(profile, () => privatePaths, [], [root]);
     const binaryPath = resolve('target/release/glyph-context-index');
     const physicalAccess = new NativeFilesystemMetadata(binaryPath);
     const bound = new WorkspaceRootAccess(policy.project, root, true);
@@ -352,7 +352,7 @@ describe(DesktopAttachmentAccess, () => {
       const base = await realpath(await mkdtemp(join(tmpdir(), 'glyph-attachment-delivery-')));
       const selections = new WorkspaceRootSelections();
       const profile = new StartupUserProfile(join(base, 'profile'));
-      const policies = new WorkspaceContentAccess(profile, () => [], []);
+      const policies = new WorkspaceContentAccess(profile, () => [], [], [join(base, 'first'), join(base, 'second')]);
       onTestFinished(async () => {
         selections[Symbol.dispose]();
         profile.dispose();

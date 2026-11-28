@@ -1,4 +1,5 @@
 import { resolveInstructionId } from '#vs/platform/glyph/instructions/resolveInstructionId.js';
+import type { GlyphSkillDraft, GlyphSkillSource } from '#glyph/protocol/events/GlyphSkillManagement.js';
 import type { AgentReviewInput } from '#vs/platform/glyph/reviewing/AgentReview.js';
 import { GlyphShellTerminals } from './GlyphShellTerminals.js';
 import { BrowserViewUri } from '#vs/platform/browserView/common/browserViewUri.js';
@@ -159,7 +160,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     const editor = this._register(instantiationService.createInstance(GlyphEditorAdapter));
     this.editor = editor;
     this.client = this._register(
-      new GlyphDesktopClient((request, checkMutation) => editor.handle(request, checkMutation)),
+      new GlyphDesktopClient((request, checkMutation) =>
+        editor.handle(request, this.state.skillTargets, checkMutation),
+      ),
     );
     this.context = this._register(
       instantiationService.createInstance(
@@ -445,6 +448,26 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.composer.restoreDraft({ parts: [], from: 0, to: 0, options: {} });
     }
     this.composer.insertAttachments(attachments);
+  }
+  previewSkill(
+    targetId: string,
+    input: {
+      readonly source?: GlyphSkillSource;
+      readonly draft?: GlyphSkillDraft;
+      readonly replaceId?: string;
+      readonly removeId?: string;
+    },
+  ): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.PREVIEW_SKILL, targetId, ...input });
+  }
+  applySkill(previewId: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.APPLY_SKILL, previewId });
+  }
+  discardSkillPreview(previewId: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.DISCARD_SKILL_PREVIEW, previewId });
+  }
+  setSkillEnabled(skillId: string, enabled: boolean): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.SET_SKILL_ENABLED, skillId, enabled });
   }
   refreshSkills(): Promise<void> {
     return this.refreshInstructionSources();

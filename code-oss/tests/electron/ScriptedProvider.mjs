@@ -215,6 +215,7 @@ export class ScriptedProvider {
     assert.equal(request.method, 'POST');
     assert.equal(request.url, '/v1/responses');
     const body = requestBodySchema.parse(JSON.parse(await readText(request)));
+    for (const tool of body.tools ?? []) validateStrictTool(tool);
     assert.ok(
       account.models.some(model => model.slug === body.model),
       'Model does not belong to the selected account.',
@@ -283,4 +284,37 @@ export class ScriptedProvider {
     }
     if (round.hold !== true) record.finish();
   }
+}
+
+/** Enforce the actual strict function contract at the recorded wire boundary.
+ * @param {unknown} input
+ */
+function validateStrictTool(input) {
+  const tool = z.record(z.string(), z.unknown()).parse(input);
+  if (tool.type === 'namespace') {
+    for (const child of z.array(z.unknown()).parse(tool.tools)) validateStrictTool(child);
+  } else if (tool.type === 'function' && tool.strict === true) {
+    validateStrictSchema(tool.parameters);
+  }
+}
+/** @param {unknown} input */
+function validateStrictSchema(input) {
+  if (Array.isArray(input)) {
+    for (const child of input) validateStrictSchema(child);
+    return;
+  }
+  const parsed = z.record(z.string(), z.unknown()).safeParse(input);
+  if (!parsed.success) return;
+  const schema = parsed.data;
+  if (schema.type === 'object' || (Array.isArray(schema.type) && schema.type.includes('object'))) {
+    assert.equal(schema.additionalProperties, false, 'Strict function objects forbid additional properties.');
+    const properties = z.record(z.string(), z.unknown()).parse(schema.properties ?? {});
+    const required = z.array(z.string()).parse(schema.required ?? []);
+    assert.deepEqual(
+      required.toSorted(),
+      Object.keys(properties).toSorted(),
+      'Every strict function property must be required; use null for optional values.',
+    );
+  }
+  for (const child of Object.values(schema)) validateStrictSchema(child);
 }

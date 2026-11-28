@@ -1,7 +1,8 @@
+import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { AgentMode } from '#src/chat/AgentMode.js';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import OpenAI from 'openai';
@@ -21,7 +22,16 @@ import type { OpenAIAccount } from '#src/providers/openai/auth/OpenAIAccount.js'
 import type { OpenAIAccountStore } from '#src/providers/openai/auth/OpenAIAccountStore.js';
 import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
 import { AgentInstructionSourceKind, AgentInstructionSourceStatus } from '#src/instructions/AgentInstructionSource.js';
-import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
+
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
+import { SkillLifecycleToolRuntime } from '#src/skills/SkillLifecycleToolRuntime.js';
+import { SkillToolRuntime } from '#src/skills/SkillToolRuntime.js';
+import { aSkillDraft, aSkillLifecycle } from '#src/skills/tests/fixtures/aSkillLifecycle.js';
+import { NativePinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 const configuration: ChatConfiguration = {
   instructions: 'You are a helpful assistant.',
@@ -106,10 +116,11 @@ function aTurnContextCoordinator(
 ): TurnContextCoordinator & { beginTurn: ReturnType<typeof vi.fn> } {
   const beginTurn = vi.fn(async () => {
     const envelope = await context();
-    return { initialEnvelope: () => envelope };
+    return { initialEnvelope: () => envelope, prepareReplay: () => ({ didDeliver: () => {} }) };
   });
   return {
     beginTurn,
+    authorizeDisclosure: vi.fn(async () => () => {}),
     disclosePaths: vi.fn(),
     discloseAttachments: vi.fn(),
     activateManualRules: vi.fn(),
@@ -138,6 +149,239 @@ const toolCompleted = {
 };
 
 describe(OpenAIProvider, () => {
+  it('continues preparing an unrelated prompt when a nested skill is replaced', async () => {
+    const skill = aSkillDescriptor({ scope: 'nested' });
+    const catalog = new SkillCatalog([
+      {
+        id: skill.origin.id,
+        origin: skill.origin,
+        discover: async () => [skill],
+        capture: async () => aSkillPackage(skill),
+        refreshIndex: async () => {},
+      },
+    ]);
+    const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
+    const { provider, requests } = harness([() => sse([completed])], new ToolRegistry([]), turns);
+    await provider.send('Explain this workspace.', {
+      ...options(),
+      onTrace: entry => {
+        if (entry.kind === 'authentication.resolved') catalog.retirements.publish(skill.id, 'nested-update');
+      },
+    });
+    expect(requests[0]?.input).toEqual([{ role: 'user', content: 'Explain this workspace.' }]);
+  });
+
+  it('preserves a human schema example and records only resource bytes received by the transport', async () => {
+    const { catalog, manager, install } = await aSkillLifecycle();
+    const skill = await install();
+    const removal = await manager.prepareRemoval(skill.id);
+    const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
+    const read = {
+      ...toolCompleted,
+      response: {
+        ...toolCompleted.response,
+        output: [
+          {
+            ...toolCompleted.response.output[0],
+            namespace: 'skills',
+            name: 'read_resource',
+            arguments: JSON.stringify({ id: skill.id, path: 'references/notes.md' }),
+          },
+        ],
+      },
+    };
+    const { provider, requests } = harness(
+      [() => sse([read]), () => sse([completed]), () => sse([completed])],
+      new SkillToolRuntime(turns),
+      turns,
+    );
+    const human = JSON.stringify({
+      schema: 'glyph.agent-instructions.v1',
+      sources: [],
+      question: 'Which fields are required?',
+    });
+    let checkpoints = 0;
+    const result = await provider.send(
+      { text: human, attachments: [], skillIds: [skill.id] },
+      {
+        ...options(),
+        onStateCheckpoint: async () => {
+          if (++checkpoints === 2) await manager.apply(removal.id);
+        },
+      },
+    );
+    expect(result.context?.skills).toMatchObject([{ body: 'Reviewed instructions', resources: [] }]);
+    expect(requests).toHaveLength(2);
+    provider.restoreState(provider.exportState());
+    await provider.send('Continue.', options());
+    for (const request of requests) {
+      expect(request.input).toContainEqual({ role: 'user', content: human });
+      expect(JSON.stringify(request.input)).not.toContain('Pinned notes');
+    }
+  });
+
+  it('continues two active chats after Settings replaces a package shared by their workspaces', async () => {
+    const authority = new NativePinnedSourceAuthority(testFilesystemMetadata, new WorkspaceAccessPolicy(), () => {});
+    const {
+      catalog,
+      state,
+      provider: discovery,
+      manager,
+      install,
+    } = await aSkillLifecycle(undefined, undefined, authority);
+    const skill = await install();
+    const peerCatalog = new SkillCatalog([discovery], { profile: state });
+    let announceArrival!: () => void;
+    let resumeChats!: () => void;
+    const arrived = new Promise<void>(resolve => {
+      announceArrival = resolve;
+    });
+    const completedChange = new Promise<void>(resolve => {
+      resumeChats = resolve;
+    });
+    let waiting = 0;
+    const tools = waitTools(async () => {
+      if (++waiting === 2) announceArrival();
+      await completedChange;
+      return 'Work complete';
+    });
+    const chats = [catalog, peerCatalog].map(source =>
+      harness(
+        [() => sse([toolCompleted]), () => sse([completed])],
+        tools,
+        new TurnContextCoordinator([new SkillContextContributor(source)]),
+      ),
+    );
+    const replies = chats.map(({ provider }) =>
+      provider.send({ text: 'Use the selected workflow', attachments: [], skillIds: [skill.id] }, options()),
+    );
+    await arrived;
+    try {
+      const preview = await manager.prepare(skill.origin.id, aSkillDraft('Updated instructions'), skill.id);
+      await manager.apply(preview.id);
+    } finally {
+      resumeChats();
+    }
+    const results = await Promise.all(replies);
+    for (const { requests } of chats) {
+      expect(requests).toHaveLength(2);
+      expect(JSON.stringify(requests[0]!.input)).toContain('Reviewed instructions');
+      expect(JSON.stringify(requests[1]!.input)).not.toContain('Reviewed instructions');
+      expect(JSON.stringify(requests[1]!.input)).not.toContain('Updated instructions');
+    }
+    for (const result of results) expect(result.context?.skills?.[0]?.body).toBe('Reviewed instructions');
+  });
+  it.each(['update', 'remove', 'unrelated revocation'] as const)(
+    'uses the remaining authorized instructions after a managed skill change (%s)',
+    async action => {
+      const authority = new NativePinnedSourceAuthority(testFilesystemMetadata, new WorkspaceAccessPolicy(), () => {});
+      const { catalog, manager, install, root } = await aSkillLifecycle(undefined, undefined, authority);
+      const skill = await install();
+      const otherDraft = await manager.prepare(skill.origin.id, aSkillDraft('Keep these instructions', 'other'));
+      await manager.apply(otherDraft.id);
+      const other = catalog.skills.find(item => item.name === 'other')!;
+      const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
+      const approve = vi.fn(async () => {
+        if (action === 'unrelated revocation') await rename(join(root, other.directory), join(root, 'moved-by-user'));
+        return true;
+      });
+      const tools = new ToolRegistry([
+        ...new SkillToolRuntime(turns).tools,
+        ...new SkillLifecycleToolRuntime(manager, approve, turns, { targets: [] } as never).tools,
+      ]);
+      const call = (name: string, args: object) => () =>
+        sse([
+          {
+            ...completed,
+            response: {
+              ...completed.response,
+              output: [
+                {
+                  type: 'function_call',
+                  namespace: 'skills',
+                  name,
+                  id: 'item-' + name,
+                  call_id: name,
+                  arguments: JSON.stringify(args),
+                },
+              ],
+            },
+          },
+        ]);
+      const { provider, requests } = harness(
+        [
+          ...(action === 'remove'
+            ? [
+                call('activate', { id: skill.id, reason: 'Inspect the existing package' }),
+                call('read_resource', { id: skill.id, path: 'references/notes.md' }),
+              ]
+            : []),
+          call('propose_change', {
+            target_id: skill.origin.id,
+            replace_id: action === 'update' ? skill.id : null,
+            remove_id: action === 'update' ? null : skill.id,
+            draft: action === 'update' ? aSkillDraft('Updated instructions').toJSON() : null,
+          }),
+          () => sse([completed]),
+          () => sse([completed]),
+        ],
+        tools,
+        turns,
+      );
+      const send = provider.send(
+        { text: 'Manage this package', attachments: [], skillIds: [other.id] },
+        {
+          ...options(),
+          toolContext: { chat: { id: 'chat', accountId: 'account', accountProvider: 'test' } },
+        },
+      );
+      if (action === 'unrelated revocation') {
+        await expect(send).rejects.toThrow();
+        expect(approve).toHaveBeenCalledOnce();
+        expect(requests).toHaveLength(1);
+        expect(catalog.skills.some(item => item.id === skill.id)).toBe(false);
+        return;
+      }
+      const result = await send;
+      expect(result.responseId).toBe(completed.response.id);
+      expect(approve).toHaveBeenCalledOnce();
+      const input = requests.at(-1)!.input as { role?: string; content?: string; call_id?: string; output?: string }[];
+      const envelope = JSON.parse(
+        input.find(item => item.role === 'user' && typeof item.content === 'string')!.content!,
+      );
+      expect(envelope).toMatchObject({
+        skillCandidates: [{ id: other.id }],
+        skills: [{ body: 'Keep these instructions' }],
+      });
+      expect(JSON.parse(input.find(item => item.call_id === 'propose_change' && item.output)!.output!)).toMatchObject({
+        applied: true,
+        action,
+      });
+      if (action === 'remove') {
+        expect(JSON.stringify(requests.at(-2)!.input)).toContain('Pinned notes');
+        expect(JSON.parse(input.find(item => item.call_id === 'activate' && item.output)!.output!)).toEqual({
+          activated: true,
+        });
+        expect(JSON.parse(input.find(item => item.call_id === 'read_resource' && item.output)!.output!)).toEqual({
+          read: true,
+        });
+        expect(result.context?.skills?.find(item => item.descriptor.id === skill.id)).toMatchObject({
+          body: 'Reviewed instructions',
+          resources: [{ content: 'Pinned notes' }],
+        });
+      }
+      provider.restoreState(provider.exportState());
+      await provider.send(
+        { text: 'Continue', attachments: [], skillIds: action === 'update' ? [skill.id] : [] },
+        options(),
+      );
+      const next = JSON.stringify(requests.at(-1)!.input);
+      expect(next).not.toContain('Reviewed instructions');
+      expect(next).not.toContain('Pinned notes');
+      if (action === 'update') expect(next).toContain('Updated instructions');
+    },
+  );
+
   it.each(['function_call', 'custom_tool_call'] as const)(
     'keeps scoped guidance live but strips it from persisted %s outputs and subsequent turns',
     async type => {
@@ -1646,6 +1890,7 @@ describe(OpenAIProvider, () => {
         { id: 'reference-only' },
         { role: 'assistant', content: 'Earlier answer.' },
         { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Rich input.' }] },
+        { role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,AA==', detail: 'auto' }] },
         { role: 'user', content: 'Plain text, not JSON.' },
         { role: 'developer', content: JSON.stringify({ schema: 'other.schema', event: { id: 'event-1' } }) },
         { role: 'developer', content: JSON.stringify({ schema: 'glyph.context-event.v1', event: {} }) },

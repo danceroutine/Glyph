@@ -1831,6 +1831,50 @@ fn direct_root_globs_exclude_private_roots_cache_files_and_reject_unreadable_ign
 }
 
 #[test]
+fn package_directory_inventory_observes_policy_changes_and_bounds_empty_branches() {
+    let root = tempdir().unwrap();
+    let mut service = ContextIndexService::new();
+    assert!(service.list_directories().is_err());
+    for path in [".git", "templates/empty", "ignored", "secret.pem"] {
+        create_dir_all(root.path().join(path)).unwrap();
+    }
+    write(root.path().join(".gitignore"), "ignored/\n").unwrap();
+    let mut config = params(root.path());
+    service.initialize(config.clone()).unwrap();
+    assert_eq!(
+        service.list_directories().unwrap(),
+        ["templates", "templates/empty"]
+    );
+    write(root.path().join(".gitignore"), "[z-a]\n").unwrap();
+    assert!(service.list_directories().is_err());
+    write(root.path().join(".gitignore"), "").unwrap();
+    create_dir_all(root.path().join("d/".repeat(33))).unwrap();
+    assert!(service
+        .list_directories()
+        .unwrap_err()
+        .message
+        .contains("32 levels"));
+    fs::remove_dir_all(root.path().join("d")).unwrap();
+    for n in 0..8451 {
+        write(root.path().join(n.to_string()), "").unwrap();
+    }
+    assert!(service
+        .list_directories()
+        .unwrap_err()
+        .message
+        .contains("budget"));
+    fs::remove_dir_all(root.path()).unwrap();
+    assert!(service.list_directories().is_err());
+    service.shutdown();
+    let private = tempdir().unwrap();
+    config.root = private.path().to_str().unwrap().to_owned();
+    config.exclude_root = true;
+    let mut service = ContextIndexService::new();
+    service.initialize(config).unwrap();
+    assert!(service.list_directories().unwrap().is_empty());
+}
+
+#[test]
 fn private_directory_uses_the_entries_actual_filename_equivalence() {
     let base = tempdir().unwrap();
     let stored = base.path().join(".ſkill-staging");
@@ -1941,6 +1985,39 @@ fn discards_lookups_if_an_explicit_private_location_is_redirected() {
     let mut malformed = params(root.path());
     malformed.private_paths = vec!["relative".into()];
     assert!(ContextIndexService::new().initialize(malformed).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn package_listing_rechecks_the_current_private_authority_of_resident_paths() {
+    let root = tempdir().unwrap();
+    let visible = root.path().join("workspace");
+    let private = root.path().join("private");
+    let permissions = root.path().join("permission-scope");
+    fs::create_dir(&private).unwrap();
+    let catalog = visible.join(".glyph/skills/documentation");
+    fs::create_dir_all(&catalog).unwrap();
+    fs::write(catalog.join("SKILL.md"), "fixture").unwrap();
+    std::os::unix::fs::symlink(&private, &permissions).unwrap();
+    let mut cfg = params(&visible);
+    cfg.private_paths = vec![permissions.clone()];
+    let mut service = ContextIndexService::new();
+    service.initialize(cfg).unwrap();
+    let listing =
+        || serde_json::to_value(service.list_skill_packages(Some(".glyph")).unwrap()).unwrap();
+    assert_eq!(
+        listing(),
+        serde_json::json!({
+            "packages":[{"directory":".glyph/skills/documentation","manifest":".glyph/skills/documentation/SKILL.md"}],
+            "truncated":false,
+        })
+    );
+    fs::remove_file(&permissions).unwrap();
+    std::os::unix::fs::symlink(&catalog, &permissions).unwrap();
+    assert_eq!(
+        listing(),
+        serde_json::json!({"packages":[],"truncated":false})
+    );
 }
 
 #[test]

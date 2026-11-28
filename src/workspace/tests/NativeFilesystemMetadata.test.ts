@@ -27,6 +27,34 @@ it('passes an open descriptor and requires the native inspection acknowledgement
   await backend.inspect(handle, 'replaceable');
 });
 
+it('requires the native host path check to acknowledge the requested paths and every workspace root', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'glyph-host-authority-'));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const executable = join(root, 'inspector');
+  const authority = new NativeFilesystemMetadata(executable);
+  const check = () => authority.assertHostPaths(['/host/file'], ['/project']);
+  await expect(check()).rejects.toThrow();
+  await writeFile(executable, '#!/bin/sh\n/bin/cat >/dev/null\nexit 1\n', { mode: 0o700 });
+  await expect(check()).rejects.toThrow('host filesystem authority');
+  await writeFile(
+    executable,
+    `#!/bin/sh
+[ "$1" = "--assert-host-paths" ] && [ "$(/bin/cat)" = '{"paths":["/host/file"],"workspaceRoots":["/project"]}' ] && echo verified
+`,
+  );
+  await check();
+  await authority.assertHostPaths(['/host/file'], ['/project'], []);
+  const socket = '/host/credential.sock';
+  const receipt = join(root, 'request');
+  await writeFile(executable, '#!/bin/sh\n/bin/cat > "' + receipt + '"\necho verified\n');
+  await authority.assertHostPaths(['/host/file', socket], ['/project'], [socket]);
+  expect(JSON.parse(await readFile(receipt, 'utf8'))).toEqual({
+    paths: ['/host/file', socket],
+    workspaceRoots: ['/project'],
+    sockets: [socket],
+  });
+});
+
 it('passes physical exclusions and the opened identity to native path admission', async () => {
   const root = await mkdtemp(join(tmpdir(), 'glyph-path-admission-'));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
@@ -39,10 +67,11 @@ it('passes physical exclusions and the opened identity to native path admission'
   const handle = await open(file);
   try {
     const stat = await handle.stat({ bigint: true });
-    await native.assertWorkspacePath(file, [root + '/private'], { handle });
+    await native.assertWorkspacePath(file, [root + '/private'], { handle, managedDirectories: [root + '/skills'] });
     expect(JSON.parse(await readFile(receipt, 'utf8'))).toEqual({
       path: file,
       privatePaths: [root + '/private'],
+      managedDirectories: [root + '/skills'],
       identity: [String(stat.dev), String(stat.ino)],
     });
     await native.assertWorkspacePath(file, []);
@@ -54,4 +83,21 @@ it('passes physical exclusions and the opened identity to native path admission'
   } finally {
     await handle.close();
   }
+});
+
+it('inspects selected directory routes and distinguishes a removed selection from a live directory', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'glyph-directory-origin-'));
+  const backend = new NativeFilesystemMetadata(join(process.cwd(), 'target/release/glyph-context-index'));
+  const handle = await open(directory);
+  onTestFinished(async () => {
+    await handle.close();
+    await rm(directory, { force: true, recursive: true });
+  });
+  const metadata = await handle.stat({ bigint: true });
+  expect(await backend.sourceOrigins([directory], [], undefined, true)).toEqual([
+    { identity: `${metadata.dev}:${metadata.ino}`, origin: expect.stringMatching(/^[a-f0-9]{64}$/u) },
+  ]);
+  await expect(backend.assertUnlinkedDirectory(handle.fd)).rejects.toThrow('source directory moved');
+  await rm(directory, { recursive: true });
+  await expect(backend.assertUnlinkedDirectory(handle.fd)).resolves.toBeUndefined();
 });

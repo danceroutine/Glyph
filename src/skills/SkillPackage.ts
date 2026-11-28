@@ -28,6 +28,7 @@ export class SkillPackage {
     readonly descriptor: SkillDescriptor,
     readonly body: string,
     private readonly files: ReadonlyMap<string, SkillPackageFile>,
+    private readonly directories: ReadonlyMap<string, number> = new Map(),
     private readonly origins: ReadonlyMap<string, PinnedSourceFile> = new Map(),
   ) {
     this.descriptor = structuredClone(descriptor);
@@ -36,7 +37,16 @@ export class SkillPackage {
       if (pin.file.identity !== this.files.get(path)?.identity)
         throw new Error('A skill resource changed during capture. Retry activation.');
     }
-    this.revision = packageRevision(this.files);
+    this.directories = new Map(directories);
+    this.revision = packageRevision(this.files, this.directories);
+  }
+
+  /** Defensive copy for host-owned lifecycle and execution staging. */
+  packageFiles(): ReadonlyMap<string, SkillPackageFile> {
+    return new Map([...this.files].map(([path, file]) => [path, { ...file, bytes: Uint8Array.from(file.bytes) }]));
+  }
+  packageDirectories(): ReadonlyMap<string, number> {
+    return new Map(this.directories);
   }
 
   /** Return the manifest origin and the origins of only those resources included in a request.
@@ -90,6 +100,7 @@ export async function captureSkillPackage(
   paths: readonly string[],
   signal?: AbortSignal,
   binaryStore?: Pick<FileSystemWorkspaceTextStore, 'readBytes'>,
+  directories?: ReadonlyMap<string, number>,
   origins?: ReadonlyMap<string, PinnedSourceFile>,
 ): Promise<SkillPackage> {
   const files = await readSkillPackageFiles(descriptor, workspace, paths, signal, binaryStore);
@@ -97,7 +108,7 @@ export async function captureSkillPackage(
   if (!entry) throw new Error('Skill package is missing SKILL.md.');
   if (descriptor.revision !== entry.revision) throw new Error('The skill changed. Refresh and activate it again.');
   const manifest = parseSkillManifest(new TextDecoder('utf8', { fatal: true }).decode(entry.bytes), descriptor.name);
-  return new SkillPackage(descriptor, manifest.body, files, origins);
+  return new SkillPackage(descriptor, manifest.body, files, directories, origins);
 }
 
 export async function readSkillPackageFiles(

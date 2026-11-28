@@ -157,3 +157,14 @@ it('rejects a mismatched capability policy', () => {
     ),
   ).toThrow('Approval capability does not match its policy.');
 });
+
+it('requires a fresh one-shot choice for transient pinned executions, including stored unrestricted grants', () => {
+  const transient = policy.createRequest({ workspace: scope, operation: { ...request.operation, transient: true } });
+  expect(transient.choices.map(choice => choice.id)).toEqual(['allow_once', 'allow_outside_sandbox_once', 'deny']);
+  const permissions: GrantPermission[] = [
+    { capability: ApprovalCapability.SHELL, kind: 'safe_inspection' },
+    { capability: ApprovalCapability.SHELL, kind: 'all_shell_commands' },
+    { capability: ApprovalCapability.SHELL, kind: 'exact_command', command: 'pwd', workingDirectory: '/repo' },
+  ];
+  for (const permission of permissions) expect(policy.matchGrant(transient, permission)).toBeNull();
+});

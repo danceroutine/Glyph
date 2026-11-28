@@ -5,6 +5,13 @@ import { GlyphFileMutationKind } from '#src/desktop/protocol/editor/GlyphFileMut
 
 const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'owner' };
 describe(EditorRpcRouter, () => {
+  it('consults only the supplied trust registry when finding other user-package editors', () => {
+    expect(new EditorRpcRouter().trustedSkillEditors(identity)).toEqual([]);
+    const peer = { identity: { ...identity, windowId: 'trusted' }, connectionId: 'peer' };
+    const registry = vi.fn(() => [peer]);
+    expect(new EditorRpcRouter(registry).trustedSkillEditors(identity)).toEqual([peer]);
+    expect(registry).toHaveBeenCalledExactlyOnceWith(identity);
+  });
   it('rechecks a pending mutation on its original port and retires the grant on completion', async () => {
     const router = new EditorRpcRouter();
     let grant = '';

@@ -19,6 +19,17 @@ import {
 
 afterEach(cleanup);
 
+describe(mountGlyphSkills, () => {
+  it('releases the settings view and ignores updates after disposal', () => {
+    const container = document.createElement('div');
+    const view = mountGlyphSkills(container, [], '', vi.fn());
+    expect(container.textContent).toContain('No skills found');
+    view.dispose();
+    view.update([], 'new search');
+    expect(container.innerHTML).toBe('');
+  });
+});
+
 const host = () => {
   const container = document.createElement('div');
   document.body.append(container);

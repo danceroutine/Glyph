@@ -1,3 +1,4 @@
+import { ToolOperationError } from '#src/tools/ToolOperationError.js';
 import type { ToolActivity } from '#src/chat/ToolActivity.js';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentModeID } from '#src/chat/AgentMode.js';
@@ -43,6 +44,17 @@ describe(ToolExecutor, () => {
     });
     expect(f.tool.validateInput).not.toHaveBeenCalled();
     expect(f.tool.execute).not.toHaveBeenCalled();
+  });
+  it.each(['not_started', 'unknown'] as const)('preserves explicit domain failures with %s outcomes', async outcome => {
+    const f = fixture([AgentModeID.PLAN]);
+    f.tool.execute.mockRejectedValueOnce(
+      new ToolOperationError('PACKAGE_CHANGED', 'Preview the changed package again.', outcome),
+    );
+    const result = await f.executor.execute(call, f.options);
+    expect(f.options.onActivity.mock.calls.at(-1)?.[0].phase).toBe(ToolActivityPhase.FAILED);
+    expect(JSON.parse(result.output)).toEqual({
+      error: { code: 'PACKAGE_CHANGED', message: 'Preview the changed package again.', outcome },
+    });
   });
   it('permits a newly registered Plan tool without a central name list', async () => {
     const f = fixture([AgentModeID.PLAN]);
@@ -175,7 +187,8 @@ it.each(['internal', 'visible', 'failed'])(
     const f = fixture([AgentModeID.PLAN]);
     f.tool.execute.mockImplementation(async () => {
       expect(f.options.onActivity).not.toHaveBeenCalled();
-      if (kind === 'failed') throw new Error('Failed execution');
+      if (kind === 'failed')
+        throw new ToolOperationError('EXIT', 'Failed process', 'unknown', '{"exitCode":3,"output":"failed"}');
       return kind;
     });
     const show = vi.fn((output: string) => output !== 'internal');
@@ -189,9 +202,7 @@ it.each(['internal', 'visible', 'failed'])(
         ToolActivityPhase.STARTED,
         kind === 'failed' ? ToolActivityPhase.FAILED : ToolActivityPhase.COMPLETED,
       ]);
-    if (kind === 'failed')
-      expect(JSON.parse(result.output)).toMatchObject({ error: { code: 'TOOL_EXECUTION_FAILED' } });
-    else expect(result.output).toBe(kind);
+    expect(result.output).toBe(kind === 'failed' ? '{"exitCode":3,"output":"failed"}' : kind);
     expect(f.options.trace).toHaveBeenCalledWith('tool.result', expect.objectContaining({ output: result.output }));
   },
 );

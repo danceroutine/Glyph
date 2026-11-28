@@ -12,6 +12,7 @@ import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 interface FixtureOptions {
   caseSensitive?: boolean;
   excludedPaths?: string[];
+  managedDirectories?: readonly string[] | (() => readonly string[]);
   accessPolicy?: WorkspaceAccessPolicy;
   physicalAccess?: WorkspacePathAccess;
 }
@@ -26,6 +27,7 @@ export function fixtureWorkspace(root: string, options: FixtureOptions = {}) {
       caseSensitive,
       options.excludedPaths,
     ),
+    ...(options.managedDirectories && { managedDirectories: options.managedDirectories }),
     physicalAccess: options.physicalAccess ?? {
       async assertWorkspacePath(path, privatePaths) {
         if (

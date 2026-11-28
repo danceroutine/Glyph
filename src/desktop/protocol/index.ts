@@ -49,3 +49,10 @@ export * from './events/GlyphModeSwap.ts';
 export { AgentModeID } from '#src/chat/AgentMode.js';
 
 export type { GlyphSkill, GlyphSkillActivation } from './events/GlyphSkill.ts';
+
+export type {
+  GlyphSkillDraft,
+  GlyphSkillPreview,
+  GlyphSkillSource,
+  GlyphSkillTarget,
+} from './events/GlyphSkillManagement.ts';

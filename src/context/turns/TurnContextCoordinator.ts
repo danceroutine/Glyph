@@ -4,7 +4,12 @@ import { prepareModelContext, type TurnContextEnvelope, type TurnContextSnapshot
 import type { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { AgentInstructionActivationReason } from '#src/instructions/AgentInstructionSource.js';
 import { InstructionContextContributor } from './InstructionContextContributor.ts';
-import type { TurnContextContribution, TurnContextContributor, TurnContextInput } from './TurnContextContributor.ts';
+import type {
+  TurnContextContribution,
+  TurnContextContributor,
+  TurnContextInput,
+  TurnContextReplay,
+} from './TurnContextContributor.ts';
 
 export type BeginTurnContextInput = TurnContextInput;
 
@@ -17,6 +22,27 @@ export class PreparedTurnContext {
   /** Collect only origins represented in this disclosure across the contributing domains. */
   disclosurePins(context?: TurnContextEnvelope) {
     return [...this.contributions.values()].flatMap(part => part.disclosurePins?.(context) ?? []);
+  }
+  /** Bind the replay policy applied to this request to its final transport handoff, including SDK retries. */
+  prepareReplay(): TurnContextReplay & { readonly session: PreparedTurnContext } {
+    const parts = [...this.contributions.values()].flatMap(part => part.prepareReplay?.() ?? []);
+    const filters = parts.flatMap(part => part.filter ?? []);
+    return {
+      session: this,
+      ...(filters.length > 0 && {
+        filter: (context: TurnContextEnvelope) =>
+          filters.reduce<TurnContextEnvelope | undefined>(
+            (remaining, filter) => remaining && filter(remaining),
+            context,
+          ),
+      }),
+      assertCurrent: () => {
+        for (const part of parts) part.assertCurrent();
+      },
+      didDeliver: () => {
+        for (const part of parts) part.didDeliver();
+      },
+    };
   }
   checkpoint(): () => void {
     const restore = [...this.contributions.values()].flatMap(part =>
@@ -194,11 +220,16 @@ export class TurnContextCoordinator {
     this.sessions.delete(turnId);
   }
   /** Reauthorize only the source material entering this provider request after async preparation. */
-  authorizeDisclosure(turnId: string, signal?: AbortSignal): Promise<() => void> {
+  authorizeDisclosure(
+    turnId: string,
+    signal?: AbortSignal,
+    replay?: ReturnType<PreparedTurnContext['prepareReplay']>,
+  ): Promise<() => void> {
     const session = this.sessions.get(turnId);
-    if (!session) throw new Error('This turn has ended.');
+    if (!session || (replay && replay.session !== session)) throw new Error('This turn has ended.');
     return authorizeSources(session.disclosurePins(), signal).then(check => () => {
       if (this.sessions.get(turnId) !== session) throw new Error('This turn has ended.');
+      replay?.assertCurrent();
       check();
     });
   }

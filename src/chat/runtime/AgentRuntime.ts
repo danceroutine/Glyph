@@ -226,10 +226,12 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           await checkpointSteering(turn);
         }
         round += 1;
+        const replay = turnContext?.prepareReplay();
+        if (replay?.filter) turn = this.adapter.projectTurn(turn, new AgentHistoryRetention(replay.filter));
         const send = await this.adapter.prepareStep(turn, context(round));
         const authorize = async () => {
           const checks = await Promise.all([
-            this.turnContexts?.authorizeDisclosure?.(turnId, signal),
+            this.turnContexts?.authorizeDisclosure(turnId, signal, replay),
             ...[...pendingToolSources].map(validate => validate(signal)),
             ...[...disclosures].filter(value => value.hasSources).map(value => value.authorize(signal)),
           ]);
@@ -241,6 +243,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         const assertCurrent = await authorize();
         assertCurrent();
         const step = await send(assertCurrent, authorize);
+        replay?.didDeliver();
         pendingToolSources.clear();
         pendingWorkspaceInput = false;
         turn = step.turn;

@@ -29,7 +29,7 @@
   "scripts": {
     "start": "pnpm context-index:build && pnpm shell-sandbox:build && node --import tsx --env-file-if-exists=.env src/cli.ts",
     "build": "node scripts/build.mjs",
-    "desktop:artifact": "pnpm build && pnpm context-index:build && pnpm shell-sandbox:build && node scripts/build-desktop-artifact.mjs",
+    "desktop:artifact": "pnpm build && pnpm context-index:build && pnpm shell-sandbox:build && pnpm workspace-mutations:build && node scripts/build-desktop-artifact.mjs",
     "code-oss:bootstrap": "node scripts/code-oss/bootstrap.mjs",
     "code-oss:apply": "node scripts/code-oss/apply-overlay.mjs",
     "code-oss:install": "node scripts/code-oss/run.mjs install",
@@ -60,7 +60,7 @@
     "oxlint": "oxlint --format stylish .",
     "oxlint:fix": "oxlint . --fix",
     "fix": "pnpm lint:fix && pnpm format",
-    "check": "pnpm format:check && pnpm lint && pnpm context-index:check && pnpm shell-sandbox:check && pnpm context-index:build && pnpm shell-sandbox:build && tsc --noEmit && pnpm code-oss:check:ui && pnpm code-oss:check:storybook && pnpm build",
+    "check": "pnpm format:check && pnpm lint && pnpm context-index:check && pnpm shell-sandbox:check && pnpm workspace-mutations:check && pnpm context-index:build && pnpm shell-sandbox:build && pnpm workspace-mutations:build && tsc --noEmit && pnpm code-oss:check:ui && pnpm code-oss:check:storybook && pnpm build",
     "test": "run-s --continue-on-error test:parallel test:coverage",
     "test:all": "run-s --continue-on-error test:parallel test:integration test:coverage:all",
     "test:select": "node scripts/coverage/select-electron-tests.mjs",
@@ -75,7 +75,7 @@
     "test:unit": "vitest run --project unit --project code-oss --project overlay --project ui --maxWorkers=2",
     "test:unit:coverage": "vitest run --project unit --project code-oss --project overlay --project ui --coverage --coverage.thresholds.100 --coverage.thresholds.perFile --maxWorkers=2",
     "test:ui": "vitest run --project ui",
-    "test:e2e": "pnpm context-index:build && pnpm shell-sandbox:build && vitest run --project e2e",
+    "test:e2e": "pnpm context-index:build && pnpm shell-sandbox:build && pnpm workspace-mutations:build && vitest run --project e2e",
     "test:transform-performance": "for size in 1 5 10 20 50; do node --expose-gc --import tsx src/editing/documents/test/TextEditTransformer.benchmark.ts $size; done",
     "test:watch": "vitest",
     "test:security": "vitest run --project unit --project code-oss --project overlay --project ui --maxWorkers=2 security.test utilityMain.test --reporter=default --reporter=json --reporter=./scripts/security/reporter.mjs --outputFile.json=.artifacts/security/results.json",
@@ -83,7 +83,10 @@
     "test:security:all": "run-s --continue-on-error test:security test:security:native",
     "todo:dev": "pnpm --dir examples/todo-app dev",
     "todo:build": "pnpm --dir examples/todo-app build",
-    "todo:preview": "pnpm --dir examples/todo-app preview"
+    "todo:preview": "pnpm --dir examples/todo-app preview",
+    "workspace-mutations:build": "cargo build --release --package glyph-workspace-mutations",
+    "workspace-mutations:check": "cargo clippy --package glyph-workspace-mutations --all-targets -- -D warnings",
+    "workspace-mutations:test": "cargo test --package glyph-workspace-mutations"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.1.1",

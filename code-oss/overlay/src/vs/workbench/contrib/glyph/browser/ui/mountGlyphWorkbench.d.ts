@@ -75,7 +75,12 @@ export declare const mountGlyphSkills: (
   skills: readonly import('#glyph/protocol/events/GlyphSkill.js').GlyphSkill[],
   query: string,
   edit: (skill: import('#glyph/protocol/events/GlyphSkill.js').GlyphSkill) => void,
+  management?: import('#glyph/workbench/GlyphSkillsManagement.js').GlyphSkillsManagement,
 ) => {
-  update(skills: readonly import('#glyph/protocol/events/GlyphSkill.js').GlyphSkill[], query: string): void;
+  update(
+    skills: readonly import('#glyph/protocol/events/GlyphSkill.js').GlyphSkill[],
+    query: string,
+    management?: import('#glyph/workbench/GlyphSkillsManagement.js').GlyphSkillsManagement,
+  ): void;
   dispose(): void;
 };

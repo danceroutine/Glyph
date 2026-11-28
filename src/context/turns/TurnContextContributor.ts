@@ -10,10 +10,21 @@ export interface TurnContextInput {
   readonly skillIds?: readonly string[];
 }
 
+/** One contributor's replay rules and provenance for a prepared provider request. */
+export interface TurnContextReplay {
+  readonly filter?: (context: TurnContextEnvelope) => TurnContextEnvelope | undefined;
+  /** Check that the context in this request can still be sent, including during transport retries. */
+  assertCurrent(): void;
+  /** Commit the context supplied in this step after the provider responds. */
+  didDeliver(): void;
+}
+
 /** Frozen contribution. A domain owns activation semantics; the coordinator owns turn lifetime and composition. */
 export interface TurnContextContribution {
   /** The selected source origins for one delta, or every origin replayed in the current provider input. */
   disclosurePins?(context?: TurnContextEnvelope): readonly SourcePin[];
+  /** Prepare the context that will accompany the next model step. */
+  prepareReplay?(): TurnContextReplay;
   initialEnvelope(): TurnContextEnvelope;
   snapshot(): TurnContextSnapshot;
   disclosePaths?(paths: readonly string[]): TurnContextEnvelope | undefined;

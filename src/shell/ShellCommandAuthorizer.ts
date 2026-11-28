@@ -1,3 +1,4 @@
+import type { ShellProgram } from './ShellProgram.ts';
 import { Approval } from '#src/interaction/approvals/Approval.js';
 import { ApprovalCapability } from '#src/interaction/approvals/ApprovalCapability.js';
 import { ApprovalCoordinator } from '#src/interaction/approvals/ApprovalCoordinator.js';
@@ -42,7 +43,7 @@ export class ShellCommandAuthorizer {
     this.initialized = true;
   }
   authorize(
-    command: string,
+    command: string | ShellProgram,
     workingDirectory: string,
     signal: AbortSignal,
     context: ShellAuthorizationContext = defaultContext,
@@ -52,13 +53,22 @@ export class ShellCommandAuthorizer {
       await this.initialize();
       signal.throwIfAborted();
       const approval = new Approval(
-        this.policy.createRequest({ workspace: this.scope, operation: { command, workingDirectory, ...context } }),
+        this.policy.createRequest({
+          workspace: this.scope,
+          operation: { command: typeof command === 'string' ? command : command.display, workingDirectory, ...context },
+        }),
       );
       const result = await this.coordinator.resolve(
         approval,
         this.policy,
         {
           presentApproval: async (pending, cancellation, displayed) => {
+            // A different chat's approval can keep a script queued after its source or turn is revoked.
+            if (typeof command !== 'string') {
+              const assertCurrent = await command.assertAuthority();
+              cancellation.throwIfAborted();
+              assertCurrent?.();
+            }
             displayed();
             const choiceId = await this.presenter.presentShellPermission(
               { command: pending.request.operation.command, workingDirectory, approval: pending },

@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import { Deferred } from '#src/shared/Deferred.js';
 import { GlyphTransportMessageType } from '#src/desktop/protocol/connection/GlyphTransportMessage.js';
 
@@ -12,6 +13,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   const parent = new EventEmitter();
   const host = {
     constructed: vi.fn(),
+    trustedSkillEditors: vi.fn((_owner: GlyphConnectionIdentity, _projectDirectory?: string) => []),
     trustedUserEditors: vi.fn(() => []),
     connect: vi.fn(),
     receive: vi.fn(async (_connectionId: string, _envelope: unknown) => {}),
@@ -19,14 +21,14 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
     dispose: vi.fn(async () => {}),
   };
   const editors = {
-    constructed:
-      vi.fn<
-        ({
-          trustedUserEditors,
-        }: {
+    constructed: vi.fn<
+      (
+        router: {
           trustedUserEditors: (identity: unknown, sourcePath: string, aliases?: readonly string[]) => unknown;
-        }) => void
-      >(),
+        },
+        projectPeers: (owner: GlyphConnectionIdentity, projectDirectory?: string) => unknown,
+      ) => void
+    >(),
     connect: vi.fn(),
     receive: vi.fn(),
     validateMutation: vi.fn(async () => true),
@@ -41,6 +43,11 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
       readonly trustedUserEditors = host.trustedUserEditors;
       constructor(factory: unknown) {
         host.constructed(factory);
+      }
+      trustedSkillEditors(owner: GlyphConnectionIdentity, projectDirectory?: string) {
+        return projectDirectory === undefined
+          ? host.trustedSkillEditors(owner)
+          : host.trustedSkillEditors(owner, projectDirectory);
       }
       connect(...arguments_: unknown[]): unknown {
         return host.connect(...arguments_);
@@ -60,9 +67,10 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
     EditorRpcRouter: class {
       readonly validateMutation = editors.validateMutation;
       constructor(
-        readonly trustedUserEditors: (identity: unknown, sourcePath: string, aliases?: readonly string[]) => unknown,
+        peers: (owner: GlyphConnectionIdentity, projectDirectory?: string) => unknown,
+        readonly trustedUserEditors: (identity: unknown, sourcePath?: string, aliases?: readonly string[]) => unknown,
       ) {
-        editors.constructed(this);
+        editors.constructed(this, peers);
       }
       connect(...arguments_: unknown[]): unknown {
         return editors.connect(...arguments_);
@@ -102,6 +110,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   }));
   vi.stubEnv('GLYPH_DESKTOP_TEST_RUNTIME', undefined);
   vi.stubEnv('GLYPH_DESKTOP_TEST_PROVIDER_URL', undefined);
+  vi.stubEnv('GLYPH_USER_DIRECTORY', undefined);
   for (const [name, value] of Object.entries(options.environment ?? {})) vi.stubEnv(name, value);
   if (options.parentPort !== false)
     Object.defineProperty(process, 'parentPort', { value: parent, configurable: true, writable: true });
@@ -219,6 +228,12 @@ describe('utilityMain', () => {
     expect(deterministic.constructed).not.toHaveBeenCalled();
   });
 
+  it('passes the selected user source directory to the production runtime', async () => {
+    const { loaded, openai } = startUtilityHost({ environment: { GLYPH_USER_DIRECTORY: '/managed/glyph' } });
+    await loaded;
+    expect(openai.constructed.mock.calls[0]?.[3]).toBe('/managed/glyph');
+  });
+
   it('routes provider traffic through the scripted fixture when selected', async () => {
     const { loaded, openai, scripted } = startUtilityHost({
       environment: { GLYPH_DESKTOP_TEST_RUNTIME: 'scripted', GLYPH_DESKTOP_TEST_PROVIDER_URL: 'http://127.0.0.1:9' },
@@ -284,6 +299,16 @@ describe('utilityMain', () => {
       }),
     ).not.toThrow();
     expect(host.connect).not.toHaveBeenCalled();
+  });
+
+  it('wires user package checks to the live host trust registry', async () => {
+    const { loaded, editors, host } = startUtilityHost();
+    await loaded;
+    const peers = editors.constructed.mock.calls[0]![1];
+    expect(peers(identity)).toEqual([]);
+    expect(host.trustedSkillEditors).toHaveBeenCalledExactlyOnceWith(identity);
+    expect(peers(identity, '/workspace/.glyph/skills/example')).toEqual([]);
+    expect(host.trustedSkillEditors).toHaveBeenLastCalledWith(identity, '/workspace/.glyph/skills/example');
   });
 
   it('connects a window to the host and its editor, then announces readiness', async () => {

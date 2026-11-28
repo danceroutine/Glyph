@@ -3,11 +3,15 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { basename, delimiter, isAbsolute, relative, sep } from 'node:path';
 import type { ShellExecutionAuthorization } from './ShellExecutionAuthorization.ts';
 import type { ShellProcessLauncher } from './ShellProcessLauncher.ts';
+import type { ShellProgram } from './ShellProgram.ts';
+import { externalShellContentStores, type ShellContentStore } from './ShellContentStore.ts';
+import { pnpmContentStore } from './pnpmContentStore.ts';
 import { ShellSandboxProfile } from './ShellSandboxProfile.ts';
 import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 export interface NativeShellSandboxLauncherOptions {
   readonly binaryPath: string;
+  readonly contentStores?: (environment: NodeJS.ProcessEnv) => readonly ShellContentStore[];
   readonly workspaceRoots: readonly string[];
   /** Verify the attached directory immediately before handing the authorized command to its process. */
   readonly verifyWorkspaceRoot?: (physicalRoot: string) => void;
@@ -19,7 +23,11 @@ export interface NativeShellSandboxLauncherOptions {
 
 type SpawnProcess = (command: string, arguments_: readonly string[], options: SpawnOptions) => ChildProcess;
 
-/** Runs approved commands through the native fail-closed sandbox boundary. */
+/**
+ * Enforces the execution profile chosen by the shell authorizer. For a restricted command, snapshot the
+ * host's shell policy, check it again immediately before spawn, and let the native helper establish the
+ * OS sandbox for the child. A command explicitly approved for full access starts outside that sandbox.
+ */
 export class NativeShellSandboxLauncher implements ShellProcessLauncher {
   constructor(
     private readonly options: NativeShellSandboxLauncherOptions,
@@ -27,7 +35,12 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       spawn(command, arguments_, options_),
   ) {}
 
-  launch(command: string, workingDirectory: string, authorization: ShellExecutionAuthorization): ChildProcess {
+  launch(
+    command: string,
+    workingDirectory: string,
+    authorization: ShellExecutionAuthorization,
+    program?: ShellProgram,
+  ): ChildProcess {
     const environment = this.options.environment ?? process.env;
     const fullAccessShell =
       process.platform === 'win32' ? (environment.ComSpec ?? 'cmd.exe') : (environment.SHELL ?? '/bin/sh');
@@ -40,7 +53,7 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
     if (authorization.sandboxProfile === ShellSandboxProfile.FULL_ACCESS) {
       const arguments_ = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-lc', command];
       this.options.verifyWorkspaceRoot?.(workspaceRoot);
-      return this.spawnProcess(fullAccessShell, arguments_, {
+      return this.spawnProcess(program?.executable ?? fullAccessShell, program?.arguments ?? arguments_, {
         ...common,
         env: { ...environment, TERM: 'dumb', NO_COLOR: '1' },
       });
@@ -48,6 +61,7 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
     const shell = sandboxShell(environment);
     const accessPolicy = this.options.accessPolicy;
     const operation = accessPolicy.beginOperation();
+    const stores = (this.options.contentStores ?? pnpmContentStore)(environment);
     const arguments_ = [
       '--profile',
       authorization.sandboxProfile === ShellSandboxProfile.READ_ONLY ? 'read-only' : 'workspace-write',
@@ -59,11 +73,15 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       workspaceRoot,
       ...(this.options.protectedPaths ?? []).flatMap(path => ['--protected-path', path]),
       ...operation.privatePaths.flatMap(path => ['--private-path', path]),
+      ...(authorization.readOnlyPaths ?? []).flatMap(path => ['--read-only-path', path]),
+      ...externalShellContentStores(stores, this.options.workspaceRoots).flatMap(store => [
+        '--content-store',
+        JSON.stringify(store),
+      ]),
       '--workspace-policy',
       JSON.stringify(accessPolicy.toJSON()),
       '--',
-      shell.executable,
-      ...shell.arguments(command),
+      ...(program ? [program.executable, ...program.arguments] : [shell.executable, ...shell.arguments(command)]),
     ];
     operation.assertCurrent();
     this.options.verifyWorkspaceRoot?.(workspaceRoot);

@@ -19,6 +19,8 @@ struct Request {
     private_paths: Vec<PathBuf>,
     #[serde(default)]
     allow_unavailable: bool,
+    #[serde(default)]
+    directories: bool,
 }
 
 #[derive(Serialize)]
@@ -114,19 +116,29 @@ fn inspect_path(
     path: &Path,
     authority: &WorkspacePaths,
     directories: &mut HashMap<PathBuf, [u8; 32]>,
+    inspect_directory: bool,
 ) -> io::Result<SourceOrigin> {
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)?;
     let meta = file.metadata()?;
-    if !meta.is_file() || meta.nlink() != 1 {
+    let admitted = if inspect_directory {
+        meta.is_dir()
+    } else {
+        meta.is_file() && meta.nlink() == 1
+    };
+    if !admitted {
         return Err(denied());
     }
     let (dev, ino) = (meta.dev().to_string(), meta.ino().to_string());
     authority.assert_batch_path(path, Some((&dev, &ino)))?;
     let canonical = fs::canonicalize(path)?;
-    let directory = canonical.parent().ok_or_else(denied)?;
+    let directory = if inspect_directory {
+        canonical.as_path()
+    } else {
+        canonical.parent().ok_or_else(denied)?
+    };
     let origin = source_fingerprint(&file, meta.dev(), &canonical, directory, directories)?;
     Ok(SourceOrigin {
         identity: format!("{dev}:{ino}"),
@@ -140,7 +152,7 @@ pub fn inspect() -> io::Result<()> {
     let mut directories = HashMap::new();
     let mut sources = Vec::with_capacity(req.paths.len());
     for path in req.paths {
-        let origin = inspect_path(&path, &authority, &mut directories);
+        let origin = inspect_path(&path, &authority, &mut directories, req.directories);
         sources.push(if req.allow_unavailable {
             origin.ok()
         } else {
@@ -149,5 +161,19 @@ pub fn inspect() -> io::Result<()> {
     }
     authority.finish_batch()?;
     serde_json::to_writer(io::stdout().lock(), &sources)?;
+    Ok(())
+}
+
+/// Runs only in the short-lived inspector process. An unlinked APFS directory can retain nlink=2, but
+/// a current working directory has no physical pathname after unlink. A renamed directory still has one.
+pub fn assert_unlinked_directory() -> io::Result<()> {
+    // SAFETY: fchdir accepts a borrowed integer descriptor and returns a status without retaining memory.
+    if unsafe { libc::fchdir(libc::STDIN_FILENO) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if !std::env::current_dir().is_err_and(|error| error.kind() == io::ErrorKind::NotFound) {
+        return Err(denied());
+    }
+    println!("verified");
     Ok(())
 }

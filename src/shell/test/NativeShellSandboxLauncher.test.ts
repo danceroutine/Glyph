@@ -5,10 +5,44 @@ import { delimiter } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
 import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
+import { ShellProgram } from '#src/shell/ShellProgram.js';
 
 vi.mock('node:fs', { spy: true });
 
 describe(NativeShellSandboxLauncher, () => {
+  it.each([ShellSandboxProfile.READ_ONLY, ShellSandboxProfile.FULL_ACCESS])(
+    'launches the exact interpreter arguments without the configured shell in %s',
+    sandboxProfile => {
+      const spawn = vi.fn<(command: string, args: readonly string[], options: SpawnOptions) => ChildProcess>(
+        () => ({}) as ChildProcess,
+      );
+      const launcher = new NativeShellSandboxLauncher(
+        {
+          accessPolicy: new WorkspaceAccessPolicy(),
+          binaryPath: '/helper',
+          workspaceRoots: ['/project'],
+          stateDirectory: '/state',
+          environment: { SHELL: '/usr/bin/fish' },
+        },
+        spawn,
+      );
+      const program = new ShellProgram(
+        '/usr/bin/node',
+        ['/pinned/task.js', 'two\\\\slashes', 'trailing\\', '', "quote'", 'line\nbreak'],
+        'Pinned script',
+      );
+      launcher.launch(program.display, '/project', { sandboxProfile }, program);
+      const [executable, args] = spawn.mock.calls[0]!;
+      if (sandboxProfile === ShellSandboxProfile.FULL_ACCESS) {
+        expect(executable).toBe(program.executable);
+        expect(args).toEqual(program.arguments);
+      } else {
+        expect(executable).toBe('/helper');
+        expect(args.slice(args.indexOf('--') + 1)).toEqual([program.executable, ...program.arguments]);
+      }
+      expect(args).not.toContain('-c');
+    },
+  );
   describe(NativeShellSandboxLauncher.prototype.launch, () => {
     it.each([ShellSandboxProfile.READ_ONLY, ShellSandboxProfile.FULL_ACCESS])(
       'rechecks a selected root at %s launch',
@@ -34,58 +68,100 @@ describe(NativeShellSandboxLauncher, () => {
         expect(spawn).not.toHaveBeenCalled();
       },
     );
-    it('routes restricted commands through the helper with a sanitized environment', () => {
-      const spawn = vi.fn<(command: string, arguments_: readonly string[], options: SpawnOptions) => ChildProcess>(
-        () => ({}) as ChildProcess,
-      );
+    it.each([true, false])(
+      'routes restricted commands through the helper with a sanitized environment, dynamic private paths: %s',
+      dynamic => {
+        const spawn = vi.fn<(command: string, arguments_: readonly string[], options: SpawnOptions) => ChildProcess>(
+          () => ({}) as ChildProcess,
+        );
+        const launcher = new NativeShellSandboxLauncher(
+          {
+            accessPolicy: new WorkspaceAccessPolicy(
+              {},
+              dynamic
+                ? () => ['/project/mandatory', '/project/.skill-staging']
+                : ['/project/mandatory', '/project/.skill-staging'],
+            ),
+            binaryPath: '/bin/glyph-shell-sandbox',
+            workspaceRoots: ['/project', '/second'],
+            stateDirectory: '/state',
+            protectedPaths: ['/project/worker'],
+            environment: {
+              HOME: '/home/person',
+              OPENAI_API_KEY: 'not-for-the-child',
+              PATH: '/project/bin:/usr/bin',
+              SHELL: '/project/malicious-shell',
+            },
+          },
+          spawn,
+        );
+
+        launcher.launch('rg needle', '/project/src', {
+          sandboxProfile: ShellSandboxProfile.READ_ONLY,
+          readOnlyPaths: ['/host/pinned'],
+        });
+
+        expect(spawn).toHaveBeenCalledOnce();
+        const [executable, arguments_, options] = spawn.mock.calls[0]!;
+        expect(executable).toBe('/bin/glyph-shell-sandbox');
+        expect(arguments_).toEqual(
+          expect.arrayContaining([
+            '--profile',
+            'read-only',
+            '--working-directory',
+            '/project/src',
+            '--state-directory',
+            '/state',
+            '--workspace-root',
+            '/project',
+            '--protected-path',
+            '/project/worker',
+            '--private-path',
+            '/project/.skill-staging',
+            '/project/mandatory',
+            '--read-only-path',
+            '/host/pinned',
+          ]),
+        );
+        expect(arguments_).not.toContain('/second');
+        expect(arguments_.slice(-3)).toEqual(['/bin/sh', '-c', 'rg needle']);
+        const policyIndex = arguments_.indexOf('--workspace-policy');
+        expect(JSON.parse(arguments_[policyIndex + 1]!)).toMatchObject({
+          sensitiveFileNames: expect.arrayContaining(['.git-credentials']),
+        });
+        expect(options.cwd).toBe('/project/src');
+        expect(options.env).not.toHaveProperty('OPENAI_API_KEY');
+        expect(options.env).toMatchObject({ HOME: '/home/person', SHELL: '/bin/sh' });
+        expect(options.env?.PATH).not.toContain('/project');
+      },
+    );
+
+    it('forwards a trusted external content store only to the native helper', () => {
+      vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+      vi.mocked(realpathSync).mockImplementation(path => path.toString());
+      onTestFinished(() => {
+        vi.restoreAllMocks();
+      });
+      const spawn = vi.fn(() => ({}) as ChildProcess);
       const launcher = new NativeShellSandboxLauncher(
         {
-          accessPolicy: new WorkspaceAccessPolicy({}, ['/project/personal']),
-          binaryPath: '/bin/glyph-shell-sandbox',
-          workspaceRoots: ['/project', '/second'],
+          accessPolicy: new WorkspaceAccessPolicy(),
+          binaryPath: '/helper',
+          workspaceRoots: ['/project'],
           stateDirectory: '/state',
-          protectedPaths: ['/project/worker'],
-          environment: {
-            HOME: '/home/person',
-            OPENAI_API_KEY: 'not-for-the-child',
-            PATH: '/project/bin:/usr/bin',
-            SHELL: '/project/malicious-shell',
-          },
+          environment: { PNPM_HOME: '/tools' },
         },
         spawn,
       );
-
-      launcher.launch('rg needle', '/project/src', { sandboxProfile: ShellSandboxProfile.READ_ONLY });
-
-      expect(spawn).toHaveBeenCalledOnce();
-      const [executable, arguments_, options] = spawn.mock.calls[0]!;
-      expect(executable).toBe('/bin/glyph-shell-sandbox');
-      expect(arguments_).toEqual(
+      launcher.launch('true', '/project', { sandboxProfile: ShellSandboxProfile.READ_ONLY });
+      expect(spawn).toHaveBeenCalledWith(
+        '/helper',
         expect.arrayContaining([
-          '--profile',
-          'read-only',
-          '--working-directory',
-          '/project/src',
-          '--state-directory',
-          '/state',
-          '--workspace-root',
-          '/project',
-          '--protected-path',
-          '/project/worker',
-          '--private-path',
-          '/project/personal',
+          '--content-store',
+          JSON.stringify({ root: '/tools/store/v11/files', layout: 'sha512-prefix-2', executableSuffix: '-exec' }),
         ]),
+        expect.anything(),
       );
-      expect(arguments_).not.toContain('/second');
-      expect(arguments_.slice(-3)).toEqual(['/bin/sh', '-c', 'rg needle']);
-      const policyIndex = arguments_.indexOf('--workspace-policy');
-      expect(JSON.parse(arguments_[policyIndex + 1]!)).toMatchObject({
-        sensitiveFileNames: expect.arrayContaining(['.git-credentials']),
-      });
-      expect(options.cwd).toBe('/project/src');
-      expect(options.env).not.toHaveProperty('OPENAI_API_KEY');
-      expect(options.env).toMatchObject({ HOME: '/home/person', SHELL: '/bin/sh' });
-      expect(options.env?.PATH).not.toContain('/project');
     });
 
     it('uses the configured trusted shell without loading personal startup files', () => {

@@ -188,6 +188,89 @@ function createController(services: ControllerServices) {
 }
 
 describe(GlyphContextController, () => {
+  it.each([
+    '/workspace/src/AGENTS.md',
+    '/workspace/.glyph/rules/new.mdc',
+    '/workspace/.cursor/rules/new.mdc',
+    '/workspace/reference.md',
+    '/custom/references/note.md',
+  ])('refreshes instruction discovery after a relevant file or dirty-model change at %s', async path => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    services.instructionSources.push(
+      {
+        id: 'project',
+        status: 'active',
+        path: '.glyph/rules/project.mdc',
+        uri: 'file:///workspace/.glyph/rules/project.mdc',
+        references: ['reference.md'],
+      },
+      {
+        id: 'user',
+        kind: 'glyph_user_rule',
+        status: 'active',
+        path: '~/.glyph/rules/user.mdc',
+        uri: 'file:///custom/rules/user.mdc',
+        references: ['references/note.md'],
+      },
+    );
+    const edits = new Emitter<void>();
+    const model = { uri: URI.file(path), onDidChangeContent: edits.event };
+    services.models.push(model);
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    try {
+      controller.setSkillSources(() => []);
+      controller.setInstructionRefresh(refresh, () => ['file:///custom/rules']);
+      controller.notifyInstructionsChanged();
+      services.fileChanges.fire([{ resource: model.uri, type: 1 }]);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).toHaveBeenCalledOnce();
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+  it('refreshes saved and unsaved skill metadata, reconnects provider listeners, and suppresses refresh when trust is lost', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const edits = new Emitter<void>();
+    const model = { uri: URI.file('/workspace/.glyph/skills/example/SKILL.md'), onDidChangeContent: edits.event };
+    services.models.push(model, { uri: URI.file('/workspace/source.ts') });
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    try {
+      controller.notifyInstructionsChanged();
+      controller.setSkillSources(() => [], refresh);
+      controller.notifyInstructionsChanged();
+      services.fileChanges.fire([{ resource: URI.file('/workspace/source.ts'), type: 1 }]);
+      services.registrations.fire({ scheme: 'git' });
+      services.files.getProvider.mockReturnValueOnce(undefined as never);
+      services.registrations.fire({ scheme: 'file' });
+      services.registrations.fire({ scheme: 'file' });
+      services.modelAdded.fire({
+        uri: URI.file('/workspace/.cursor/skills/other/SKILL.md'),
+        onDidChangeContent: edits.event,
+      });
+      services.trust.isWorkspaceTrusted.mockReturnValue(false);
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).not.toHaveBeenCalled();
+      services.trust.isWorkspaceTrusted.mockReturnValue(true);
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).toHaveBeenCalledOnce();
+      services.trust.isWorkspaceTrusted.mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(refresh).toHaveBeenCalledOnce();
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
   it.each([GlyphContextAttachmentKind.SKILL, GlyphContextAttachmentKind.RULE])(
     'treats %s badges as live references during refresh, open, and rebind',
     async kind => {
@@ -259,8 +342,14 @@ describe(GlyphContextController, () => {
         controller.setSkillSources(() => sources, undefined, resolveOld);
       }
       await controller.openAttachment(badge);
-      expect(services.editors.openEditor.mock.calls.at(-1)?.[0].resource.toString()).toBe(source.uri);
+      expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(source.uri);
       expect(services.editors.openEditor).toHaveBeenCalledWith(expect.objectContaining({ options: { pinned: true } }));
+      if (kind === GlyphContextAttachmentKind.SKILL) {
+        const { revision: _revision, ...unversioned } = source;
+        controller.setSkillSources(() => [unversioned]);
+        expect(await controller.refreshAttachment(badge)).toMatchObject({ contentRevision: source.id });
+        controller.setSkillSources(() => sources);
+      }
       source.enabled = false;
       expect(await controller.checkAttachment(badge)).toContain('unavailable');
       await expect(controller.refreshAttachment(badge)).rejects.toThrow('unavailable');
@@ -485,7 +574,7 @@ describe(GlyphContextController, () => {
       isDirectory: !resource.path.endsWith('.mdc'),
     }));
     await controller.openAttachment(badge);
-    expect(services.editors.openEditor.mock.calls.at(-1)?.[0].resource.toString()).toBe(
+    expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(
       'file:///workspace/.glyph/rules/example.mdc',
     );
     expect(services.editors.openEditor).toHaveBeenCalledWith(expect.objectContaining({ options: { pinned: true } }));
@@ -1639,6 +1728,7 @@ describe(GlyphContextController, () => {
     expect(await controller.checkAttachment(attachment)).toContain('unavailable');
     await expect(controller.refreshAttachment(attachment)).rejects.toThrow('unavailable');
     services.instructionSources.push(rule);
+    expect(await controller.rebindAttachment(attachment)).toEqual(attachment);
     const { ruleId: _ruleId, ...legacy } = attachment;
     expect(await controller.checkAttachment(legacy)).toContain('instructions changed');
     expect((await controller.refreshAttachment(legacy)).contentRevision).toBe('new');
@@ -1675,10 +1765,9 @@ describe(GlyphContextController, () => {
     await expect(controller.openInstruction('gone')).rejects.toThrow('unavailable');
     await controller.openInstruction('guidance');
     expect(history.mock.calls).toEqual([['old'], ['gone']]);
-    expect(services.editors.openEditor).toHaveBeenCalledWith({
-      resource: expect.objectContaining({ path: '/workspace/AGENTS.md' }),
-      options: { pinned: true },
-    });
+    expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(
+      'file:///workspace/AGENTS.md',
+    );
     services.files.realpath.mockResolvedValue(URI.file('/actual/agents.md'));
     services.instructionSources[0] = { ...source, caseSensitive: false };
     await controller.openInstruction('guidance');
@@ -1868,4 +1957,28 @@ describe(GlyphContextController, () => {
       expect(services.editors.openEditor).not.toHaveBeenCalled();
     });
   });
+});
+
+it('continues observing after both scheduled catalog refresh attempts reject', async () => {
+  vi.useFakeTimers();
+  const services = controllerServices();
+  const controller = createController(services);
+  const refresh = vi.fn(async () => {
+    throw new Error('Catalog temporarily unavailable');
+  });
+  try {
+    controller.setInstructionRefresh(refresh);
+    services.fileChanges.fire([{ resource: URI.file('/workspace/.glyph/rules/example.mdc'), type: 1 }]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    refresh.mockImplementation(async () => {});
+    services.fileChanges.fire([{ resource: URI.file('/workspace/.glyph/rules/example.mdc'), type: 1 }]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(refresh).toHaveBeenCalledTimes(3);
+  } finally {
+    controller.dispose();
+    vi.useRealTimers();
+  }
 });

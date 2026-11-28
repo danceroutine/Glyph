@@ -44,7 +44,7 @@ it('preserves dirty text while retaining the verified physical file identity and
       token: { workspaceGeneration: 'g', resource: 'r', incarnation: 'i', version: 1 },
     },
   });
-  expect(await workspace.read('AGENTS.md', { maxBytes: 64 })).toEqual({
+  expect(await workspace.read('./AGENTS.md', { maxBytes: 64 })).toEqual({
     ...file,
     bytesRead: 8,
     text: 'Unsaved',
@@ -52,6 +52,7 @@ it('preserves dirty text while retaining the verified physical file identity and
     revision: 'dirty-revision',
     byteLength: 10,
   });
+  expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: 'AGENTS.md', maxBytes: 64 }));
   await writeFile(join(disk.root, 'other.md'), 'Same bytes');
   request.mockResolvedValue({
     ...(await request()),

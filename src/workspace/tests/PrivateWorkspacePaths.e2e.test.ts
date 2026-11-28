@@ -1,5 +1,5 @@
 import { fixtureWorkspace, fixtureIndex } from '#src/workspace/tests/fixtures/workspaceAccess.js';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
@@ -10,6 +10,7 @@ it('keeps host state and transaction files private across containing, overlappin
   const project = join(base, 'work');
   const profile = join(project, 'Profile');
   const stagedRoot = join(profile, '.Skill-Staging', 'transaction');
+  const run = join(project, 'runtime', '.glyph-skill-run');
   const privateFile = join(profile, 'skill-state.json');
   const publicPath = 'src/skill-state.json';
   const privateName = 'journal.json';
@@ -23,6 +24,7 @@ it('keeps host state and transaction files private across containing, overlappin
   for (const [path, content] of [
     [privateFile, privateContent],
     [join(project, publicPath), 'project data'],
+    [join(run, 'script.sh'), privateContent],
     [join(stagedRoot, privateName), privateContent],
     [join(project, 'temporary/.skill-staging'), 'ordinary file with reserved name'],
   ] as const) {
@@ -33,11 +35,19 @@ it('keeps host state and transaction files private across containing, overlappin
   for (const [root, blocked, expected] of [
     [
       project,
-      ['Profile/skill-state.json', 'Profile/.Skill-Staging/transaction/journal.json', 'temporary/.skill-staging'],
+      [
+        'Profile/skill-state.json',
+        'Profile/.Skill-Staging/transaction/journal.json',
+        'temporary/.skill-staging',
+        'runtime/.glyph-skill-run/script.sh',
+        'runtime/.glyph-ſkill-run/script.sh',
+        'runtime/.glyph-ſkill-run/future.md',
+      ],
       [publicPath],
     ],
     [profile, ['SKILL-STATE.JSON', '.Skill-Staging/transaction/journal.json'], []],
     [stagedRoot, [privateName, 'future.md'], []],
+    [run, ['script.sh', 'future.md'], []],
   ] as const) {
     const store = fixtureWorkspace(root, { caseSensitive: false, accessPolicy: policy });
     const index = fixtureIndex({ root, binaryPath, caseSensitive: false, accessPolicy: policy });
@@ -66,5 +76,44 @@ it('keeps host state and transaction files private across containing, overlappin
     } finally {
       await index.dispose();
     }
+  }
+});
+
+it('admits a stored Unicode lookalike to text reads and broad search only when the directory is distinct', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-stored-name-')));
+  onTestFinished(() => rm(root, { force: true, recursive: true }));
+  const spelling = '.ſkill-ﬆaging';
+  const relative = spelling + '/marker.txt';
+  await mkdir(join(root, spelling));
+  await writeFile(join(root, relative), 'synthetic marker');
+  const actual = await stat(join(root, spelling), { bigint: true });
+  const ascii = await stat(join(root, '.skill-staging'), { bigint: true }).catch(() => undefined);
+  const same = actual.ino === ascii?.ino && actual.dev === ascii?.dev;
+  const store = fixtureWorkspace(root);
+  const binaryPath = resolve(
+    'target',
+    'release',
+    process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
+  );
+  const index = fixtureIndex({ root, binaryPath, caseSensitive: store.caseSensitive });
+  try {
+    const expected = same ? [] : [relative];
+    await expect(store.list(10, spelling + '/*')).resolves.toMatchObject({ files: expected });
+    await expect(
+      index.searchContents('synthetic marker', {
+        outputMode: 'files_with_matches',
+        patternKind: 'literal',
+        caseSensitive: true,
+        linesBefore: 0,
+        linesAfter: 0,
+        multiline: false,
+        offset: 0,
+        limit: 10,
+      }),
+    ).resolves.toMatchObject({ files: expected });
+    if (same) await expect(store.read(relative)).rejects.toThrow('excluded');
+    else await expect(store.read(relative)).resolves.toMatchObject({ text: 'synthetic marker' });
+  } finally {
+    await index.dispose();
   }
 });

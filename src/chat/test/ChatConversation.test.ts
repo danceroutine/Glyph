@@ -195,3 +195,30 @@ describe(ChatConversation, () => {
     });
   });
 });
+
+it('reports rejected steering as a diagnostic while continuing the original response', async () => {
+  const provider = fakeProvider(async (_request, options) => {
+    options.onSteeringRejected?.({ text: 'Later', attachments: [] }, new Error('Unavailable selection'));
+    options.onText('Original response');
+    return { responseId: 'r', usage: null };
+  });
+  const conversation = new ChatConversation(
+    provider,
+    fakeLogger(),
+    value => value.replace('Unavailable', 'Redacted'),
+    vi.fn(),
+    false,
+  );
+  const response = collector();
+  await expect(conversation.send('Start', response, new AbortController().signal)).resolves.toMatchObject({
+    responseId: 'r',
+  });
+  expect(response.parts).toEqual([
+    {
+      type: ChatResponsePartType.DIAGNOSTIC,
+      severity: DiagnosticSeverity.ERROR,
+      message: 'Steering was not applied: Redacted selection',
+    },
+    { type: ChatResponsePartType.TEXT, value: 'Original response' },
+  ]);
+});

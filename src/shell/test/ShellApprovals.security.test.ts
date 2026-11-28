@@ -1,3 +1,4 @@
+import { ShellApprovalPolicy } from '#src/shell/ShellApprovalPolicy.js';
 import { describe, expect, it, vi } from 'vitest';
 import { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.js';
 import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
@@ -109,4 +110,33 @@ describe('security: shell approval integration', () => {
     if (phase === 'cancel') controller.abort(new Error('stopped'));
     await rejected;
   });
+});
+
+it.each([
+  ['linux', 'in-place edits to existing workspace files'],
+  ['darwin', 'Workspace directories retain their identity'],
+])('describes the workspace-write choices on %s before authorizing a command', (platform, description) => {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { ...descriptor, value: platform });
+  try {
+    const request = new ShellApprovalPolicy().createRequest({
+      workspace: scope,
+      operation: { command: 'make', workingDirectory: '/project', background: false, existingTerminal: false },
+    });
+    for (const id of [
+      ShellPermissionDecision.ALLOW_ONCE,
+      ShellPermissionDecision.ALWAYS_ALLOW,
+      ShellPermissionDecision.ALLOW_SAFE,
+    ]) {
+      expect(request.choices).toContainEqual(
+        expect.objectContaining({
+          id,
+          description: expect.stringContaining(description),
+          effect: expect.objectContaining({ disposition: 'allow', sandbox: ShellSandboxProfile.WORKSPACE_WRITE }),
+        }),
+      );
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', descriptor);
+  }
 });

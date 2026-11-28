@@ -1,3 +1,4 @@
+import type { ProjectMutationPolicy } from '#src/editing/proposals/ProjectMutationPolicy.js';
 import { AgentMode } from '#src/chat/AgentMode.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { Tool } from '#src/tools/Tool.js';
@@ -15,6 +16,10 @@ import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
 import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
+import {
+  proposalActivityPresentation,
+  proposalInstructionContext,
+} from '#src/context/turns/proposalInstructionContext.js';
 
 export class ProjectToolRuntime implements ToolSource {
   private readonly logger: Logger;
@@ -25,6 +30,7 @@ export class ProjectToolRuntime implements ToolSource {
     private readonly reviews: ProposalReviewManager,
     logger: Logger = new NullLogger(),
     private readonly turnContexts?: Pick<TurnContextCoordinator, 'disclosePaths'>,
+    private readonly mutationPolicy?: ProjectMutationPolicy,
   ) {
     this.logger = logger.forNamespace('project.tool');
   }
@@ -37,10 +43,7 @@ export class ProjectToolRuntime implements ToolSource {
         name: ProjectToolName.PROPOSE_PATCH,
         requiresExclusiveRound: true,
         allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
-        activityPresentation: {
-          afterCompletion: true,
-          show: showProposalActivity,
-        },
+        activityPresentation: proposalActivityPresentation,
         description: `Apply a strict patch immediately, retaining changes for Keep/Revert review. Prefer this for ordinary source edits. The grammar is:
 *** Begin Patch
 *** Add File: path
@@ -70,10 +73,7 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
         name: ProjectToolName.PROPOSE_EDITS,
         requiresExclusiveRound: true,
         allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
-        activityPresentation: {
-          afterCompletion: true,
-          show: showProposalActivity,
-        },
+        activityPresentation: proposalActivityPresentation,
         description:
           'Apply exact UTF-16 range edits immediately with Keep/Revert review. Use for whitespace, line-ending, or Unicode-sensitive changes.',
         inputKind: ToolInputKind.JSON,
@@ -98,12 +98,13 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
         case ProjectToolName.SEARCH_CONTENTS:
           return await this.access.execute(name, input, signal, context);
         case ProjectToolName.PROPOSE_PATCH:
-          proposal = await this.proposals.proposePatch(input, signal);
+          proposal = await this.proposals.proposePatch(input, signal, this.mutationPolicy);
           break;
         case ProjectToolName.PROPOSE_EDITS:
           proposal = await this.proposals.proposeStructured(
             EditProposalService.structuredSchema.parse(JSON.parse(input)),
             signal,
+            this.mutationPolicy,
           );
           break;
         default:
@@ -116,12 +117,7 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
             signal,
           )
         : undefined;
-      if (instructionContext)
-        return JSON.stringify({
-          status: 'INSTRUCTION_CONTEXT_REQUIRED',
-          instructionContext,
-          message: 'Scoped repository instructions apply to this change. Regenerate the proposal with them and retry.',
-        });
+      if (instructionContext) return proposalInstructionContext(instructionContext);
       // Follow-up: decide whether ProposalService should own this mode check.
       await this.proposals.assertModeAllows(proposal, AgentMode.resolve(context?.mode ?? AgentMode.default.id));
       const stagedProposal = context?.chat
@@ -176,9 +172,4 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
 function toJsonSchema(schema: z.ZodType): Record<string, unknown> {
   const { $schema: _, ...parameters } = z.toJSONSchema(schema, { target: 'draft-7' });
   return parameters;
-}
-
-function showProposalActivity(output: string): boolean {
-  const reply: unknown = JSON.parse(output);
-  return z.object({ status: z.string().optional() }).parse(reply).status !== 'INSTRUCTION_CONTEXT_REQUIRED';
 }

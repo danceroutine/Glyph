@@ -10,27 +10,24 @@ import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import { createHash } from 'node:crypto';
 import { getGlyphWorkspaceRootId } from '#src/desktop/protocol/connection/getGlyphWorkspaceRootId.js';
 import { Deferred } from '#src/shared/Deferred.js';
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
+import { SkillStateStore } from '#src/skills/SkillStateStore.js';
 import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { pathToFileURL } from 'node:url';
+import { inventoryPackage } from '#src/skills/skillPackageInventory.js';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
+import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
+import { testPackageMutations } from '#src/skills/tests/fixtures/testPackageMutations.js';
+import type { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { skillPackageId } from '#src/skills/skillPackageId.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
-import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
-import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
-import {
-  mkdir,
-  mkdtemp,
-  rm,
-  symlink,
-  writeFile,
-  readFile,
-  realpath,
-  rename as renameDirectory,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { OpenAIDesktopRuntimeFactory, userRuleUri } from '#src/desktop/host/OpenAIDesktopRuntimeFactory.js';
 import { EditorRpcRouter } from '#src/desktop/workspace/EditorRpcRouter.js';
@@ -78,9 +75,13 @@ import type { TodoToolRuntime } from '#src/todos/TodoToolRuntime.js';
 import type { GoalToolRuntime } from '#src/goals/GoalToolRuntime.js';
 import { Goal } from '#src/goals/Goal.js';
 import { GoalStatus } from '#src/goals/GoalStatus.js';
+import { GlyphWorkbenchCommandType as Command } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
+import { aSkillDraft } from '#src/skills/tests/fixtures/aSkillLifecycle.js';
+import { WebApprovalService } from '#src/web/WebApprovalService.js';
 
 const captured = vi.hoisted(() => ({
   editorClients: [] as EditorWorkspaceClient[],
+  sandboxOptions: [] as ConstructorParameters<typeof NativeShellSandboxLauncher>[0][],
   indexOptions: [] as RustWorkspacePathIndexConfiguration[],
   indexes: [] as RustWorkspacePathIndex[],
   modeSwitches: [] as ConstructorParameters<typeof ModeSwitchToolRuntime>[0][],
@@ -93,7 +94,35 @@ const captured = vi.hoisted(() => ({
   providerFactories: [] as ConstructorParameters<typeof OpenAIProviderFactory>[],
 }));
 
-beforeEach(() => {
+const openWorkspaceMutations = NativeWorkspaceMutations.open;
+let isolatedUserDirectory: string;
+beforeEach(async () => {
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'sourceOrigins').mockImplementation(
+    testFilesystemMetadata.sourceOrigins,
+  );
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'availableSourceOrigins').mockImplementation(
+    testFilesystemMetadata.availableSourceOrigins,
+  );
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'assertHostPaths').mockResolvedValue(undefined);
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'assertWorkspacePath').mockResolvedValue(undefined);
+  isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
+  onTestFinished(() => rm(isolatedUserDirectory, { recursive: true, force: true }));
+  vi.spyOn(NativeWorkspaceMutations, 'open').mockImplementation(async (_executable, root) => {
+    // Composition uses the deterministic filesystem port below. Bind its native
+    // client to this runner rather than requiring a packaged app installation.
+    const instance = await openWorkspaceMutations(process.execPath, root);
+    const mutations = testPackageMutations(root);
+    vi.spyOn(instance, 'assertReplaceableMetadata').mockImplementation(mutations.assertReplaceableMetadata);
+    vi.spyOn(instance, 'ensureDirectory').mockImplementation(mutations.ensureDirectory);
+    vi.spyOn(instance, 'renameExclusive').mockImplementation(mutations.renameExclusive);
+    vi.spyOn(instance, 'removeTree').mockImplementation(mutations.removeTree);
+    vi.spyOn(instance, 'stageParent').mockImplementation(mutations.stageParent);
+    vi.spyOn(instance, 'rollbackParent').mockImplementation(mutations.rollbackParent);
+    vi.spyOn(instance, 'createStage').mockImplementation(mutations.createStage);
+    vi.spyOn(instance, 'stagePackage').mockImplementation(mutations.stagePackage);
+    return instance;
+  });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'listSkillPackages').mockImplementation(async function (
     this: RustWorkspacePathIndex,
     marker,
@@ -115,10 +144,24 @@ beforeEach(() => {
     return { packages: [...packages.values()], truncated };
   });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({ files: [], truncated: false });
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'listDirectories').mockResolvedValue([]);
 });
 
 it('resolves user rule URIs below the dedicated user rule root', () => {
   expect(userRuleUri('/home/user/.glyph', 'rules/test.mdc')).toBe('file:///home/user/.glyph/rules/test.mdc');
+});
+
+vi.mock('#src/shell/NativeShellSandboxLauncher.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('#src/shell/NativeShellSandboxLauncher.js')>();
+  return {
+    ...actual,
+    NativeShellSandboxLauncher: class extends actual.NativeShellSandboxLauncher {
+      constructor(...args: ConstructorParameters<typeof actual.NativeShellSandboxLauncher>) {
+        super(...args);
+        captured.sandboxOptions.push(args[0]);
+      }
+    },
+  };
 });
 
 // The source checkout keeps the same native binaries in Cargo's release directory.
@@ -281,25 +324,6 @@ vi.mock('#src/providers/openai/OpenAIProviderFactory.js', async importOriginal =
   };
 });
 
-const readNativeOrigins = NativeFilesystemMetadata.prototype.sourceOrigins;
-const readAvailableNativeOrigins = NativeFilesystemMetadata.prototype.availableSourceOrigins;
-let isolatedUserDirectory: string;
-beforeEach(async () => {
-  const originReader = new NativeFilesystemMetadata(join(repositoryRoot, 'target/release/glyph-context-index'));
-  vi.spyOn(NativeFilesystemMetadata.prototype, 'sourceOrigins').mockImplementation(
-    readNativeOrigins.bind(originReader),
-  );
-  vi.spyOn(NativeFilesystemMetadata.prototype, 'availableSourceOrigins').mockImplementation(
-    readAvailableNativeOrigins.bind(originReader),
-  );
-  vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
-  vi.spyOn(NativeFilesystemMetadata.prototype, 'assertWorkspacePath').mockResolvedValue(undefined);
-  isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
-  onTestFinished(async () => {
-    await rm(isolatedUserDirectory, { recursive: true, force: true });
-  });
-});
-
 describe(OpenAIDesktopRuntimeFactory, () => {
   it.each(['backed', 'new', 'saved during read'])(
     'authorizes a %s editor read at its first provider handoff',
@@ -336,9 +360,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         await expect(authorize(signal)).rejects.toThrow('editor source is no longer available');
       } else {
         await writeFile(join(folder, 'saving'), 'Another edit');
-        await renameDirectory(join(folder, 'saving'), path);
+        await rename(join(folder, 'saving'), path);
         (await authorize(signal))();
-        await renameDirectory(folder, folder + '-old');
+        await rename(folder, folder + '-old');
         await mkdir(folder);
         await writeFile(path, 'Different source');
         await expect(authorize(signal)).rejects.toThrow('source location changed');
@@ -472,9 +496,10 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           emit: () => {},
         };
         runtime = await factory.create(input);
+        expect(captured.sandboxOptions.at(-1)!.accessPolicy.privatePaths).toContain(join(directory, 'trace.log'));
         expect((await runtime.snapshot()).chats.map(chat => chat.id)).toEqual(['saved-chat']);
         expect((await runtime.snapshot()).proposals.map(value => value.id)).toEqual([proposal.id]);
-        if (!trusted) await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+        if (!trusted) await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
         expect(requests).toHaveBeenCalledTimes(trusted ? 1 : 0);
         expect(indexing).toHaveBeenCalledTimes(trusted ? 1 : 0);
         expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 16 : 0);
@@ -657,8 +682,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     const app = join(dirname(original), 'app');
     const indexedFolder = app === original ? 'src' : 'SRC';
     if (app !== original) {
-      await renameDirectory(join(original, 'src'), join(original, indexedFolder));
-      await renameDirectory(original, app);
+      await rename(join(original, 'src'), join(original, indexedFolder));
+      await rename(original, app);
     }
     test.initialize.mockRestore();
     vi.spyOn(RustWorkspacePathIndex.prototype, 'initialize').mockResolvedValue({
@@ -694,7 +719,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     const runtime = await test.create([app, other], event => {
       events.push(event);
     });
-    await runtime.handle({ type: GlyphWorkbenchCommandType.RESTORE_CHECKPOINT, chatId: 'saved-chat', turnId: 'old' });
+    await runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: 'saved-chat', turnId: 'old' });
     const restored = events.find(event => event.type === GlyphHostEventType.CHAT_RESTORED)!;
     const composer = new GlyphComposerState();
     composer.restoreDraft(
@@ -1191,6 +1216,268 @@ describe(OpenAIDesktopRuntimeFactory, () => {
   });
 
   describe(OpenAIDesktopRuntimeFactory.prototype.create, () => {
+    it('discloses nested and file-pattern guidance before approving removal from the owning project root', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const one = await fixture.folder('one', { 'AGENTS.md': 'First root guidance.' });
+      const two = await fixture.folder('two', { 'AGENTS.md': 'Second root guidance.' });
+      await mkdir(join(one, 'nested'));
+      await writeFile(join(one, 'nested/AGENTS.md'), 'Other root guidance.');
+      const packagePath = join(two, 'nested/.glyph/skills/example');
+      await mkdir(join(packagePath, 'assets'), { recursive: true });
+      await mkdir(join(two, '.glyph/rules'), { recursive: true });
+      await writeFile(join(two, 'nested/AGENTS.md'), 'Nested package guidance.');
+      await writeFile(
+        join(two, '.glyph/rules/assets.mdc'),
+        '---\nactivation: file_pattern\nglobs: ["**/*.bin"]\n---\nBinary asset guidance.',
+      );
+      await writeFile(join(packagePath, 'SKILL.md'), '---\nname: example\ndescription: fixture\n---\nBody');
+      await writeFile(join(packagePath, 'assets/image.bin'), Buffer.from([0, 255]));
+      const userPackage = join(fixture.userDirectory, 'skills/personal');
+      await mkdir(join(userPackage, 'assets'), { recursive: true });
+      await writeFile(join(userPackage, 'SKILL.md'), '---\nname: personal\ndescription: fixture\n---\nBody');
+      await writeFile(join(userPackage, 'assets/image.bin'), Buffer.from([0, 128]));
+      useFilesystemIndex();
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_who, request) => {
+        if (request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
+          return { operationId: request.operationId, ok: true };
+        if (
+          request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES ||
+          request.type === GlyphEditorRequestType.CHECK_USER_WORKING_COPIES
+        )
+          return { operationId: request.operationId, ok: true, packageClean: true, workingCopiesClean: true };
+        if (request.type === GlyphEditorRequestType.READ_SNAPSHOT) {
+          expect(request.path).toBe('two/nested/.glyph/skills/example/SKILL.md');
+          const file = await fixtureWorkspace(two).read(request.path.slice('two/'.length));
+          return editorResponse(request, request.path, file.text);
+        }
+        throw new Error('Unexpected editor request for package removal.');
+      });
+      const events: GlyphHostEvent[] = [];
+      const runtime = await fixture.create([one, two], event => {
+        events.push(event);
+      });
+      const state = await runtime.snapshot();
+      const installed = state.skills!.find(skill => skill.name === 'example')!;
+      const user = state.skillTargets!.find(target => target.scope === 'user')!;
+      const [, registry, , turns] = captured.providerFactories[0]!;
+      const turnId = 'project-removal';
+      const turn = await turns!.beginTurn({ turnId, attachmentPaths: [] }, new AbortController().signal);
+      expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual([
+        'First root guidance.',
+        'Second root guidance.',
+      ]);
+      const propose = registry.tools.find(tool => tool.namespace === 'skills' && tool.name === 'propose_change')!;
+      const input = JSON.stringify({ target_id: user.id, replace_id: null, remove_id: installed.id, draft: null });
+      const context = {
+        turnId,
+        mode: AgentModeID.AGENT,
+        chat: { id: 'chat', accountProvider: 'openai', accountId: 'account' },
+      };
+      const broker = captured.brokers[0]!.broker;
+      const execute = (currentTurn: string, change = input) =>
+        broker.run({ chatId: 'chat', runId: 'run' }, () =>
+          propose.execute(change, new AbortController().signal, { ...context, turnId: currentTurn }),
+        );
+      const denyApproval = async (currentTurn: string, change = input) => {
+        const firstEvent = events.length;
+        const pending = execute(currentTurn, change);
+        const approval = await vi.waitFor(() => {
+          const event = events.slice(firstEvent).find(value => value.type === GlyphHostEventType.APPROVAL);
+          if (!event || event.type !== GlyphHostEventType.APPROVAL) throw new Error('Waiting for package approval.');
+          return event.approval;
+        });
+        broker.answer({
+          chatId: 'chat',
+          runId: 'run',
+          id: approval.id,
+          kind: 'approval',
+          value: GlyphApprovalDecision.DENY,
+        });
+        expect(JSON.parse(await pending)).toMatchObject({ applied: false, denied: true });
+      };
+      const result = await execute(turnId);
+      expect(JSON.parse(result)).toMatchObject({
+        status: 'INSTRUCTION_CONTEXT_REQUIRED',
+        instructionContext: {
+          sources: expect.arrayContaining([
+            expect.objectContaining({ path: 'two/nested/AGENTS.md', content: 'Nested package guidance.' }),
+            expect.objectContaining({ path: 'two/.glyph/rules/assets.mdc', content: 'Binary asset guidance.' }),
+          ]),
+        },
+      });
+      expect(result).not.toContain('root guidance.');
+      expect(propose.activityPresentation?.show(result)).toBe(false);
+      expect(events.some(event => event.type === GlyphHostEventType.APPROVAL)).toBe(false);
+      await denyApproval(turnId);
+
+      const attachedTurn = 'already-informed';
+      const informed = await turns!.beginTurn({
+        turnId: attachedTurn,
+        attachmentPaths: ['two/nested/.glyph/skills/example/assets/image.bin'],
+      });
+      expect(informed.initialEnvelope().sources.map(source => source.content)).toEqual(
+        expect.arrayContaining(['Nested package guidance.', 'Binary asset guidance.']),
+      );
+      await denyApproval(attachedTurn);
+      turns!.discardTurn(attachedTurn);
+
+      const userTurn = 'user-removal';
+      await turns!.beginTurn({ turnId: userTurn, attachmentPaths: [] });
+      const personal = state.skills!.find(skill => skill.name === 'personal')!;
+      await denyApproval(
+        userTurn,
+        JSON.stringify({ target_id: installed.origin.id, replace_id: null, remove_id: personal.id, draft: null }),
+      );
+      turns!.discardTurn(userTurn);
+      expect((await runtime.snapshot()).skills!.some(skill => skill.id === installed.id)).toBe(true);
+      turns!.discardTurn(turnId);
+    });
+    it('uses the desktop workspace admission lease when previewing a repository package', async () => {
+      const leases = new HostProcessLeases([tmpdir()]);
+      const fixture = await factoryFixture({ repositoryProcesses: leases });
+      const runtime = await fixture.create([await fixture.folder('project')]);
+      await expect(
+        runtime.handle({
+          type: Command.PREVIEW_SKILL,
+          targetId: 'user',
+          source: { kind: 'repository', url: 'https://127.0.0.1:1/fixture', revision: 'main', directory: '' },
+        }),
+      ).rejects.toThrow('outside writable workspaces');
+    });
+    it('wires isolated user and project package management, pinned activation, approvals, and shared enablement into production runtimes', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const catalogs: SkillCatalog[] = [];
+      const refresh = SkillCatalog.prototype.refresh;
+      vi.spyOn(SkillCatalog.prototype, 'refresh').mockImplementation(function (this: SkillCatalog, signal) {
+        if (!catalogs.includes(this)) catalogs.push(this);
+        return refresh.call(this, signal);
+      });
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({
+        root: '/',
+        fileCount: 0,
+        fromCache: false,
+        truncated: false,
+        durationMilliseconds: 0,
+      });
+      useFilesystemIndex();
+      const roots = [await fixture.folder('one'), await fixture.folder('two')];
+      const events: GlyphHostEvent[] = [];
+      const runtime = await fixture.create(roots, event => {
+        events.push(event);
+      });
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (
+          request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES ||
+          request.type === GlyphEditorRequestType.CHECK_USER_WORKING_COPIES
+        )
+          return { operationId: request.operationId, ok: true, packageClean: true, workingCopiesClean: true };
+        throw new Error('Only skill working-copy checks are expected');
+      });
+      const targets = (await runtime.snapshot()).skillTargets!;
+      expect(captured.sandboxOptions[0]!.accessPolicy.privatePaths).toContain(fixture.userDirectory);
+      for (const [index, target] of targets.entries()) {
+        const draft = aSkillDraft('Reviewed factory workflow', `workflow-${index}`);
+        await runtime.handle({
+          type: Command.PREVIEW_SKILL,
+          targetId: target.id,
+          draft: { ...draft.toJSON(), directories: [{ path: 'templates/empty' }] },
+        });
+        await runtime.handle({ type: Command.APPLY_SKILL, previewId: (await runtime.snapshot()).skillPreview!.id });
+        expect(RustWorkspacePathIndex.prototype.glob).toHaveBeenCalledWith('**/*', {
+          targetDirectory: target.scope === 'user' ? draft.name : '.glyph/skills/' + draft.name,
+          limit: 257,
+        });
+      }
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (
+          request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES ||
+          request.type === GlyphEditorRequestType.CHECK_USER_WORKING_COPIES
+        )
+          return { operationId: request.operationId, ok: true, packageClean: true, workingCopiesClean: true };
+        if (request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
+          return { operationId: request.operationId, ok: true };
+        if (request.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Only read snapshots are expected');
+        for (const root of roots) {
+          const store = fixtureWorkspace(root);
+          const path = request.path.startsWith(`${basename(root)}/`)
+            ? request.path.slice(basename(root).length + 1)
+            : request.path;
+          if (await store.exists(path)) return editorResponse(request, request.path, (await store.read(path)).text);
+        }
+        throw new Error('Package missing');
+      });
+      const skills = (await runtime.snapshot()).skills!;
+      expect(skills).toHaveLength(3);
+      expect(skills.map(skill => ({ status: skill.status, message: skill.message }))).toEqual(
+        skills.map(() => ({ status: 'active', message: undefined })),
+      );
+      expect(skills.every(skill => skill.installedFrom === 'Local fixture')).toBe(true);
+      const [, toolSource, , turns] = captured.providerFactories[0]!;
+      const prepared = await turns!.beginTurn(
+        {
+          turnId: 'skills-turn',
+          attachmentPaths: [],
+          skillIds: skills.map(skill => skill.id),
+        },
+        new AbortController().signal,
+      );
+      expect(prepared.initialEnvelope().skills).toHaveLength(3);
+      expect(prepared.initialEnvelope().skills!.every(skill => skill.body === 'Reviewed factory workflow')).toBe(true);
+      turns!.discardTurn('skills-turn');
+      for (const skill of skills.filter(skill => skill.origin.scope === 'project')) {
+        await runtime.handle({
+          type: Command.PREVIEW_SKILL,
+          targetId: skill.origin.id,
+          replaceId: skill.id,
+          draft: aSkillDraft('Updated factory workflow', skill.name).toJSON(),
+        });
+        await runtime.handle({ type: Command.APPLY_SKILL, previewId: (await runtime.snapshot()).skillPreview!.id });
+      }
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
+
+      await catalogs[0]!.refreshIndexes();
+      const propose = toolSource.tools.find(tool => tool.namespace === 'skills' && tool.name === 'propose_change')!;
+      const broker = captured.brokers[0]!.broker;
+      const pending = broker.run({ chatId: 'chat', runId: 'run' }, () =>
+        propose.execute(
+          JSON.stringify({ target_id: targets[0]!.id, replace_id: null, remove_id: skills[0]!.id, draft: null }),
+          new AbortController().signal,
+          {
+            turnId: 'turn',
+            mode: AgentModeID.AGENT,
+            chat: { id: 'chat', accountProvider: 'openai', accountId: 'account' },
+          },
+        ),
+      );
+      await vi.waitFor(() => {
+        expect(events.some(event => event.type === GlyphHostEventType.APPROVAL)).toBe(true);
+      });
+      const approval = events.find(event => event.type === GlyphHostEventType.APPROVAL)!;
+      if (approval.type !== GlyphHostEventType.APPROVAL) throw new Error('Expected package approval');
+      broker.answer({
+        chatId: 'chat',
+        runId: 'run',
+        id: approval.approval.id,
+        kind: 'approval',
+        value: GlyphApprovalDecision.DENY,
+      });
+      expect(JSON.parse(await pending)).toMatchObject({ applied: false, denied: true });
+      await runtime.handle({ type: Command.SET_SKILL_ENABLED, skillId: skills[0]!.id, enabled: false });
+      const other = await fixture.create(roots);
+      expect((await other.snapshot()).skills!.find(skill => skill.id === skills[0]!.id)?.enabled).toBe(false);
+      const approvalBoundary = vi
+        .spyOn(WebApprovalService.prototype, 'request')
+        .mockRejectedValueOnce(new Error('Denied before network access'));
+      const fetch = toolSource.tools.find(tool => tool.namespace === 'web' && tool.name === 'web_fetch')!;
+      expect(
+        JSON.parse(
+          await fetch.execute(JSON.stringify({ url: 'http://127.0.0.1/private' }), new AbortController().signal, {}),
+        ),
+      ).toMatchObject({ kind: 'web_error' });
+      expect(approvalBoundary).toHaveBeenCalledOnce();
+    });
     it('shares a lazy user-rule index across workspaces and disposes it with the factory', async () => {
       const fixture = await factoryFixture();
       const first = await fixture.create([await fixture.folder('one')]);
@@ -1268,7 +1555,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const read = { type: GlyphEditorRequestType.READ_SNAPSHOT, operationId: 'read', path: 'file.txt' } as const;
       await expect(client.request(read, signal)).resolves.toMatchObject({ snapshot: { path: 'file.txt' } });
       expect(request).toHaveBeenLastCalledWith(factoryIdentity, read, signal);
-      expect(validate).toHaveBeenLastCalledWith('file.txt');
+      expect(validate).toHaveBeenLastCalledWith('file.txt', false);
       const occupancy = { type: GlyphEditorRequestType.EXISTS, operationId: 'exists', path: 'file.txt' } as const;
       await client.request(occupancy);
       expect(exists).toHaveBeenCalledExactlyOnceWith('file.txt');
@@ -1288,20 +1575,23 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await expect(client.request(text)).resolves.toMatchObject({ snapshot: { path: 'file.txt' } });
       expect(request).toHaveBeenLastCalledWith(factoryIdentity, text, undefined, expect.any(Function));
       await expect(request.mock.lastCall![3]!()).resolves.toBeUndefined();
-      const rename = fileMutation({
+      const renameRequest = fileMutation({
         kind: GlyphFileMutationKind.RENAME,
         path: 'file.txt',
         target: 'renamed.txt',
         expectedContentRevision: 'revision',
         expectedToken: { workspaceGeneration: 'g', resource: 'file:///file.txt', incarnation: 'i', version: 1 },
       });
-      await expect(client.request(rename)).resolves.toMatchObject({ snapshot: { path: 'renamed.txt' } });
-      expect(validate).toHaveBeenLastCalledWith('renamed.txt');
-      expect(request).toHaveBeenLastCalledWith(factoryIdentity, rename, undefined, expect.any(Function));
+      await expect(client.request(renameRequest)).resolves.toMatchObject({ snapshot: { path: 'renamed.txt' } });
+      expect(validate).toHaveBeenLastCalledWith('renamed.txt', true);
+      expect(request).toHaveBeenLastCalledWith(factoryIdentity, renameRequest, undefined, expect.any(Function));
       const checkRename = request.mock.lastCall![3]!;
       validate.mockClear().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Destination unavailable'));
       await expect(checkRename()).rejects.toThrow('Destination unavailable');
-      expect(validate.mock.calls).toEqual([['file.txt'], ['renamed.txt']]);
+      expect(validate.mock.calls).toEqual([
+        ['file.txt', true],
+        ['renamed.txt', true],
+      ]);
       const create = fileMutation({
         kind: GlyphFileMutationKind.CREATE,
         path: 'new.txt',
@@ -1428,6 +1718,13 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await mkdir(state);
       await writeFile(join(state, 'secret.md'), 'PRIVATE STATE CONTENT');
       await writeFile(trace, 'PRIVATE TRACE CONTENT');
+      await writeFile(
+        join(isolatedUserDirectory, 'skill-state.json'),
+        JSON.stringify({
+          enabled: {},
+          installations: { example: { source: 'PRIVATE PROFILE PROVENANCE', revision: 'retained' } },
+        }),
+      );
       const stateAlias = join(isolatedUserDirectory, 'state-alias');
       if (alias) await symlink(state, stateAlias);
       const fixture = await factoryFixture({
@@ -1435,11 +1732,12 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         stateDirectory: alias ? stateAlias : state,
         traceFile: trace,
       });
-      const rules = join(isolatedUserDirectory, 'rules');
+      const rules = join(fixture.userDirectory, 'rules');
       await mkdir(rules);
       for (const [name, reference] of [
         ['state', 'private-state/secret.md'],
         ['trace', 'trace.log'],
+        ['profile', 'skill-state.json'],
         ['public', 'notes.md'],
       ])
         await writeFile(join(rules, `${name}.mdc`), `---\nreferences: [${reference}]\nalwaysApply: true\n---\nRule`);
@@ -1460,12 +1758,12 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       });
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
       const runtime = await fixture.create([await fixture.folder('project')]);
-      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
       const snapshot = await runtime.snapshot();
       expect(snapshot.instructionSources).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ path: '~/.glyph/rules/state.mdc', status: 'error' }),
           expect.objectContaining({ path: '~/.glyph/rules/trace.mdc', status: 'error' }),
+          expect.objectContaining({ path: '~/.glyph/rules/profile.mdc', status: 'error' }),
           expect.objectContaining({
             path: '~/.glyph/rules/public.mdc',
             status: 'active',
@@ -1474,9 +1772,10 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         ]),
       );
       expect(JSON.stringify(snapshot.instructionSources)).not.toMatch(/PRIVATE (STATE|TRACE) CONTENT/u);
+      expect(JSON.stringify(snapshot.instructionSources)).not.toContain('PRIVATE PROFILE PROVENANCE');
       const source = snapshot.instructionSources!.find(source => source.path === '~/.glyph/rules/public.mdc')!;
       await runtime.handle({
-        type: GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED,
+        type: Command.SET_USER_RULE_ENABLED,
         path: 'rules/public.mdc',
         expectedRevision: source.managementRevision!,
         enabled: false,
@@ -1514,21 +1813,22 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     });
 
     it('keeps an unavailable user rule location separate and retries after repair', async () => {
-      const fixture = await factoryFixture({ userDirectory: isolatedUserDirectory });
+      const fixture = await factoryFixture();
       const root = await fixture.folder('project');
       useFilesystemIndex();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
-      const rules = join(isolatedUserDirectory, 'rules');
+      const rules = join(fixture.userDirectory, 'rules');
+      await mkdir(fixture.userDirectory, { recursive: true });
       await writeFile(rules, 'occupied');
       const runtime = await fixture.create([root]);
-      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
       expect((await runtime.snapshot()).instructionSources).toEqual(
         expect.arrayContaining([expect.objectContaining({ kind: 'glyph_user_rule', status: 'error' })]),
       );
       await rm(rules);
       await mkdir(rules);
       await writeFile(join(rules, 'restored.mdc'), 'Restored');
-      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
       expect((await runtime.snapshot()).instructionSources).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ kind: 'glyph_user_rule', status: 'active', content: 'Restored' }),
@@ -1575,7 +1875,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           ['**/.cursor/rules/*.mdc', { limit: 10_000 }],
         ]),
       );
-      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
       expect(glob).toHaveBeenCalledTimes(16);
       expect(diskList).not.toHaveBeenCalled();
     });
@@ -1607,7 +1907,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         expect.objectContaining({ referenceResources: [{ uri: 'file://' + root + '/guide.md', caseSensitive: true }] }),
       );
       await runtime.handle({
-        type: GlyphWorkbenchCommandType.CREATE_USER_RULE,
+        type: Command.CREATE_USER_RULE,
         name: 'New rule',
         activation: 'manual',
       });
@@ -1644,6 +1944,78 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         'first/AGENTS.md',
         'second/AGENTS.md',
       ]);
+    });
+
+    it('uses the physical profile for discovery and resolves a formerly shared project rule only through its user owner', async () => {
+      const profile = join(isolatedUserDirectory, 'current');
+      const first = join(isolatedUserDirectory, 'first');
+      const second = join(isolatedUserDirectory, 'second');
+      for (const root of [first, second]) {
+        const skill = basename(root);
+        await mkdir(join(root, '.glyph/skills', skill), { recursive: true });
+        await writeFile(
+          join(root, '.glyph/skills', skill, 'SKILL.md'),
+          '---\nname: ' + skill + '\ndescription: Example\n---\nWorkflow',
+        );
+        await mkdir(join(root, '.glyph/rules'), { recursive: true });
+        await writeFile(
+          join(root, '.glyph/rules/shared.mdc'),
+          '---\nactivation: manual\nreferences: [context.md]\n---\nShared',
+        );
+        await writeFile(join(root, '.glyph/context.md'), basename(root) + ' profile context');
+        await writeFile(join(root, 'context.md'), 'Project context');
+      }
+      await symlink(join(first, '.glyph'), profile);
+      const fixture = await factoryFixture({ userDirectory: profile });
+      useFilesystemIndex();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected metadata query');
+        return { operationId: request.operationId, ok: true };
+      });
+      await fixture.create([first], undefined, false);
+      const old = 'glyph_project_rule:.glyph/rules/shared.mdc';
+      for (const root of [first, second]) {
+        if (root === second) {
+          await rm(profile);
+          await symlink(join(second, '.glyph'), profile);
+          await writeFile(join(second, '.glyph/rules/new.mdc'), 'New');
+        }
+        const runtime = await fixture.create([root]);
+        const snapshot = await runtime.snapshot();
+        expect(snapshot.skills!.map(skill => skill.name).toSorted()).toEqual(
+          root === first ? ['first'] : ['first', 'second'],
+        );
+        expect(snapshot.instructionWatchRoots).toContain(pathToFileURL(join(first, '.glyph/skills')).href);
+        const sources = snapshot.instructionSources!;
+        const user = sources.find(source => source.kind === 'glyph_user_rule')!;
+        if (root === second) {
+          expect(captured.sandboxOptions).toHaveLength(3);
+          for (const launcher of captured.sandboxOptions) {
+            const masks = launcher.accessPolicy.privatePaths;
+            expect(masks).toContain(join(first, '.glyph'));
+            expect(masks).not.toContain(join(second, '.glyph'));
+          }
+          await runtime.handle({
+            type: Command.SET_SKILL_ENABLED,
+            skillId: snapshot.skills![0]!.id,
+            enabled: false,
+          });
+          expect(await readFile(join(first, '.glyph/skill-state.json'), 'utf8')).toContain(snapshot.skills![0]!.id);
+          await expect(readFile(join(second, '.glyph/skill-state.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+        }
+        expect(sources).toHaveLength(root === first ? 1 : 3);
+        expect(user.kind).toBe('glyph_user_rule');
+        expect(user.legacyIds).toBeUndefined();
+        if (root === first) expect(runtime.resolveRuleReference(old)).toBe(user.id);
+        const turn = await captured.providerFactories
+          .at(-1)![3]!
+          .beginTurn({ turnId: 'manual', attachmentPaths: [], manualRuleIds: [root === first ? old : user.id] });
+        const bodies = turn.initialEnvelope().sources.map(source => source.content);
+        expect(bodies).toHaveLength(1);
+        expect(bodies[0]).toContain('first profile context');
+        expect(bodies[0]).not.toContain('Project context');
+      }
     });
 
     it('retains mandatory and manual instruction identity when an alias becomes a second workspace route', async () => {
@@ -1714,7 +2086,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         return { operationId: request.operationId, ok: true };
       });
       const runtime = await fixture.create([project]);
-      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
       const failed = await runtime.snapshot();
       expect(failed.instructionSources).toContainEqual(
         expect.objectContaining({ path: 'AGENTS.md', status: 'active' }),
@@ -1724,7 +2096,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         expect.objectContaining({ status: 'discovery-error', message: 'Unavailable alias inventory' }),
       );
       unavailable = false;
-      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
       expect((await runtime.snapshot()).skills?.map(skill => skill.name).toSorted()).toEqual(['local', 'personal']);
     });
 
@@ -1750,7 +2122,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           return { operationId: request.operationId, ok: true };
         });
         const runtime = await fixture.create([isolatedUserDirectory]);
-        await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+        await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
         expect((await runtime.snapshot()).skills).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ origin: expect.objectContaining({ scope: 'user' }), status: 'discovery-error' }),
@@ -1767,7 +2139,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           join(skills, 'demo', 'SKILL.md'),
           '---\nname: demo\ndescription: Shared workflow\n---\nGuidance.',
         );
-        await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+        await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
         const discovered = (await runtime.snapshot()).skills!;
         expect(discovered.map(skill => skill.name).toSorted()).toEqual(['demo', 'independent']);
         expect(discovered.filter(skill => skill.name === 'demo')).toMatchObject([
@@ -1783,6 +2155,79 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         ).toBeUndefined();
       },
     );
+
+    it('diagnoses an unavailable profile mutation authority and retries it on the next catalog refresh', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const open = vi.mocked(NativeWorkspaceMutations.open);
+      const normal = open.getMockImplementation()!;
+      let blocked = true;
+      open.mockImplementation((binary, root) =>
+        root === fixture.userDirectory && blocked
+          ? Promise.reject(new Error('Profile authority unavailable'))
+          : normal(binary, root),
+      );
+      const runtime = await fixture.create([await fixture.folder('project')]);
+      expect((await runtime.snapshot()).skills).toContainEqual(
+        expect.objectContaining({ status: 'discovery-error', message: 'Profile authority unavailable' }),
+      );
+      blocked = false;
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
+      expect((await runtime.snapshot()).skills).not.toContainEqual(
+        expect.objectContaining({ message: 'Profile authority unavailable' }),
+      );
+    });
+    it('recovers the user skill store and keeps ownership through a project that contains it', async () => {
+      const profile = join(isolatedUserDirectory, '.glyph');
+      const skills = join(profile, 'skills');
+      await mkdir(profile);
+      await writeFile(skills, 'occupied');
+      const prior = new ProjectSkillIdentity(isolatedUserDirectory, '.glyph');
+      const previous = prior.forDirectory('.glyph/skills/demo');
+      await writeFile(
+        join(profile, 'skill-state.json'),
+        JSON.stringify({
+          enabled: { [previous]: false },
+          installations: { [previous]: { source: 'Old source', revision: 'Old revision' } },
+        }),
+      );
+      const fixture = await factoryFixture({ userDirectory: profile });
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      useFilesystemIndex();
+      const runtime = await fixture.create([isolatedUserDirectory]);
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
+      expect((await runtime.snapshot()).skills).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ origin: expect.objectContaining({ scope: 'user' }), status: 'discovery-error' }),
+        ]),
+      );
+      await rm(skills);
+      await mkdir(join(skills, 'demo'), { recursive: true });
+      await writeFile(
+        join(skills, 'demo', 'SKILL.md'),
+        '---\nname: demo\ndescription: Shared workflow\n---\nGuidance.',
+      );
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
+      const discovered = (await runtime.snapshot()).skills!;
+      expect(discovered).toHaveLength(1);
+      expect(discovered[0]).toMatchObject({ name: 'demo', origin: { scope: 'user' } });
+      expect(discovered[0]).toMatchObject({
+        enabled: false,
+        installedFrom: 'Old source',
+        packageRevision: 'Old revision',
+      });
+      expect((await runtime.snapshot()).skillTargets).toContainEqual(
+        expect.objectContaining({ id: prior.originId, updateOnly: true }),
+      );
+      await expect(
+        runtime.handle({ type: Command.PREVIEW_SKILL, targetId: prior.originId, draft: aSkillDraft().toJSON() }),
+      ).rejects.toThrow('user skill store');
+      const selected = discovered[0]!;
+      expect(runtime.resolveSkillReference(previous)).toBe(selected.id);
+      expect(runtime.resolveSkillReference(selected.id, selected.uri)).toBe(selected.id);
+      expect(runtime.resolveSkillReference('absent', selected.uri)).toBeUndefined();
+      expect(runtime.resolveSkillReference(selected.id, pathToFileURL(join(profile, 'other.md')).href)).toBeUndefined();
+    });
 
     it('retains a physical skill ID and offers it once through overlapping and aliased folders', async () => {
       const fixture = await factoryFixture();
@@ -1873,7 +2318,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
         new AbortController().signal,
       );
-      expect(turn.snapshot().skills).toHaveLength(2);
+      expect(turn.initialEnvelope().skills).toHaveLength(2);
       expect(refresh).toHaveBeenCalledTimes(4);
       await (observe.mock.contexts[0] as SkillCatalog).refreshIndexes();
       expect(refresh).toHaveBeenCalledTimes(7);
@@ -1882,7 +2327,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         attachmentPaths: [],
         skillIds: [skills[0]!.id],
       });
-      expect(second.snapshot().skills).toHaveLength(1);
+      expect(second.initialEnvelope().skills).toHaveLength(1);
       refresh.mockResolvedValueOnce({ truncated: true } as never);
       await expect(
         coordinator.beginTurn({ turnId: 'incomplete', attachmentPaths: [], skillIds: [skills[0]!.id] }),
@@ -1929,8 +2374,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           await rm(alias);
           await symlink(other, alias);
         } else {
-          await renameDirectory(first, first + '-moved');
-          await renameDirectory(other, first);
+          await rename(first, first + '-moved');
+          await rename(other, first);
         }
         release.resolve();
         await expect(pendingRead).rejects.toThrow('workspace folder changed');
@@ -1971,65 +2416,128 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       );
     });
 
-    it('uses the physical profile for discovery and resolves a formerly shared project rule only through its user owner', async () => {
-      const profile = join(isolatedUserDirectory, 'current');
-      const first = join(isolatedUserDirectory, 'first');
-      const second = join(isolatedUserDirectory, 'second');
-      await mkdir(join(first, '.glyph'), { recursive: true });
-      await symlink(join(first, '.glyph'), profile);
-      const fixture = await factoryFixture({ userDirectory: profile });
-      useFilesystemIndex();
+    it('retains mandatory and manual instruction identity when an alias becomes a second workspace route', async () => {
+      const fixture = await factoryFixture();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      useFilesystemIndex();
       vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
-        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected metadata query');
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
         return { operationId: request.operationId, ok: true };
       });
-      for (const root of [first, second]) {
-        const skill = basename(root);
-        await mkdir(join(root, '.glyph/skills', skill), { recursive: true });
-        await writeFile(
-          join(root, '.glyph/skills', skill, 'SKILL.md'),
-          '---\nname: ' + skill + '\ndescription: Example\n---\nWorkflow',
-        );
-        await mkdir(join(root, '.glyph/rules'), { recursive: true });
-        await writeFile(
-          join(root, '.glyph/rules/shared.mdc'),
-          '---\nactivation: manual\nreferences: [context.md]\n---\nShared',
-        );
-        await writeFile(join(root, '.glyph/context.md'), basename(root) + ' profile context');
-        await writeFile(join(root, 'context.md'), 'Project context');
-      }
-      const old = 'glyph_project_rule:.glyph/rules/shared.mdc';
-      for (const root of [first, second]) {
-        if (root === second) {
-          await rm(profile);
-          await symlink(join(second, '.glyph'), profile);
-          await writeFile(join(second, '.glyph/rules/new.mdc'), 'New');
+      const root = await fixture.folder('actual', { 'AGENTS.md': 'Required body' });
+      await mkdir(join(root, '.glyph/rules'), { recursive: true });
+      await writeFile(join(root, '.glyph/rules/manual.mdc'), '---\nactivation: manual\n---\nManual body');
+      const alias = join(dirname(root), 'alias');
+      await symlink(root, alias);
+      const first = await (await fixture.create([root])).snapshot();
+      const current = await (await fixture.create([root, alias])).snapshot();
+      expect(current.instructionSources!.map(source => source.id)).toEqual(
+        first.instructionSources!.map(source => source.id),
+      );
+      const turn = await captured.providerFactories.at(-1)![3]!.beginTurn({
+        turnId: 'legacy',
+        attachmentPaths: [],
+        manualRuleIds: ['glyph_project_rule:.glyph/rules/manual.mdc'],
+      });
+      expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual(['Manual body', 'Required body']);
+    });
+
+    it('shares guidance and package preferences across aliases, nested roots, and root rebinds', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const outer = await fixture.folder('outer');
+      const inner = join(outer, 'inner');
+      await mkdir(join(inner, '.glyph/rules'), { recursive: true });
+      await mkdir(join(inner, '.glyph/skills/example'), { recursive: true });
+      await writeFile(join(inner, 'AGENTS.md'), 'Inner root instructions');
+      await writeFile(join(inner, '.glyph/rules/selected.mdc'), 'Manual guidance');
+      await writeFile(
+        join(inner, '.glyph/skills/example/SKILL.md'),
+        '---\nname: example\ndescription: physical package\n---\nBody',
+      );
+      const alias = join(outer, 'alias');
+      await symlink(inner, alias);
+      useFilesystemIndex();
+      const rpc = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
+          return { operationId: request.operationId, ok: true };
+        throw new Error('Unexpected editor request');
+      });
+      const single = await fixture.create([inner]);
+      const initial = await single.snapshot();
+      const rule = initial.instructionSources!.find(source => source.kind === 'glyph_project_rule')!;
+      const joined = await fixture.create([outer, inner, alias]);
+      const current = await joined.snapshot();
+      const skills = current.skills!;
+      expect(skills.map(skill => skill.id)).toEqual([initial.skills![0]!.id]);
+      expect(skills[0]?.scope).toBe('inner');
+      expect(current.instructionSources!.filter(source => source.kind === 'agents_md')).toHaveLength(1);
+      expect(current.instructionSources!.find(source => source.kind === 'glyph_project_rule')).toMatchObject({
+        id: rule.id,
+        legacyIds: expect.arrayContaining(['glyph_project_rule:.glyph/rules/selected.mdc']),
+      });
+      const turns = captured.providerFactories.at(-1)![3]!;
+      const turn = await turns.beginTurn(
+        { turnId: 'equivalent', attachmentPaths: ['outer/inner/file'], manualRuleIds: [rule.id] },
+        new AbortController().signal,
+      );
+      expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual(
+        expect.arrayContaining(['Inner root instructions', 'Manual guidance']),
+      );
+      expect(turn.initialEnvelope().sources.some(source => source.uri || source.legacyIds)).toBe(false);
+      expect(turn.initialEnvelope().skillCandidates?.map(skill => skill.id)).toEqual([skills[0]!.id]);
+      await expect(turns.disclosePaths('equivalent', ['alias/file'])).resolves.toBeUndefined();
+      expect(
+        rpc.mock.calls
+          .filter(([, request]) => request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
+          .map(([, request]) => (request as { path: string }).path),
+      ).toEqual(expect.arrayContaining(['inner/AGENTS.md', 'outer/inner/AGENTS.md', 'alias/AGENTS.md']));
+      rpc.mockImplementation(async (_identity, request) => {
+        if (request.type === GlyphEditorRequestType.READ_SNAPSHOT)
+          return editorResponse(
+            request,
+            request.path,
+            await readFile(join(inner, '.glyph/skills/example/SKILL.md'), 'utf8'),
+          );
+        if (request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES)
+          return { operationId: request.operationId, ok: true, packageClean: true, workingCopiesClean: true };
+        if (request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
+          return { operationId: request.operationId, ok: true };
+        throw new Error('Unexpected editor request');
+      });
+      await joined.handle({ type: Command.PREVIEW_SKILL, targetId: skills[0]!.origin.id, removeId: skills[0]!.id });
+      expect(
+        rpc.mock.calls.flatMap(([, req]) =>
+          req.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES ? [req.directoryUri] : [],
+        ),
+      ).toEqual(
+        expect.arrayContaining([
+          'file://' + join(inner, '.glyph/skills/example'),
+          'file://' + join(alias, '.glyph/skills/example'),
+        ]),
+      );
+      rpc.mockImplementation(async (_identity, req) => {
+        if (req.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected catalog reads');
+        if (req.path.endsWith('AGENTS.md')) {
+          const response = editorResponse(req, req.path, req.path);
+          return { ...response, snapshot: { ...response.snapshot!, dirty: true } };
         }
-        const runtime = await fixture.create([root]);
-        const snapshot = await runtime.snapshot();
-        expect(snapshot.skills!.map(skill => skill.name)).toEqual(
-          root === first ? [basename(first)] : [basename(first), basename(second)].toSorted(),
-        );
-        expect(snapshot.instructionWatchRoots).toContain(pathToFileURL(join(first, '.glyph/skills')).href);
-        const sources = snapshot.instructionSources!;
-        const user = sources.find(source => source.kind === 'glyph_user_rule')!;
-        expect(sources).toHaveLength(root === first ? 1 : 3);
-        expect(user.kind).toBe('glyph_user_rule');
-        expect(user.legacyIds).toBeUndefined();
-        expect(runtime.resolveRuleReference(old)).toBe(
-          root === first
-            ? user.id
-            : sources.find(source => source.kind === 'glyph_project_rule' && source.path.endsWith('shared.mdc'))!.id,
-        );
-        const turn = await captured.providerFactories
-          .at(-1)![3]!
-          .beginTurn({ turnId: 'manual', attachmentPaths: [], manualRuleIds: [old] });
-        const bodies = turn.initialEnvelope().sources.map(source => source.content);
-        expect(bodies).toHaveLength(1);
-        expect(bodies[0]).toContain(root === first ? 'first profile context' : 'Project context');
-        if (root === first) expect(bodies[0]).not.toContain('Project context');
-      }
+        if (req.path.endsWith('.mdc'))
+          return {
+            operationId: req.operationId,
+            ok: false,
+            error: { code: GlyphDesktopErrorCode.INVALID_REQUEST, message: 'Editor disconnected', retryable: true },
+          };
+        return { operationId: req.operationId, ok: false };
+      });
+      const failed = await joined.snapshot();
+      expect(failed.instructionSources!.map(source => source.message)).toEqual(
+        expect.arrayContaining(['Editor disconnected', expect.stringContaining('conflicting unsaved edits')]),
+      );
+      expect(failed.skills![0]!.message).toContain('catalog snapshot is unavailable');
+      await expect(turns.beginTurn({ turnId: 'invalid-guidance', attachmentPaths: [] })).rejects.toThrow(
+        'Required root instruction',
+      );
     });
 
     it('reports an unsafe user rules directory without querying its native index', async () => {
@@ -2082,7 +2590,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(retain.mock.calls[0]?.[0]).toBe('file.txt');
       const disclosure = retain.mock.calls[0]![1] as WorkspaceDisclosure;
       (await disclosure.authorize(signal))();
-      await renameDirectory(join(roots[0]!, 'file.txt'), join(roots[0]!, 'moved.txt'));
+      await rename(join(roots[0]!, 'file.txt'), join(roots[0]!, 'moved.txt'));
       await expect(disclosure.authorize(signal)).rejects.toThrow();
       expect(request).toHaveBeenLastCalledWith(
         factoryIdentity,
@@ -2266,7 +2774,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const root = await fixture.folder('workspace');
       fixture.initialize.mockRejectedValueOnce(new Error('Index failed'));
       const shells = vi.spyOn(ShellSessionManager.prototype, 'dispose');
+      const observe = vi.spyOn(SkillStateStore.prototype, 'onDidChange');
       await expect(fixture.create([root])).rejects.toThrow('Index failed');
+      expect(observe).not.toHaveBeenCalled();
       expect(shells).toHaveBeenCalledOnce();
     });
 
@@ -2277,7 +2787,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const reviews = vi.spyOn(AgentReviewService.prototype, 'dispose');
       const shells = vi.spyOn(ShellSessionManager.prototype, 'dispose');
       const glyph = vi.spyOn(GlyphService.prototype, 'dispose');
+      const observe = vi.spyOn(SkillStateStore.prototype, 'onDidChange');
       await expect(fixture.create([root])).rejects.toThrow('Review store failed');
+      expect(observe).not.toHaveBeenCalled();
       expect(reviews).toHaveBeenCalledOnce();
       expect(shells).toHaveBeenCalledOnce();
       expect(glyph).toHaveBeenCalledOnce();
@@ -2317,25 +2829,41 @@ function releaseExecutable(executable: string): string {
 }
 
 function useFilesystemIndex(): void {
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'listDirectories').mockImplementation(async function (
+    this: RustWorkspacePathIndex,
+  ) {
+    const config = captured.indexOptions[captured.indexes.indexOf(this)]!;
+    const directories = (await inventoryPackage(config.access.root)).directories;
+    return directories.filter(
+      path =>
+        !config.access.policy.exclusionsFor(join(config.access.root, path), config.access.caseSensitive ?? true)
+          .privateRoot,
+    );
+  });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
     this: RustWorkspacePathIndex,
     pattern,
     options,
   ) {
     const configuration = captured.indexOptions[captured.indexes.indexOf(this)]!;
-    return fixtureWorkspace(configuration.access.root, { accessPolicy: configuration.access.policy }).list(
-      options.limit,
-      pattern,
-    );
+    const store = fixtureWorkspace(configuration.access.root, {
+      accessPolicy: configuration.access.policy,
+      caseSensitive: configuration.access.caseSensitive,
+    });
+    if (!options.rootFilesOnly) return store.list(options.limit, pattern, options.targetDirectory);
+    const listed = await store.list(10_000, pattern);
+    const direct = listed.files.filter(path => !path.includes('/'));
+    return { files: direct.slice(0, options.limit), truncated: direct.length > options.limit };
   });
 }
 
 async function factoryFixture(
   options: {
     readonly transport?: typeof fetch;
-    readonly userDirectory?: string;
+    readonly repositoryProcesses?: HostProcessLeases;
     readonly stateDirectory?: string;
     readonly traceFile?: string;
+    readonly userDirectory?: string;
   } = {},
 ) {
   for (const values of Object.values(captured)) values.length = 0;
@@ -2365,12 +2893,13 @@ async function factoryFixture(
       for (const [file, text] of Object.entries(files)) await writeFile(join(path, file), text);
       return path;
     },
-    async create(paths: readonly string[], emit: (event: GlyphHostEvent) => void = () => {}) {
+    async create(paths: readonly string[], emit: (event: GlyphHostEvent) => void = () => {}, trusted = true) {
       const runtime = await factory.create({
         identity: factoryIdentity,
         roots: paths.map(path => ({ name: basename(path), canonicalPath: path, uri: `file://${path}` })),
+        ...(options.repositoryProcesses ? { repositoryProcesses: options.repositoryProcesses } : {}),
+        trusted,
         assertTrusted: () => {},
-        trusted: true,
         emit,
       });
       runtimes.push(runtime);
@@ -2430,3 +2959,111 @@ function chatSummary(overrides: Partial<ChatSessionSummary> = {}): ChatSessionSu
     ...overrides,
   };
 }
+
+it('keeps an admitted physical profile private while its files are temporarily absent', async () => {
+  const fixture = await factoryFixture();
+  vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+  await fixture.create([await fixture.folder('project')]);
+  await rm(fixture.userDirectory, { recursive: true, force: true });
+  const policy = captured.sandboxOptions[0]!.accessPolicy;
+  expect(policy.privatePaths).toContain(fixture.userDirectory);
+  await mkdir(fixture.userDirectory, { recursive: true });
+  expect(policy.privatePaths).toContain(fixture.userDirectory);
+});
+
+it('keeps the startup boundaries across a profile alias change during an editor read', async () => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'glyph-live-profile-boundary-')));
+  onTestFinished(() => rm(base, { recursive: true, force: true }));
+  const oldProfile = join(base, 'old');
+  const newProfile = join(base, 'new');
+  const alias = join(base, 'profile');
+  await mkdir(oldProfile);
+  await mkdir(newProfile);
+  await writeFile(join(newProfile, 'skill-state.json'), JSON.stringify({ enabled: {}, installations: {} }), {
+    mode: 0o600,
+  });
+  await symlink(oldProfile, alias);
+  const fixture = await factoryFixture({ userDirectory: alias });
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'assertWorkspacePath').mockImplementation(async (path, privatePaths) => {
+    if (privatePaths.includes(path)) throw new Error('Private profile path');
+  });
+  vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+  await fixture.create([base]);
+  const client = captured.editorClients[0]!;
+  const policy = captured.indexOptions[0]!.access.policy;
+  const request = {
+    type: GlyphEditorRequestType.READ_SNAPSHOT,
+    operationId: 'in-flight',
+    path: 'new/skill-state.json',
+  } as const;
+  vi.spyOn(fixture.editors, 'request').mockImplementationOnce(async (_identity, wire) => {
+    await rm(alias);
+    await symlink(newProfile, alias);
+    await fixture.create([await fixture.folder('peer')]);
+    return editorResponse(wire, request.path, 'ordinary fixture');
+  });
+  await expect(client.request(request)).resolves.toMatchObject({ ok: true });
+  const projected = policy.exclusionsFor(base, true).excludedPaths;
+  expect(projected).toContain('old/skill-state.json');
+  expect(projected).not.toContain('new/skill-state.json');
+  await expect(client.request({ ...request, path: 'old/skill-state.json' })).rejects.toThrow();
+});
+
+it('creates a new profile with owner-only access even under a group-writable process umask', async () => {
+  const fixture = await factoryFixture();
+  vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+  const mask = process.umask(0o002);
+  try {
+    const runtime = await fixture.create([await fixture.folder('project')]);
+    await runtime.snapshot();
+    expect((await stat(fixture.userDirectory)).mode & 0o777).toBe(0o700);
+  } finally {
+    process.umask(mask);
+  }
+});
+
+it('previews local skill bytes through the private policy chosen for this host', async () => {
+  const fixture = await factoryFixture();
+  useFilesystemIndex();
+  vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({ truncated: false } as never);
+  vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+    if (request.type !== GlyphEditorRequestType.CHECK_USER_WORKING_COPIES) throw new Error('Unexpected editor request');
+    return { operationId: request.operationId, ok: true, workingCopiesClean: true };
+  });
+  const root = await fixture.folder('project');
+  const source = await fixture.folder('example', {
+    'SKILL.md': '---\nname: example\ndescription: Fixture\n---\nExample',
+  });
+  const runtime = await fixture.create([root]);
+  await runtime.handle({
+    type: Command.PREVIEW_SKILL,
+    targetId: 'user:glyph',
+    source: { kind: 'local', path: source },
+  });
+  const index = captured.indexOptions.find(value => value.access.root === source)!;
+  expect(index.access.policy.privatePaths).toContain(join(fixture.userDirectory, 'skill-state.json'));
+  expect(index.access.policy.privatePaths).not.toContain(join(fixture.userDirectory, 'skills'));
+  expect(NativeFilesystemMetadata.prototype.assertHostPaths).toHaveBeenCalledWith(
+    [source],
+    expect.arrayContaining([join(fixture.userDirectory, 'skill-state.json')]),
+  );
+});
+
+it('withholds replacement profile content and refuses to recreate a removed pinned directory', async () => {
+  const fixture = await factoryFixture();
+  useFilesystemIndex();
+  vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+  const runtime = await fixture.create([await fixture.folder('project')]);
+  await runtime.snapshot();
+  await rename(fixture.userDirectory, fixture.userDirectory + '-old');
+  const create = () => runtime.handle({ type: Command.CREATE_USER_RULE, name: 'First', activation: 'manual' });
+  await expect(create()).rejects.toThrow('removed or replaced');
+  await expect(stat(fixture.userDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+  await mkdir(join(fixture.userDirectory, 'rules'), { recursive: true });
+  await writeFile(join(fixture.userDirectory, 'rules/other.mdc'), 'Replacement profile');
+  const snapshot = await runtime.snapshot();
+  expect(snapshot.instructionSources?.some(source => source.path.endsWith('other.mdc'))).toBe(false);
+  await expect(create()).rejects.toThrow('removed or replaced');
+  await expect(stat(join(fixture.userDirectory, '.skill-staging'))).rejects.toMatchObject({ code: 'ENOENT' });
+});

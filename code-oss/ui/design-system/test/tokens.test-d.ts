@@ -1,7 +1,7 @@
 import { expectTypeOf, it } from 'vitest';
-import { atoms, space } from './atoms.ts';
-import { codeOss, previewThemeStyles } from './codeOssTheme.ts';
-import { tokens } from './tokens.ts';
+import { atoms, space } from '#code-oss/ui/design-system/atoms.ts';
+import { codeOss, previewThemeStyles } from '#code-oss/ui/design-system/codeOssTheme.ts';
+import { tokens } from '#code-oss/ui/design-system/tokens.ts';
 
 it('keeps semantic roles, atomic sizes, and host names closed', () => {
   expectTypeOf(tokens.text).not.toHaveProperty('missing');

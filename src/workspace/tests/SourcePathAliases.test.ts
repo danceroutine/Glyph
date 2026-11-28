@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
@@ -23,8 +23,11 @@ it('resolves prospective names through their actual parent and rejects an inacce
     expect(readSourcePathAliases('/unused', link)).toEqual([root]);
     platform.mockReturnValue('linux');
     const helper = join(root, 'helper');
-    writeFileSync(helper, '#!/bin/sh\ncat >/dev/null\nprintf \'["/mount","/mount"]\'\n', { mode: 0o700 });
+    writeFileSync(helper, '#!/bin/sh\ncat > "$0.request"\nprintf \'["/mount","/mount"]\'\n', { mode: 0o700 });
     expect(readSourcePathAliases(helper, link, true)).toEqual([root, '/mount']);
+    const prospective = join(root, 'new', 'SKILL.md');
+    expect(readSourcePathAliases(helper, [link, join(link, 'new', 'SKILL.md')])).toEqual([root, prospective, '/mount']);
+    expect(JSON.parse(readFileSync(helper + '.request', 'utf8'))).toEqual([[root, prospective], false]);
   } finally {
     platform.mockRestore();
   }

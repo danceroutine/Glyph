@@ -1,9 +1,14 @@
 import { authorizeSources, enrollSources, type SourcePin } from '#src/workspace/SourceDisclosure.js';
-import type { TurnContextEnvelope, TurnContextSnapshot } from '#src/context/turns/TurnContextEnvelope.js';
+import {
+  hasModelContext,
+  type TurnContextEnvelope,
+  type TurnContextSnapshot,
+} from '#src/context/turns/TurnContextEnvelope.js';
 import type {
   TurnContextContribution,
   TurnContextContributor,
   TurnContextInput,
+  TurnContextReplay,
 } from '#src/context/turns/TurnContextContributor.js';
 import type { SkillCatalog } from './SkillCatalog.ts';
 import type { SkillActivation, SkillCandidate, SkillDescriptor, SkillInstruction } from './SkillDescriptor.ts';
@@ -17,8 +22,7 @@ export class SkillContextContributor implements TurnContextContributor {
     const sources = await this.catalog.refresh(signal);
     const descriptors = sources.filter(skill => skill.enabled && skill.status === 'active');
     const candidates = this.catalog.applicableSkills(descriptors, input.attachmentPaths);
-    const origins = await enrollSources(descriptors, signal);
-    const session = new SkillTurnContext(input.turnId, descriptors, candidates, this.catalog, sources, origins);
+    const session = new SkillTurnContext(input.turnId, descriptors, candidates, this.catalog, sources);
     try {
       await session.initialize(input.skillIds ?? [], signal);
     } catch (error) {
@@ -36,18 +40,27 @@ export class SkillTurnContext implements TurnContextContribution {
   private advertised = new Map<string, SkillCandidate>();
   private readonly initialCandidates: readonly SkillCandidate[];
   private initialSkills: readonly SkillInstruction[] = [];
+  private retired: ReadonlySet<string> = new Set();
+  private readonly delivered = new Map<string, SkillActivation>();
   private released = false;
+  private stopObserving?: () => void;
+  private origins: ReadonlyMap<string, readonly SourcePin[]> = new Map();
   constructor(
     private readonly turnId: string,
     private readonly descriptors: readonly SkillDescriptor[],
     initial: readonly SkillDescriptor[],
     private readonly catalog: SkillCatalog,
     private readonly sources = descriptors,
-    private readonly origins: ReadonlyMap<string, readonly SourcePin[]> = new Map(),
   ) {
     this.initialCandidates = this.offerCandidates(initial);
   }
   async initialize(ids: readonly string[], signal?: AbortSignal): Promise<void> {
+    this.stopObserving = this.catalog.retirements.subscribe(id => {
+      if (!this.retired.has(id) && this.descriptors.some(skill => skill.id === id)) {
+        this.retired = new Set(this.retired).add(id);
+      }
+    });
+    this.origins = await enrollSources(this.descriptors, signal);
     const activation = await this.activateManualSkills(ids, 'Selected by the user', signal);
     this.initialSkills = activation?.skills ?? [];
   }
@@ -55,9 +68,12 @@ export class SkillTurnContext implements TurnContextContribution {
    * actually entering the provider input. Unopened resources remain outside each disclosure. */
   disclosurePins(context?: TurnContextEnvelope): SourcePin[] {
     const candidates = context ? (context.skillCandidates ?? []) : this.advertised.values();
-    const result = [...candidates].flatMap(candidate => this.origins.get(candidate.id) ?? []);
+    const result = [...candidates]
+      .filter(candidate => context !== undefined || !this.retired.has(candidate.id))
+      .flatMap(candidate => this.origins.get(candidate.id) ?? []);
     const ids = context ? (context.skills ?? []).map(skill => skill.descriptor.id) : this.packages.keys();
     for (const id of ids) {
+      if (!context && this.retired.has(id)) continue;
       const active = this.packages.get(id)!.package;
       result.push(
         ...(this.origins.get(id) ?? []),
@@ -67,17 +83,20 @@ export class SkillTurnContext implements TurnContextContribution {
     return result;
   }
   initialEnvelope(): TurnContextEnvelope {
+    const skills = this.initialSkills.filter(skill => !this.retired.has(skill.descriptor.id));
     return {
       schema: 'glyph.agent-instructions.v1',
       sources: [],
-      skillCandidates: this.initialCandidates,
-      ...(this.initialSkills.length > 0 ? { skills: this.initialSkills } : {}),
+      skillCandidates: this.initialCandidates.filter(candidate => !this.retired.has(candidate.id)),
+      ...(skills.length > 0 ? { skills } : {}),
     };
   }
   disclosePaths(paths: readonly string[]): TurnContextEnvelope | undefined {
     if (this.advertised.size >= 50) return undefined;
     const candidates = this.catalog.applicableSkills(
-      this.descriptors.filter(skill => !this.advertised.has(skill.id) && !this.packages.has(skill.id)),
+      this.descriptors.filter(
+        skill => !this.retired.has(skill.id) && !this.advertised.has(skill.id) && !this.packages.has(skill.id),
+      ),
       paths,
     );
     const advertised = this.offerCandidates(candidates);
@@ -115,7 +134,7 @@ export class SkillTurnContext implements TurnContextContribution {
   activePackage(id: string): SkillPackage {
     if (this.released) throw new Error('Skill turn has ended.');
     const active = this.packages.get(id);
-    if (!active) throw new Error('Activate the skill before reading package resources.');
+    if (!active || this.retired.has(id)) throw new Error('Activate the skill before reading package resources.');
     return active.package;
   }
   readResource(id: string, path: string) {
@@ -128,20 +147,43 @@ export class SkillTurnContext implements TurnContextContribution {
       sources: [],
       activations: [],
       candidates: [],
-      skills: [...this.packages.values()].map(active => ({
+      skills: [...this.delivered.values()],
+    };
+  }
+  release(): void {
+    this.stopObserving?.();
+    this.released = true;
+    this.packages.clear();
+    this.advertised.clear();
+    this.delivered.clear();
+  }
+  /** Freeze the packages and resource reads entering this step. Retirement of a different catalog entry
+   * affects later selections. A successful response records just this request's admitted context. */
+  prepareReplay(): TurnContextReplay {
+    const retired = this.retired;
+    const included = new Set([...this.advertised.keys(), ...this.packages.keys()].filter(id => !retired.has(id)));
+    const activations: SkillActivation[] = [];
+    for (const [id, active] of this.packages) {
+      if (!included.has(id)) continue;
+      activations.push({
         descriptor: active.package.descriptor,
         revision: active.package.revision,
         reason: active.reason,
         explanation: active.explanation,
         body: active.package.body,
         resources: active.package.resources(),
-      })),
+      });
+    }
+    return {
+      ...(retired.size > 0 && { filter: (context: TurnContextEnvelope) => filterRetired(context, retired) }),
+      assertCurrent: () => {
+        if (this.retired !== retired && [...included].some(id => this.retired.has(id)))
+          throw new Error('Instruction sources changed during request preparation.');
+      },
+      didDeliver: () => {
+        for (const active of activations) this.delivered.set(active.descriptor.id, active);
+      },
     };
-  }
-  release(): void {
-    this.released = true;
-    this.packages.clear();
-    this.advertised.clear();
   }
   private async activate(
     requested: readonly string[],
@@ -167,15 +209,17 @@ export class SkillTurnContext implements TurnContextContribution {
     if (this.released) throw new Error('Skill turn has ended.');
     const selected: SkillDescriptor[] = [];
     for (const id of ids) {
-      if (this.packages.has(id)) continue;
-      const descriptor = this.descriptors.find(skill => skill.id === id);
+      if (this.packages.has(id) && !this.retired.has(id)) continue;
+      const descriptor = this.descriptors.find(skill => skill.id === id && !this.retired.has(id));
       if (reason === 'manual' && !descriptor)
         throw new Error('Selected skill is unavailable. Choose it again before sending.');
       if (descriptor && (reason === 'manual' || this.advertised.has(id))) selected.push(descriptor);
     }
     if (selected.length === 0) return undefined;
     if (reason === 'manual') {
-      const names = new Set([...this.packages.values()].map(active => active.package.descriptor.name));
+      const names = new Set(
+        [...this.packages].filter(([id]) => !this.retired.has(id)).map(([, active]) => active.package.descriptor.name),
+      );
       for (const skill of selected) {
         if (names.has(skill.name))
           throw new Error('Selected same-name skills from different origins. Choose the intended package.');
@@ -227,6 +271,8 @@ export class SkillTurnContext implements TurnContextContribution {
     );
     check();
     if (this.released) throw new Error('Skill turn ended during activation.');
+    if (selected.some(descriptor => this.retired.has(descriptor.id)))
+      throw new Error('The selected skill changed during activation. Select it again in a new turn.');
     const skills = packages.map(pinned => {
       const descriptor = pinned.descriptor;
       this.packages.set(descriptor.id, { package: pinned, reason, explanation });
@@ -246,4 +292,18 @@ export class SkillTurnContext implements TurnContextContribution {
 
 function modelDescriptor({ id, name, description, scope, origin }: SkillDescriptor): SkillCandidate {
   return { id, name, description, scope, origin: { scope: origin.scope, compatibility: origin.compatibility } };
+}
+
+function filterRetired(context: TurnContextEnvelope, retired: ReadonlySet<string>): TurnContextEnvelope | undefined {
+  const remaining = {
+    ...context,
+    ...(context.skillCandidates && {
+      skillCandidates: context.skillCandidates.filter(skill => !retired.has(skill.id)),
+    }),
+    ...(context.skills && { skills: context.skills.filter(skill => !retired.has(skill.descriptor.id)) }),
+    ...(context.skillResources && {
+      skillResources: context.skillResources.filter(resource => !retired.has(resource.skillId)),
+    }),
+  };
+  return hasModelContext(remaining) ? remaining : undefined;
 }

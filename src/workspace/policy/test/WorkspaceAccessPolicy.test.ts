@@ -31,6 +31,10 @@ describe(WorkspaceAccessPolicy, () => {
     expect(policy.exclusionsFor('/Project/private-other', true).privateRoot).toBe(false);
     expect(policy.exclusionsFor('/Project/.SKILL-STAGING', false).privateRoot).toBe(true);
     expect(policy.exclusionsFor('/Project/.SKILL-STAGING', true).privateRoot).toBe(false);
+    expect(policy.exclusionsFor('/Project/.GLYPH-SKILL-RUN/templates', false).privateRoot).toBe(true);
+    expect(policy.exclusionsFor('/Project/.glyph-ſkill-run', false).privateRoot).toBe(true);
+    expect(policy.isIgnoredDirectory('.glyph-ſkill-run', false)).toBe(true);
+    expect(policy.isIgnoredDirectory('.glyph-ſkill-run', true)).toBe(false);
     for (const spelling of ['.ſkill-ﬅaging', '.sKill-ﬆaging']) {
       expect(policy.exclusionsFor('/Project/' + spelling, false).privateRoot).toBe(true);
       expect(policy.isIgnoredDirectory(spelling, false)).toBe(true);
@@ -88,7 +92,7 @@ describe(WorkspaceAccessPolicy, () => {
       });
 
       expect(policy.toJSON()).toEqual({
-        ignoredDirectories: ['vendor', '.skill-staging'],
+        ignoredDirectories: ['vendor', '.skill-staging', '.glyph-skill-run'],
         sensitiveFileNames: ['private.txt'],
         sensitiveFilePrefixes: [],
         sensitiveFileExtensions: [],

@@ -1,0 +1,261 @@
+import { join, relative } from 'node:path';
+import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
+import { describe, expect, it, vi } from 'vitest';
+import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
+import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
+import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
+import {
+  AgentInstructionSourceKind,
+  AgentInstructionSourceStatus,
+  AgentInstructionActivationMode,
+} from '#src/instructions/AgentInstructionSource.js';
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
+import { AgentModeID } from '#src/chat/AgentMode.js';
+import { SkillLifecycleToolRuntime } from '#src/skills/SkillLifecycleToolRuntime.js';
+import { SkillTurnContext } from '#src/skills/SkillContextContributor.js';
+import { aSkillDescriptor, aSkillPackage } from './fixtures/aSkillDescriptor.ts';
+
+const draft = {
+  name: 'example',
+  source: 'not trusted',
+  files: [{ path: 'SKILL.md', content: '---\nname: example\ndescription: Example\n---\nBody', encoding: 'utf8' }],
+};
+function fixture(allowed = true) {
+  const preview = {
+    id: 'preview',
+    action: 'install' as const,
+    targetId: 'user:glyph',
+    name: 'example',
+    source: 'Agent proposal',
+    revision: 'pinned',
+    files: [{ path: 'SKILL.md', after: 'Body' }],
+  };
+  const manager = {
+    targets: [{ id: 'user:glyph', label: 'User' }],
+    prepare: vi.fn(async () => preview),
+    prepareRemoval: vi.fn(async () => ({ ...preview, action: 'remove' })),
+    apply: vi.fn(async () => ({ applied: true })),
+    discard: vi.fn(),
+    workspacePaths: vi.fn((): readonly string[] => []),
+  };
+  const approve = vi.fn(async () => allowed);
+  const descriptor = aSkillDescriptor();
+  const catalog = {
+    capture: vi.fn(async () => aSkillPackage(descriptor)),
+    resolveReference: vi.fn((id: string) => (id === descriptor.id ? descriptor : undefined)),
+  };
+  const session = new SkillTurnContext('turn', [descriptor], [descriptor], catalog as never);
+  const turns = { contribution: vi.fn(() => session), disclosePaths: vi.fn<TurnContextCoordinator['disclosePaths']>() };
+  const runner = { run: vi.fn(async () => ({ output: 'Done', exitCode: 0 })) };
+  const runtime = new SkillLifecycleToolRuntime(manager as never, approve, turns, runner as never);
+  const tool = runtime.tools[0]!;
+  const script = runtime.tools[1]!;
+  const context = {
+    turnId: 'turn',
+    mode: AgentModeID.AGENT,
+    chat: { id: 'chat', accountProvider: 'test', accountId: 'test' },
+  };
+  const signal = new AbortController().signal;
+  return { manager, approve, turns, runner, session, tool, script, context, signal };
+}
+describe(SkillLifecycleToolRuntime, () => {
+  it('advertises a strict object schema with every nullable script field required', () => {
+    const { script } = fixture();
+    expect(script.parameters).toMatchObject({
+      additionalProperties: false,
+      required: ['id', 'path', 'args', 'workspace_root_id'],
+    });
+  });
+  it.each([true, false])('applies exactly the approved revision when authorization is %s', async allowed => {
+    const { manager, approve, turns, tool, context, signal } = fixture(allowed);
+    const input = JSON.stringify({ target_id: 'user:glyph', replace_id: null, remove_id: null, draft });
+    tool.validateInput(input);
+    const output = JSON.parse(await tool.execute(input, signal, context));
+    expect(approve).toHaveBeenCalledWith(expect.objectContaining({ revision: 'pinned' }), signal);
+    expect(output).toMatchObject({ applied: allowed });
+    expect(turns.disclosePaths).not.toHaveBeenCalled();
+    expect(manager.apply).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    expect(manager.discard).toHaveBeenCalledWith('preview');
+  });
+  it('discloses newly applicable package instructions before approval and admits the regenerated proposal', async () => {
+    const { manager, approve, tool, context, turns, signal } = fixture();
+    const paths = ['two/.glyph/skills/example/SKILL.md', 'two/.glyph/skills/example/assets/icon.bin'];
+    manager.workspacePaths.mockReturnValue(paths);
+    const instructions = { schema: 'glyph.agent-instructions.v1' as const, sources: [] };
+    turns.disclosePaths.mockResolvedValueOnce(instructions);
+    const input = JSON.stringify({
+      target_id: 'user:glyph',
+      replace_id: null,
+      remove_id: 'installed-project-skill',
+      draft: null,
+    });
+    const first = await tool.execute(input, signal, context);
+    expect(JSON.parse(first)).toMatchObject({
+      status: 'INSTRUCTION_CONTEXT_REQUIRED',
+      instructionContext: instructions,
+    });
+    expect(turns.disclosePaths).toHaveBeenCalledWith(context.turnId, paths, signal);
+    expect(manager.workspacePaths).toHaveBeenCalledWith('preview');
+    expect(tool.activityPresentation?.show(first)).toBe(false);
+    expect(approve).not.toHaveBeenCalled();
+    expect(manager.apply).not.toHaveBeenCalled();
+    expect(manager.discard).toHaveBeenCalledWith('preview');
+    const final = await tool.execute(input, signal, context);
+    expect(JSON.parse(final)).toMatchObject({ applied: true });
+    expect(tool.activityPresentation?.show(final)).toBe(true);
+    expect(approve).toHaveBeenCalledOnce();
+    expect(manager.apply).toHaveBeenCalledOnce();
+    expect(manager.discard).toHaveBeenCalledTimes(2);
+  });
+  it.each(['project', 'user'] as const)(
+    'discloses directory and prospective file rules before approving a %s package',
+    async scope => {
+      const { root, location, catalog, state } = await aSkillLifecycle();
+      const project = scope === 'project' ? root : join(root, 'workspace');
+      const mount = join(project, 'mounted');
+      const single = vi.fn((path: string) => [path]);
+      const batch = vi.fn((paths: readonly string[]) =>
+        paths.flatMap(path => [path, join(mount, relative(join(root, 'skills'), path))]),
+      );
+      const manager = new SkillPackageManager(
+        [{ ...location, scope, ...(scope === 'user' && { sourcePathAliases: Object.assign(single, { batch }) }) }],
+        catalog,
+        state,
+        undefined,
+        new WorkspaceSourceRoutes([{ name: 'workspace', path: project }]),
+      );
+      const directory = scope === 'project' ? 'skills/example' : 'mounted/example';
+      const target = directory + '/references';
+      const manifest = directory + '/SKILL.md';
+      const turns = new TurnContextCoordinator(
+        new AgentInstructionCatalog([
+          {
+            discover: async () => [
+              {
+                id: 'directory',
+                label: 'directory',
+                kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+                path: '.glyph/rules/directory.md',
+                scope: '.',
+                content: 'Review directory changes',
+                revision: 'one',
+                status: AgentInstructionSourceStatus.ACTIVE,
+                activation: AgentInstructionActivationMode.FILE_PATTERN,
+                globs: [directory, target, manifest],
+              },
+            ],
+          },
+        ]),
+      );
+      const { approve, context, signal, runner } = fixture();
+      await turns.beginTurn({ turnId: context.turnId, attachmentPaths: [] });
+      const tool = new SkillLifecycleToolRuntime(manager, approve, turns, runner as never).tools[0]!;
+      const input = JSON.stringify({
+        target_id: location.id,
+        replace_id: null,
+        remove_id: null,
+        draft: aSkillDraft().toJSON(),
+      });
+      const first = JSON.parse(await tool.execute(input, signal, context));
+      expect(first).toMatchObject({
+        status: 'INSTRUCTION_CONTEXT_REQUIRED',
+        instructionContext: { sources: [{ id: 'directory' }], activations: [{ paths: [directory, manifest, target] }] },
+      });
+      expect(approve).not.toHaveBeenCalled();
+      expect(batch).toHaveBeenCalledTimes(scope === 'user' ? 1 : 0);
+      expect(single).not.toHaveBeenCalled();
+      expect(JSON.parse(await tool.execute(input, signal, context))).toMatchObject({ applied: true });
+      expect(approve).toHaveBeenCalledOnce();
+    },
+  );
+  it('discards the pending preview if instruction disclosure fails before review', async () => {
+    const { manager, approve, turns, tool, context, signal } = fixture();
+    manager.workspacePaths.mockReturnValue(['src/.glyph/skills/example/SKILL.md']);
+    turns.disclosePaths.mockImplementation(() => {
+      throw new Error('Instruction catalog changed');
+    });
+    const input = JSON.stringify({ target_id: 'project', replace_id: null, remove_id: null, draft });
+    await expect(tool.execute(input, signal, context)).rejects.toThrow('Instruction catalog changed');
+    expect(manager.discard).toHaveBeenCalledWith('preview');
+    expect(approve).not.toHaveBeenCalled();
+    expect(manager.apply).not.toHaveBeenCalled();
+  });
+  it('requires a turn, validates exclusive actions, and discards a cancelled proposal without mutation', async () => {
+    const { manager, approve, tool, context, signal } = fixture();
+    const input = JSON.stringify({ target_id: 'user:glyph', replace_id: null, remove_id: 'existing', draft: null });
+    await expect(tool.execute(input, signal, {})).rejects.toThrow('owning');
+    await expect(
+      tool.execute(
+        JSON.stringify({ target_id: 'user:glyph', replace_id: null, remove_id: null, draft: null }),
+        signal,
+        context,
+      ),
+    ).rejects.toThrow('Choose');
+    approve.mockRejectedValueOnce(new Error('Cancelled'));
+    await expect(tool.execute(input, signal, context)).rejects.toThrow('Cancelled');
+    expect(manager.prepareRemoval).toHaveBeenCalledWith('existing', signal);
+    expect(manager.apply).not.toHaveBeenCalled();
+    expect(manager.discard).toHaveBeenCalled();
+  });
+  it('delegates scripts from an active pinned package and rejects missing turn authority', async () => {
+    const { script, context, signal, runner, session, turns } = fixture();
+    const input = JSON.stringify({ id: 'project:example', path: 'scripts/task.sh', args: [] });
+    script.validateInput(input);
+    await expect(script.execute(input, signal, {})).rejects.toThrow('owning');
+    await expect(script.execute(input, signal, context)).rejects.toThrow('Activate');
+    await session.activateSource('project:example', 'manual', 'User selection');
+    expect(JSON.parse(await script.execute(input, signal, context))).toMatchObject({ output: 'Done' });
+    expect(runner.run).toHaveBeenCalledWith(
+      expect.objectContaining({ descriptor: expect.objectContaining({ id: 'project:example' }) }),
+      'scripts/task.sh',
+      [],
+      'chat',
+      signal,
+      undefined,
+      expect.any(Function),
+    );
+    session.release();
+    await expect(script.execute(input, signal, context)).rejects.toThrow('ended');
+    turns.contribution.mockReturnValueOnce(undefined as never);
+    await expect(script.execute(input, signal, context)).rejects.toThrow('unavailable');
+  });
+});
+
+it('propagates cancellation before applying a skill proposal', async () => {
+  const { manager, tool, context } = fixture();
+  const controller = new AbortController();
+  controller.abort(new Error('Cancelled skill proposal'));
+  await expect(
+    tool.execute(
+      JSON.stringify({ target_id: 'user:glyph', replace_id: null, remove_id: null, draft }),
+      controller.signal,
+      context,
+    ),
+  ).rejects.toThrow('Cancelled skill proposal');
+  expect(manager.apply).not.toHaveBeenCalled();
+});
+
+it('preserves failed script exit status and process output as a failed tool operation', async () => {
+  const { script, context, signal, runner, session } = fixture();
+  await session.activateSource('project:example', 'manual', 'Selected');
+  runner.run.mockResolvedValueOnce({ exitCode: 7, output: 'Failed process output' });
+  await expect(
+    script.execute(
+      JSON.stringify({ id: 'project:example', path: 'scripts/task.sh', args: [], workspace_root_id: 'second' }),
+      signal,
+      context,
+    ),
+  ).rejects.toMatchObject({
+    code: 'SKILL_SCRIPT_FAILED',
+    output: JSON.stringify({ exitCode: 7, output: 'Failed process output' }),
+  });
+  expect(runner.run).toHaveBeenCalledWith(
+    expect.anything(),
+    'scripts/task.sh',
+    [],
+    'chat',
+    signal,
+    'second',
+    expect.any(Function),
+  );
+});

@@ -1,5 +1,6 @@
+import { GlyphSkillFileComparison } from '#code-oss/ui/GlyphSkills/GlyphSkillFileComparison.tsx';
 import { Button, ButtonAppearance, ButtonVariant } from '#code-oss/ui/Button/Button.tsx';
-import { Target, Terminal } from 'lucide-preact';
+import { Target, Terminal, Sparkles } from 'lucide-preact';
 import type { GlyphApprovalCardState } from './useGlyphApprovalCardState.ts';
 import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 import { decisionStyles as shared } from '#code-oss/ui/GlyphDecisionStyles.ts';
@@ -40,22 +41,38 @@ export function GlyphApprovalCard({
   decide,
 }: GlyphApprovalCardProps) {
   const goal = request.goal;
-  const Icon = goal ? Target : Terminal;
+  const skillChange = request.skillChange;
+  const Icon = goal ? Target : skillChange ? Sparkles : Terminal;
   return (
     <section
       class={`glyph-approval-card ${shared.card} ${styles.root}`}
-      aria-label={goal ? 'Goal approval' : 'Command approval'}
+      aria-label={goal ? 'Goal approval' : skillChange ? 'Skill change approval' : 'Command approval'}
       aria-busy={pending}
     >
       <header class={shared.header}>
         <Icon size={16} aria-hidden="true" />
-        <h3>{request.title}</h3>
+        <h3>{escapeDisplayControls(request.title, true)}</h3>
         <span class={shared.detail}>Pending approval</span>
       </header>
       {goal ? (
         <p class={styles.objective}>{goal.objective}</p>
+      ) : skillChange ? (
+        <div class={styles.command}>
+          <p>
+            {escapeDisplayControls(skillChange.source, true)} · {skillChange.revision.slice(0, 12)}
+          </p>
+          {skillChange.destination && (
+            <p>
+              Destination ({skillChange.destination.scope}) ·{' '}
+              {escapeDisplayControls(skillChange.destination.label, true)}
+              <br />
+              <code>{escapeDisplayControls(skillChange.destination.path, true)}</code>
+            </p>
+          )}
+          <GlyphSkillFileComparison {...skillChange} />
+        </div>
       ) : (
-        <pre class={styles.command}>{request.command ?? request.detail}</pre>
+        <pre class={styles.command}>{escapeDisplayControls(request.command ?? request.detail)}</pre>
       )}
       {goal && (
         <p class={`${shared.detail} ${styles.detail}`}>
@@ -87,7 +104,7 @@ export function GlyphApprovalCard({
         ) : (
           <>
             <Button appearance={ButtonAppearance.GHOST} type="button" disabled={disabled || pending} onClick={skip}>
-              {goal ? 'Decline' : 'Skip'}
+              {goal ? 'Decline' : skillChange ? 'Keep unchanged' : 'Skip'}
             </Button>
             {request.choices === undefined && request.canRemember === true && (
               <Button type="button" disabled={disabled || pending} onClick={alwaysRun}>
@@ -95,7 +112,7 @@ export function GlyphApprovalCard({
               </Button>
             )}
             <Button variant={ButtonVariant.PRIMARY} type="button" disabled={disabled || pending} onClick={run}>
-              {pending ? 'Submitting…' : goal ? 'Start goal' : 'Run'}
+              {pending ? 'Submitting…' : goal ? 'Start goal' : skillChange ? 'Apply change' : 'Run'}
             </Button>
           </>
         )}
@@ -109,3 +126,4 @@ export function GlyphApprovalCard({
     </section>
   );
 }
+import { escapeDisplayControls } from '#src/shared/presentation/escapeDisplayControls.js';
