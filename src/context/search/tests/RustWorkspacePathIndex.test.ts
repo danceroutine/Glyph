@@ -960,6 +960,36 @@ describe(RustWorkspacePathIndex, () => {
   });
 
   describe(RustWorkspacePathIndex.prototype.searchContents, () => {
+    it('returns file counts with a live access guard and requests no content identities', async () => {
+      const counts = {
+        outputMode: 'count',
+        counts: [{ path: 'notes.md', count: 3 }],
+        searchedFiles: 1,
+        skippedFiles: 0,
+        indexTruncated: false,
+        truncated: false,
+        nextOffset: null,
+      };
+      const worker = new FakeWorker(request => {
+        if (request.method === 'initialize') return indexState(1);
+        if (request.method === 'contentSearch') return counts;
+        return { shutdown: true };
+      });
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      onTestFinished(() => index.dispose());
+      const retainAccess = vi.fn();
+      const sourceAuthority = { capture: vi.fn(), authorize: vi.fn() };
+
+      await expect(
+        index.searchContents('value', { outputMode: 'count', retainAccess, sourceAuthority }),
+      ).resolves.toEqual(counts);
+      expect(worker.requests.find(request => request.method === 'contentSearch')?.params).not.toHaveProperty(
+        'includeSourceIdentity',
+      );
+      expect(retainAccess).toHaveBeenCalledWith(expect.any(Function));
+      expect(sourceAuthority.capture).not.toHaveBeenCalled();
+    });
+
     it('does not ask a shutting-down worker to cancel an abandoned content search', async () => {
       const worker = new FakeWorker(request => {
         if (request.method === 'initialize') return indexState(1);
