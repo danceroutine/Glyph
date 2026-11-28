@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, w
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
+import { SkillRepositoryCredentialHelpers } from '#src/skills/SkillRepositoryCredentialHelpers.js';
 import { captureRepositoryEnvironment } from '#src/skills/SkillRepositoryConfiguration.js';
 import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
@@ -434,35 +435,43 @@ async function credentialCacheFixture() {
   await writeFile(f.global, '[credential]\nhelper = store\nhelper = cache\n');
   const checks = vi.fn(testFilesystemMetadata.assertHostPaths);
   const metadata = { ...testFilesystemMetadata, assertHostPaths: checks };
-  const capture = () =>
-    captureRepositoryEnvironment(
-      [f.project],
-      cwd,
-      new AbortController().signal,
-      metadata,
-      'source.git',
-      undefined,
-      vi.fn(),
+  let roots = [f.project];
+  const leases = new HostProcessLeases(() => roots);
+  const attach = (root: string) =>
+    leases.admitWorkspace(
+      () => [...roots, root],
+      updated => {
+        roots = [...updated];
+      },
     );
-  const credential = async (
+  const authority = new HostExecutionAuthority(leases, metadata);
+  const secondary = new SkillRepositoryCredentialHelpers(authority);
+  const signal = new AbortController().signal;
+  const capture = () =>
+    captureRepositoryEnvironment([f.project], cwd, signal, metadata, 'source.git', authority, vi.fn(), secondary);
+  const credential = (
     env: NodeJS.ProcessEnv,
     operation: 'fill' | 'approve' | 'reject',
     url = 'https://fixture.invalid/selected',
-  ) => {
-    const child = spawn(git, ['--git-dir=source.git', 'credential', operation], {
-      cwd,
-      env,
-      stdio: ['pipe', 'ignore', 'ignore'],
-    });
-    const done = new Promise<number | null>((resolve, reject) => {
-      child.once('error', reject);
-      child.once('close', resolve);
-    });
-    const value = operation === 'fill' ? '' : 'username=fixture\npassword=fixture-only\n';
-    child.stdin.end('url=' + url + '\n' + value + '\n');
-    return done;
-  };
-  return { ...f, configured, legacy, checks, capture, credential };
+  ) =>
+    authority.run(signal, (active, include) =>
+      secondary.run(cwd, env, active, include, async (environment, processSignal) => {
+        const child = spawn(git, ['--git-dir=source.git', 'credential', operation], {
+          cwd,
+          env: environment,
+          signal: processSignal,
+          stdio: ['pipe', 'ignore', 'ignore'],
+        });
+        const done = new Promise<number | null>((resolve, reject) => {
+          child.once('error', reject);
+          child.once('close', resolve);
+        });
+        const value = operation === 'fill' ? '' : 'username=fixture\npassword=fixture-only\n';
+        child.stdin.end('url=' + url + '\n' + value + '\n');
+        return done;
+      }),
+    );
+  return { ...f, configured, legacy, checks, capture, credential, attach };
 }
 
 /** This disposable endpoint serves a synthetic account for fixture.invalid. */
@@ -619,10 +628,9 @@ it.skipIf(process.platform === 'win32').each(['cache', 'store', 'executable'])(
 );
 
 it.skipIf(process.platform === 'win32').each(['false', 'initial', 'true'])(
-  'makes an admitted downstream cache available only for possible redirects with followRedirects=%s',
+  'keeps the downstream cache in its own credential context with followRedirects=%s',
   async redirects => {
     const f = await credentialCacheFixture();
-    for (const name of ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY']) vi.stubEnv(name, undefined);
     const directory = join(f.configured, 'git/credential');
     const daemon = await fixtureCacheDaemon(directory);
     onTestFinished(daemon.close);
@@ -631,38 +639,99 @@ it.skipIf(process.platform === 'win32').each(['false', 'initial', 'true'])(
       `[http "https://fixture.invalid"]\nfollowRedirects = ${redirects}\n[credential "https://downstream.invalid"]\nhelper = cache\n`,
     );
     const env = await f.capture();
+    f.checks.mockClear();
     expect(await f.credential(env, 'reject')).toBe(0);
     expect(daemon.actions).toEqual([]);
+    expect(f.checks.mock.calls.flatMap(([paths]) => paths)).not.toContain(join(directory, 'socket'));
     expect(await f.credential(env, 'reject', 'https://downstream.invalid/repository')).toBe(0);
-    const lease = f.checks.mock.calls.at(-1)![0];
-    if (redirects === 'false') {
-      expect(daemon.actions).toEqual([]);
-      expect(lease).not.toContain(join(directory, 'socket'));
-    } else {
-      expect(daemon.actions).toEqual(['action=erase']);
-      expect(lease).toContain(join(directory, 'socket'));
-    }
+    expect(daemon.actions).toEqual(['action=erase']);
+    expect(f.checks.mock.calls.flatMap(([paths]) => paths)).toContain(join(directory, 'socket'));
   },
 );
 
-it.skipIf(process.platform === 'win32').each([
-  ['URL-matched proxy', '[http "https://fixture.invalid"]\nproxy = http://proxy.invalid', true],
-  ['unrelated proxy', '[http "https://other.invalid"]\nproxy = http://proxy.invalid', false],
-  ['remote proxy reset', '[http]\nproxy = http://proxy.invalid\n[remote "origin"]\nproxy =', false],
-  ['environment proxy', '', true],
-  ['certificate passphrase', '[http "https://fixture.invalid"]\nsslCertPasswordProtected', true],
-] as const)('admits secondary helper inputs according to the selected %s', async (kind, settings, active) => {
+it.skipIf(process.platform === 'win32').each(['global', 'host-scoped'])(
+  'applies a %s username before a partial username-qualified helper reset',
+  async kind => {
+    const f = await credentialCacheFixture();
+    const helper = join(f.home, 'account-helper');
+    await writeFile(helper, '#!/bin/sh\necho "$1" >> "$0.log"\necho password=fixture-only\n', { mode: 0o700 });
+    const username = kind === 'global' ? '[credential]' : '[credential "https://fixture.invalid"]';
+    await symlink(f.project, f.legacy);
+    await writeFile(
+      f.global,
+      `[http]\nfollowRedirects = false\n[credential]\nhelper = cache\n${username}\nusername = alice\n[credential "alice@fixture.invalid/selected"]\nhelper =\nhelper = ${helper}\n`,
+    );
+    const env = await f.capture();
+    expect(await f.credential(env, 'fill')).toBe(0);
+    expect(await readFile(helper + '.log', 'utf8')).toBe('get\n');
+    expect(f.checks.mock.calls.at(-1)![0]).toContain(helper);
+  },
+);
+it.skipIf(process.platform === 'win32').each(['http://proxy.invalid', 'cert:///'])(
+  'admits the cache socket when Git requests secondary credentials for %s',
+  async scope => {
+    const f = await credentialCacheFixture();
+    const directory = join(f.configured, 'git/credential');
+    const daemon = await fixtureCacheDaemon(directory);
+    onTestFinished(daemon.close);
+    await writeFile(f.global, `[http]\nfollowRedirects = off\n[credential "${scope}"]\nhelper = cache\n`);
+    const env = await f.capture();
+    f.checks.mockClear();
+    expect(await f.credential(env, 'reject', scope + '/fixture')).toBe(0);
+    expect(daemon.actions).toEqual(['action=erase']);
+    expect(f.checks.mock.calls.flatMap(([paths]) => paths)).toContain(join(directory, 'socket'));
+  },
+);
+
+it.skipIf(process.platform === 'win32')('rechecks a secondary cache endpoint when Git first requests it', async () => {
   const f = await credentialCacheFixture();
-  const proxy = kind === 'environment proxy' ? 'http://proxy.invalid' : undefined;
-  vi.stubEnv('https_proxy', proxy);
-  vi.stubEnv('HTTPS_PROXY', kind === 'remote proxy reset' ? 'http://proxy.invalid' : undefined);
   const directory = join(f.configured, 'git/credential');
   const daemon = await fixtureCacheDaemon(directory);
   onTestFinished(daemon.close);
-  const scope = kind === 'certificate passphrase' ? 'cert:///' : 'http://proxy.invalid';
-  await writeFile(f.global, `[http]\nfollowRedirects = off\n${settings}\n[credential "${scope}"]\nhelper = cache\n`);
+  await writeFile(f.global, '[credential "https://downstream.invalid"]\nhelper = cache\n');
   const env = await f.capture();
-  expect(await f.credential(env, 'reject', scope + '/fixture')).toBe(0);
-  expect(daemon.actions).toEqual(active ? ['action=erase'] : []);
-  expect(f.checks.mock.calls.at(-1)![0].includes(join(directory, 'socket'))).toBe(active);
+  await f.attach(directory);
+  expect(await f.credential(env, 'reject')).toBe(0);
+  await expect(f.credential(env, 'reject', 'https://downstream.invalid/repository')).rejects.toThrow();
+  expect(daemon.actions).toEqual([]);
 });
+
+it.skipIf(process.platform === 'win32')('admits each member of a secondary helper chain in Git order', async () => {
+  const f = await credentialCacheFixture();
+  const first = join(f.home, 'username'),
+    second = join(f.home, 'password');
+  await writeFile(first, '#!/bin/sh\necho "$1" >> "$0.log"\necho username=fixture\n', { mode: 0o700 });
+  await writeFile(second, '#!/bin/sh\necho "$1" >> "$0.log"\necho password=fixture-only\n', { mode: 0o700 });
+  await writeFile(f.global, `[credential "https://downstream.invalid"]\nhelper = ${first}\nhelper = ${second}\n`);
+  const env = await f.capture();
+  f.checks.mockClear();
+  expect(await f.credential(env, 'fill', 'https://downstream.invalid/package')).toBe(0);
+  expect(await readFile(first + '.log', 'utf8')).toBe('get\n');
+  expect(await readFile(second + '.log', 'utf8')).toBe('get\n');
+  const checked = f.checks.mock.calls.flatMap(([paths]) => paths);
+  expect(checked.indexOf(first)).toBeGreaterThanOrEqual(0);
+  expect(checked.indexOf(second)).toBeGreaterThan(checked.indexOf(first));
+});
+
+it.skipIf(process.platform === 'win32')(
+  'keeps a secondary helper inert when the caller has no process lease for it',
+  async () => {
+    const f = await credentialCacheFixture();
+    const helper = join(f.home, 'standalone-helper');
+    await writeFile(helper, '#!/bin/sh\necho "$1" >> "$0.log"\necho username=fixture\necho password=fixture-only\n', {
+      mode: 0o700,
+    });
+    await writeFile(f.global, `[credential "https://downstream.invalid"]\nhelper = ${helper}\n`);
+    const env = await captureRepositoryEnvironment(
+      [f.project],
+      f.preview,
+      new AbortController().signal,
+      testFilesystemMetadata,
+      'source.git',
+      undefined,
+      vi.fn(),
+    );
+    expect(await f.credential(env, 'fill', 'https://downstream.invalid/package')).not.toBe(0);
+    await expect(readFile(helper + '.log')).rejects.toMatchObject({ code: 'ENOENT' });
+  },
+);

@@ -1,6 +1,8 @@
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { chmod, mkdir, mkdtemp, writeFile, readFile, rm, symlink, realpath, rename } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createServer, type AddressInfo, type Socket } from 'node:net';
+import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -386,4 +388,129 @@ it.each(['attributesFile', 'worktree'])('requires self-contained %s settings for
   await expect(transport.run(['--git-dir=source.git', 'ls-remote', 'origin'])).rejects.toThrow(
     setting === 'worktree' ? 'explicit worktree' : 'attributes require an absolute or home-relative path',
   );
+});
+
+/** Hold Git at a real loopback connection so a peer attachment occurs while the fetch is live. */
+async function heldConnection() {
+  const sockets = new Set<Socket>();
+  const server = createServer(socket => {
+    sockets.add(socket);
+    socket.on('error', () => {});
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  onTestFinished(async () => {
+    for (const socket of sockets) socket.destroy();
+    const closed = once(server, 'close');
+    server.close();
+    await closed;
+  });
+  return { server, host: '127.0.0.1:' + (server.address() as AddressInfo).port };
+}
+
+it
+  .skipIf(process.platform === 'win32')
+  .each([
+    'empty HTTP proxy',
+    'empty URL-specific proxy',
+    'empty named remote proxy',
+    'unrelated URL-specific proxy',
+    'URL-specific proxy authentication',
+    'uppercase proxy authentication',
+    'NO_PROXY host',
+    'no_proxy CIDR',
+    'NO_PROXY wildcard',
+    'lowercase precedence',
+    'proxy authentication',
+    'proxy authentication with a bypass',
+  ])('leases a secondary helper only when Git requests it with %s', async mode => {
+  const root = await fixture();
+  const preview = join(root, 'preview');
+  const helperDirectory = join(root, 'account-tools');
+  await mkdir(preview);
+  await mkdir(helperDirectory);
+  const helper = join(helperDirectory, 'provide-credentials');
+  await writeFile(helper, '#!/bin/sh\necho "$1" >> "$0.log"\necho username=fixture\necho password=fixture-only\n', {
+    mode: 0o700,
+  });
+  const direct = await heldConnection();
+  const proxy = await heldConnection();
+  const needsHelper = mode.includes('proxy authentication');
+  const proxyUrl = 'http://' + (needsHelper ? 'fixture@' : '') + proxy.host;
+  const url = 'https://' + direct.host + '/repository';
+  vi.stubEnv('https_proxy', proxyUrl);
+  for (const key of ['HTTPS_PROXY', 'NO_PROXY', 'no_proxy']) vi.stubEnv(key, undefined);
+  let settings = '[http]\nfollowRedirects = false\n';
+  switch (mode) {
+    case 'empty HTTP proxy':
+      settings += 'proxy =\n';
+      break;
+    case 'empty URL-specific proxy':
+      settings += `[http "${url}"]\nproxy =\n`;
+      break;
+    case 'empty named remote proxy':
+      settings += '[remote "origin"]\nproxy =\n';
+      break;
+    case 'unrelated URL-specific proxy':
+      vi.stubEnv('https_proxy', undefined);
+      settings += `[http "https://unrelated.invalid"]\nproxy = ${proxyUrl}\n`;
+      break;
+    case 'URL-specific proxy authentication':
+      vi.stubEnv('https_proxy', undefined);
+      settings += `[http "${url}"]\nproxy = ${proxyUrl}\n`;
+      break;
+    case 'uppercase proxy authentication':
+      vi.stubEnv('https_proxy', undefined);
+      vi.stubEnv('HTTPS_PROXY', proxyUrl);
+      break;
+    case 'NO_PROXY wildcard':
+      vi.stubEnv('NO_PROXY', '*');
+      break;
+    case 'no_proxy CIDR':
+      vi.stubEnv('no_proxy', '127.0.0.0/8');
+      break;
+    case 'lowercase precedence':
+      vi.stubEnv('NO_PROXY', 'elsewhere.invalid');
+      vi.stubEnv('no_proxy', '127.0.0.1');
+      break;
+    case 'NO_PROXY host':
+    case 'proxy authentication with a bypass':
+      vi.stubEnv('NO_PROXY', '127.0.0.1');
+      break;
+  }
+  await writeFile(join(root, 'trusted.config'), settings + `[credential "http://${proxy.host}"]\nhelper = ${helper}\n`);
+  const leases = new HostProcessLeases([]);
+  const cancelled = new AbortController();
+  const signal = AbortSignal.any([cancelled.signal, AbortSignal.timeout(8_000)]);
+  const transport = new SkillRepositoryGit(preview, signal, leases, testFilesystemMetadata);
+  await transport.initialize(url);
+  const server = needsHelper && mode !== 'proxy authentication with a bypass' ? proxy.server : direct.server;
+  const connected = once(server, 'connection', { signal });
+  const fetch = transport.run(['--git-dir=source.git', 'ls-remote', 'origin']).then(
+    () => new Error('Unexpected fetch completion'),
+    (error: Error) => error,
+  );
+  try {
+    await Promise.race([
+      connected,
+      fetch.then(error => {
+        throw error;
+      }),
+    ]);
+    const publish = vi.fn();
+    await leases.admitWorkspace(() => [helperDirectory], publish);
+    expect(publish).toHaveBeenCalledOnce();
+    cancelled.abort(new Error('Finished observing the direct transfer'));
+    const result = await fetch;
+    if (needsHelper) {
+      expect(await readFile(helper + '.log', 'utf8')).toBe('get\n');
+      expect(result.message).toContain('workspace is attaching');
+    } else {
+      await expect(readFile(helper + '.log', 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(result.message).toContain('Finished observing the direct transfer');
+    }
+  } finally {
+    cancelled.abort();
+    await fetch;
+  }
 });

@@ -7,6 +7,7 @@ import { userInfo } from 'node:os';
 import { assertNetworkProxy, repositoryEnvironment } from '#src/shell/TrustedHostExecutable.js';
 import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
 import { readHostFile } from './readHostFile.ts';
+import type { SkillRepositoryCredentialHelpers } from './SkillRepositoryCredentialHelpers.ts';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 
@@ -175,6 +176,7 @@ export async function captureRepositoryEnvironment(
   gitDirectory?: string,
   authority = new HostExecutionAuthority(roots, metadata),
   selectLocalMirror?: (path: string, environment: NodeJS.ProcessEnv) => Promise<string>,
+  secondary?: SkillRepositoryCredentialHelpers,
 ): Promise<NodeJS.ProcessEnv> {
   const environment = repositoryEnvironment(authority.workspaceRoots);
   const home = environment.HOME ?? environment.USERPROFILE ?? userInfo().homedir;
@@ -358,27 +360,26 @@ export async function captureRepositoryEnvironment(
     authority.admit(path);
     return path;
   };
-  const resolveHelper = (name: string, https: boolean) =>
-    authority.admitGroup(async group => {
-      const helper = await pinCredentialHelper(name, executionDirectory, group);
-      if (helper.kind === 'cache') {
-        if (!https) return '!:';
-        const socket = shellArgument(await repositoryCacheSocket(home, group));
-        // An unavailable daemon must never launch a background service outside this preview's lease.
-        const noPrograms = shellArgument(nullDevice);
-        return `!test -S ${socket} || exit 0; PATH=${noPrograms} GIT_EXEC_PATH=${noPrograms} exec ${shellArgument(helper.path)} --socket ${socket}`;
+  const resolveHelper = async (name: string, https: boolean, group: HostExecutionAuthority) => {
+    const helper = await pinCredentialHelper(name, executionDirectory, group);
+    if (helper.kind === 'cache') {
+      if (!https) return '!:';
+      const socket = shellArgument(await repositoryCacheSocket(home, group));
+      // An unavailable daemon must never launch a background service outside this preview's lease.
+      const noPrograms = shellArgument(nullDevice);
+      return `!test -S ${socket} || exit 0; PATH=${noPrograms} GIT_EXEC_PATH=${noPrograms} exec ${shellArgument(helper.path)} --socket ${socket}`;
+    }
+    if (https && helper.kind === 'store') {
+      for (const path of [join(home, '.git-credentials'), join(xdg, 'git/credentials')]) {
+        const physical = group.admit(path);
+        group.admit(path + '.lock');
+        group.admit(physical + '.lock');
       }
-      if (https && helper.kind === 'store') {
-        for (const path of [join(home, '.git-credentials'), join(xdg, 'git/credentials')]) {
-          const physical = group.admit(path);
-          group.admit(path + '.lock');
-          group.admit(physical + '.lock');
-        }
-      }
-      return '!exec ' + shellArgument(helper.path);
-    });
+    }
+    return '!exec ' + shellArgument(helper.path);
+  };
   if (!gitDirectory || !selectLocalMirror) {
-    for (const [setting, name] of helpers) setting.value = await resolveHelper(name, false);
+    for (const [setting, name] of helpers) setting.value = await resolveHelper(name, false, authority);
   }
   const env: NodeJS.ProcessEnv = {
     ...isolated,
@@ -425,47 +426,17 @@ export async function captureRepositoryEnvironment(
         );
         return markers.toString('utf8');
       });
-      let additionalOrigins = false;
-      if (selected.size !== helpers.size) {
-        const http = await readGit(
-          [repo, 'config', '--null', '--type=bool-or-str', '--get-urlmatch', 'http', remote],
-          1024 * 1024,
-          undefined,
-          env,
-          'allow-no-match',
-        );
-        const settings = new Map(
-          http
-            .toString('utf8')
-            .split('\0')
-            .slice(0, -1)
-            .map(text => {
-              const { key, value } = entry(text);
-              return [key, value];
-            }),
-        );
-        // The named remote overrides HTTP's URL-matched proxy, including an explicit empty override.
-        const proxy =
-          entries.findLast(setting => setting.key.toLowerCase() === 'remote.origin.proxy')?.value ??
-          settings.get('http.proxy') ??
-          env.https_proxy ??
-          env.HTTPS_PROXY;
-        // Proxies and encrypted client certificates can request credentials independently of the fetch URL.
-        additionalOrigins =
-          settings.get('http.followredirects') !== 'false' ||
-          Boolean(proxy) ||
-          settings.get('http.sslcertpasswordprotected') === 'true';
-      }
       for (const [setting, name] of helpers) {
         if (selected.has(setting)) {
-          setting.value = await resolveHelper(name, true);
-        } else if (additionalOrigins) {
+          setting.value = await resolveHelper(name, true, authority);
+        } else if (secondary) {
           try {
-            setting.value = await resolveHelper(name, true);
+            const group = authority.inputs();
+            const command = await resolveHelper(name, true, group);
+            await group.validate();
+            setting.value = secondary.register(group, command);
           } catch {
             signal.throwIfAborted();
-            // Git can select this scope after a redirect or for a proxy. Block a denied lookup at
-            // that point, without making a different host depend on the rejected file or socket.
             setting.value = "!echo 'quit=true'; :";
           }
         }
@@ -492,8 +463,8 @@ async function selectedCredentialHelpers(
   helpers: readonly Entry[],
   probe: (settings: readonly Entry[]) => Promise<string>,
 ): Promise<Set<Entry>> {
-  const scopes = entries.filter(setting => /^credential\.(?:.*\.)?helper$/iu.test(setting.key));
-  if (scopes.every(setting => setting.key.toLowerCase() === 'credential.helper')) return new Set(helpers);
+  const scopes = entries.filter(setting => setting.key.toLowerCase().startsWith('credential.'));
+  if (!scopes.some(setting => /^credential\..*\.helper$/iu.test(setting.key))) return new Set(helpers);
   const prefix = 'glyph-helper-' + randomUUID() + '-';
   const markers = new Map(helpers.map((setting, index) => [setting, prefix + index]));
   const settings = scopes.map(setting => {

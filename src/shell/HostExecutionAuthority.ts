@@ -46,32 +46,46 @@ export class HostExecutionAuthority {
     return this.admit(trustedHostExecutable(name, this.workspaceRoots));
   }
 
-  /** Publish a helper's executable and inputs together after the complete selection has passed admission.
-   * A rejected optional helper contributes no paths to subsequent process leases. */
-  async admitGroup<T>(
-    prepare: (group: Pick<HostExecutionAuthority, 'admit' | 'admitSocket'>) => Promise<T>,
-  ): Promise<T> {
-    const group = new HostExecutionAuthority(this.processes, this.host);
-    const result = await prepare(group);
-    await group.validate();
-    for (const path of group.paths) this.paths.add(path);
-    for (const path of group.sockets) this.sockets.add(path);
-    return result;
+  /** Start a separate input set under the same host and live workspace authority. */
+  inputs(): HostExecutionAuthority {
+    return new HostExecutionAuthority(this.processes, this.host);
   }
 
-  /** Reauthorize at handoff. The operation settles after its child closes or its temporary store is removed. */
-  async run<T>(signal: AbortSignal, launch: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  /** A child can admit additional inputs before a deferred helper runs. Those inputs belong to this
+   * process through child close. Concurrent and subsequent commands retain their own input sets. */
+  async run<T>(
+    signal: AbortSignal,
+    launch: (signal: AbortSignal, include: (inputs: HostExecutionAuthority) => Promise<void>) => Promise<T>,
+  ): Promise<T> {
     signal.throwIfAborted();
-    const paths = [...this.paths];
-    const assertCurrent = await this.guard(paths);
+    const inputs = this.inputs();
+    inputs.merge(this);
+    const current = await inputs.validate();
     signal.throwIfAborted();
-    assertCurrent();
-    return this.processes.run(roots => this.checkPaths(paths, roots), signal, launch);
+    current();
+    return this.processes.run(
+      roots => inputs.checkPaths([...inputs.paths], roots),
+      signal,
+      processSignal => launch(processSignal, group => inputs.include(group)),
+    );
   }
 
   /** Verify the physical paths and return a final root check for synchronous process handoff. */
   validate(): Promise<() => void> {
     return this.guard([...this.paths]);
+  }
+
+  private async include(group: HostExecutionAuthority): Promise<void> {
+    const selected = this.inputs();
+    selected.merge(group);
+    const current = await selected.validate();
+    current();
+    this.merge(selected);
+  }
+
+  private merge(group: HostExecutionAuthority): void {
+    for (const path of group.paths) this.paths.add(path);
+    for (const path of group.sockets) this.sockets.add(path);
   }
 
   private async checkPaths(paths: readonly string[], roots: readonly string[]): Promise<void> {

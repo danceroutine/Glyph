@@ -1,4 +1,5 @@
 import { repositoryEnvironment } from '#src/shell/TrustedHostExecutable.js';
+import { SkillRepositoryCredentialHelpers } from './SkillRepositoryCredentialHelpers.ts';
 import { captureRepositoryEnvironment } from './SkillRepositoryConfiguration.ts';
 import { HostExecutionAuthority, type HostWorkspaceRoots } from '#src/shell/HostExecutionAuthority.js';
 import type { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
@@ -43,6 +44,7 @@ export class SkillRepositoryGit {
   private readonly mirrorConfigurations = new Map<string, string>();
   private environment: Promise<NodeJS.ProcessEnv> | undefined;
   private readonly authority: HostExecutionAuthority;
+  private readonly credentialHelpers: SkillRepositoryCredentialHelpers;
   constructor(
     private readonly cwd: string,
     private readonly signal: AbortSignal,
@@ -51,6 +53,7 @@ export class SkillRepositoryGit {
   ) {
     this.authority = new HostExecutionAuthority(workspace, metadata);
     this.authority.admit(cwd);
+    this.credentialHelpers = new SkillRepositoryCredentialHelpers(this.authority);
   }
   async initialize(url: string): Promise<void> {
     const empty = {
@@ -98,7 +101,11 @@ export class SkillRepositoryGit {
     const argv = windows
       ? gitArgs
       : ['-c', 'ulimit -f "$1" || exit 1; shift; exec "$@"', 'glyph-git', String(blocks), executable, ...gitArgs];
-    const result = await this.authority.run(this.signal, signal => this.spawn(command, argv, env, maxOutput, signal));
+    const result = await this.authority.run(this.signal, (signal, include) =>
+      this.credentialHelpers.run(this.cwd, env, signal, include, (configured, processSignal) =>
+        this.spawn(command, argv, configured, maxOutput, processSignal),
+      ),
+    );
     this.signal.throwIfAborted();
     await storageBytes(this.cwd);
     return result;
@@ -116,6 +123,7 @@ export class SkillRepositoryGit {
         this.localMirror = await this.selectLocalMirror(path, environment);
         return this.localMirror;
       },
+      this.credentialHelpers,
     );
   }
 

@@ -51,6 +51,7 @@ it('uses fixed system programs on Windows and rejects unavailable interpreters',
     expect(repositoryEnvironment([]).PATH).toContain('System32');
     expect(() => trustedHostExecutable('git', ['/'])).toThrow('trusted git');
     expect(() => trustedHostExecutable('sh', [])).toThrow('trusted sh');
+    expect(() => trustedHostExecutable('sleep', [])).toThrow('trusted sleep');
     expect(() => trustedHostExecutable('ssh', [])).toThrow('trusted ssh');
   } finally {
     Object.defineProperty(process, 'platform', descriptor);

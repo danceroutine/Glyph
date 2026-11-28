@@ -48,6 +48,7 @@ const filesystem = new Set([
   'src/skills/SkillPackageSource.ts',
   'src/skills/SkillPackageStorage.ts',
   'src/skills/SkillRepositoryConfiguration.ts',
+  'src/skills/SkillRepositoryCredentialHelpers.ts',
   'src/skills/SkillRepositoryGit.ts',
   'src/skills/SkillScriptRunner.ts',
   'src/skills/SkillStateStore.ts',
