@@ -232,22 +232,35 @@ it.describe('AGENTS.md instruction support', () => {
 it.describe('Multi-root AGENTS.md isolation', () => {
   it.use({
     scriptedProvider: true,
-    workspaceFiles: { 'AGENTS.md': 'FIRST ROOT', 'src/file.ts': 'first\n' },
+    workspaceFiles: { 'AGENTS.md': 'FIRST ROOT', 'src/AGENTS.md': 'FIRST NESTED', 'src/file.ts': 'first\n' },
     additionalRoots: [
-      [{ name: 'second', files: { 'AGENTS.md': 'SECOND ROOT', 'src/file.ts': 'second\n' } }],
+      [
+        {
+          name: 'second',
+          files: { 'AGENTS.md': 'SECOND ROOT', 'src/AGENTS.md': 'SECOND NESTED', 'src/file.ts': 'second\n' },
+        },
+      ],
       { scope: 'test' },
     ],
   });
 
-  it('keeps instructions from unrelated workspace roots out of a target read', async ({ glyph, provider }) => {
+  it('loads each workspace root up front and discloses nested guidance only for the target read', async ({
+    glyph,
+    provider,
+  }) => {
     const [read] = await runToolTurn(glyph, provider, [
       call('read_project_file', { path: 'workspace/src/file.ts', start_line: null, end_line: null }),
     ]);
-    expect(findInstructionContext(provider.requests[0])?.sources ?? []).toEqual([]);
-    expect(read.instructionContext.sources.map(source => [source.path, source.content])).toEqual([
+    expect(
+      initialInstructionContext(provider.requests[0]).sources.map(source => [source.path, source.content]),
+    ).toEqual([
+      ['second/AGENTS.md', 'SECOND ROOT'],
       ['workspace/AGENTS.md', 'FIRST ROOT'],
     ]);
-    expect(JSON.stringify(provider.requests.at(-1).body.input)).not.toContain('SECOND ROOT');
+    expect(read.instructionContext.sources.map(source => [source.path, source.content])).toEqual([
+      ['workspace/src/AGENTS.md', 'FIRST NESTED'],
+    ]);
+    expect(JSON.stringify(provider.requests.at(-1).body.input)).not.toContain('SECOND NESTED');
   });
 });
 
