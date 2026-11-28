@@ -470,7 +470,7 @@ async function fixtureCacheDaemon(directory: string, name = 'socket') {
     client.on('end', () => {
       const action = request.split('\n')[0]!;
       actions.push(action);
-      client.end(action === 'action=get' ? 'username=fixture\npassword=fixture-only\n\n' : undefined);
+      client.end(action === 'action=get' ? 'username=fixture\npassword=fixture-only\n\n' : '');
     });
   });
   const opened = once(server, 'listening');
