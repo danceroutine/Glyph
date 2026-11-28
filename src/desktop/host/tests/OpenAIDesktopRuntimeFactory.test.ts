@@ -1,4 +1,7 @@
 import * as sourceAliases from '#src/workspace/SourcePathAliases.js';
+import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
+import { restoreGlyphPrompt } from '#src/desktop/workbench/restoreGlyphPrompt.js';
+import { formatFolderAttachment } from '#src/desktop/workbench/formatFolderContextOutline.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { NativePinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
 import type { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
@@ -545,6 +548,165 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+  it('restores and queues single-folder captures from a saved chat after reopening with more folders', async () => {
+    const test = await factoryFixture();
+    const app = await test.folder('app', { 'notes.md': 'new editor contents' });
+    const other = await test.folder('other');
+    await mkdir(join(app, 'src'));
+    await writeFile(join(app, 'src', 'original.ts'), '');
+    await writeFile(join(app, 'src', 'new.ts'), '');
+    const roots = [{ name: 'app', path: app }];
+    const context = {
+      id: ProjectContextIdentity.create(ProjectContextKind.WORKSPACE, 'file', 'profile:workspace'),
+      mutationIdentity: ProjectContextIdentity.createMutationScope(ProjectContextKind.FOLDER, 'file', roots),
+      kind: ProjectContextKind.FOLDER,
+      name: 'app',
+      authority: 'file',
+      roots,
+    };
+    const state = { provider: 'fixture', version: 1, data: [] };
+    const checkpoint = { providerState: state, mode: AgentModeID.AGENT, plans: [], todos: [] };
+    const savedText = '@notes.md then @src @output';
+    const source = (
+      kind: 'file' | 'folder' | 'terminal',
+      path: string,
+      text: string,
+      uri = pathToFileURL(join(app, path)).href,
+    ) => {
+      const revision = contentRevision(text, false);
+      return {
+        path,
+        text,
+        revision,
+        byteOrderMark: false,
+        byteLength: Buffer.byteLength(text),
+        source: { kind, uri, version: 1, revision },
+      };
+    };
+    const outline = formatFolderAttachment('src', ['original.ts'], false);
+    const captures = [
+      source('file', 'notes.md', 'captured editor text'),
+      source('folder', 'src', outline),
+      source('terminal', 'output', 'Run finished', 'glyph-terminal:output'),
+    ];
+    const createdAt = '2026-10-14T00:00:00Z';
+    const saved = new SqliteChatSessionStore(process.env.GLYPH_CONFIG_DIR!);
+    await saved.initialize(context);
+    try {
+      await saved.save({
+        schemaVersion: 3,
+        id: 'saved-chat',
+        title: 'Saved',
+        titleOrigin: 'human',
+        projectContextId: context.id,
+        accountProvider: 'openai',
+        accountId: 'fixture',
+        modelSlug: 'model',
+        modelName: 'Model',
+        createdAt,
+        updatedAt: createdAt,
+        providerState: state,
+        transcript: [
+          {
+            userText: savedText,
+            attachmentPaths: captures.map(capture => capture.path),
+            assistantText: 'done',
+            reasoningSummary: '',
+            createdAt,
+            attachments: captures,
+            checkpoints: { before: checkpoint, after: checkpoint },
+            options: {
+              turnId: 'old',
+              attachmentSpans: [
+                { from: 0, to: 9 },
+                { from: 15, to: 19 },
+                { from: 20, to: 27 },
+              ],
+            },
+          },
+        ],
+      });
+    } finally {
+      await saved.dispose();
+    }
+    test.initialize.mockRestore();
+    vi.spyOn(RustWorkspacePathIndex.prototype, 'initialize').mockResolvedValue({
+      root: app,
+      fileCount: 3,
+      fromCache: false,
+      truncated: false,
+      durationMilliseconds: 0,
+    });
+    vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({
+      files: ['src/original.ts', 'src/new.ts'],
+      truncated: false,
+    });
+    vi.spyOn(OpenAIBackend.prototype, 'initialize').mockResolvedValue();
+    vi.spyOn(GlyphService.prototype, 'accounts', 'get').mockReturnValue([
+      {
+        id: 'fixture',
+        provider: 'openai',
+        label: 'Fixture',
+        connected: true,
+        inferenceAccess: true,
+      },
+    ]);
+    vi.spyOn(OpenAIBackend.prototype, 'createProvider').mockReturnValue({
+      model: 'model',
+      exportState: () => state,
+      restoreState: vi.fn(),
+      reset: vi.fn(),
+      recordContext: vi.fn(),
+      send: vi.fn(),
+    });
+    const events: GlyphHostEvent[] = [];
+    const runtime = await test.create([app, other], event => {
+      events.push(event);
+    });
+    await runtime.handle({ type: GlyphWorkbenchCommandType.RESTORE_CHECKPOINT, chatId: 'saved-chat', turnId: 'old' });
+    const restored = events.find(event => event.type === GlyphHostEventType.CHAT_RESTORED)!;
+    const composer = new GlyphComposerState();
+    composer.restoreDraft(
+      restoreGlyphPrompt(
+        restored.draft,
+        () => undefined,
+        () => 'capture',
+      ),
+    );
+    composer.enqueueDraft();
+    const send = vi.fn<Parameters<GlyphComposerState['sendQueued']>[1]>(async (_text, attachments) => {
+      await runtime.attachmentAccess.admit(attachments, new AbortController().signal);
+    });
+    await composer.sendQueued(composer.snapshot.queued[0]!.id, send);
+    const [text, attachments, options] = send.mock.calls[0]!;
+    expect(text).toBe('@app/notes.md then @app/src @output');
+    expect(options?.attachmentSpans?.map(span => text.slice(span.from, span.to))).toEqual([
+      '@app/notes.md',
+      '@app/src',
+      '@output',
+    ]);
+    const updatedOutline = formatFolderAttachment('app/src', ['original.ts'], false);
+    expect(attachments).toMatchObject([
+      {
+        path: 'app/notes.md',
+        uri: captures[0]!.source.uri,
+        text: 'captured editor text',
+        contentRevision: captures[0]!.revision,
+      },
+      {
+        path: 'app/src',
+        uri: captures[1]!.source.uri,
+        text: updatedOutline,
+        contentRevision: contentRevision(updatedOutline, false),
+        sourceRevision: captures[1]!.revision,
+      },
+      { path: 'output', uri: 'glyph-terminal:output', text: 'Run finished' },
+    ]);
+    expect(composer.snapshot.queueError).toBeUndefined();
+    expect(send).toHaveBeenCalledOnce();
+    expect(composer.snapshot.queued).toEqual([]);
+  });
+
   it('recovers a persisted review across duplicate-root route upgrades only for its original physical root set', async () => {
     const test = await factoryFixture();
     const left = await test.folder('first/lib');

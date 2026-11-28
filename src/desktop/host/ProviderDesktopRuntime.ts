@@ -139,7 +139,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       >;
       readonly skills?: SkillCatalog;
       readonly refreshCatalogs?: (signal: AbortSignal) => Promise<void>;
-      readonly restoreAttachmentPath?: (path: string) => string;
+      readonly restoreAttachmentPath?: (path: string, uri?: string) => string;
       readonly referenceResources?: (path: string) => NonNullable<GlyphInstructionSource['referenceResources']>;
       readonly instructionWatchRoots?: readonly string[];
       readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'> &
@@ -337,7 +337,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   }
 
   private restoredAttachment(attachment: ContextAttachment) {
-    const path = this.options.restoreAttachmentPath?.(attachment.path) ?? attachment.path;
+    const path = this.options.restoreAttachmentPath?.(attachment.path, attachment.source?.uri) ?? attachment.path;
     const text =
       attachment.source?.kind === GlyphContextAttachmentKind.FOLDER
         ? rebindFolderAttachmentText(attachment.text, attachment.path, path)
