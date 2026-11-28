@@ -5,7 +5,8 @@ import { Emitter } from '#vs/base/common/event.js';
 import { Selection } from '#vs/editor/common/core/selection.js';
 import { EditorType } from '#vs/editor/common/editorCommon.js';
 import { QueryType } from '#vs/workbench/services/search/common/search.js';
-import { formatFolderContextOutline } from '#glyph/workbench/formatFolderContextOutline.js';
+import { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
+import { formatFolderAttachment, formatFolderContextOutline } from '#glyph/workbench/formatFolderContextOutline.js';
 import { GlyphContextCandidateKind } from '#glyph/workbench/GlyphContextActions.js';
 import {
   GlyphContextAttachmentKind,
@@ -908,7 +909,39 @@ describe(GlyphContextController, () => {
       const controller = createController(services);
       const capture = await controller.captureFolder('file:///workspace');
       expect(capture.path).toBe('.');
-      expect(controller.rebindAttachment(capture).path).toBe('.');
+      expect((await controller.rebindAttachment(capture)).path).toBe('.');
+    });
+
+    it('sends the captured folder listing from drafts and queued messages after its workspace route changes', async () => {
+      const services = controllerServices();
+      const controller = createController(services);
+      const composer = new GlyphComposerState();
+      const uri = 'file:///workspace/src';
+      const listing = { files: ['nested/note.md'], truncated: true };
+      services.stats.set('/workspace/src', { isDirectory: true });
+      services.resolveAttachment.mockResolvedValueOnce(listing);
+      const capture = await controller.captureFolder(uri);
+      composer.insertAttachments([capture]);
+      composer.enqueueDraft();
+      // Older captures retain the rendered outline and may already have a separate source revision.
+      const { folderListing: _listing, ...legacy } = capture;
+      composer.insertAttachments([{ ...legacy, sourceRevision: 'original revision' }]);
+      services.folders.push({ name: 'other', uri: URI.file('/other') });
+      await composer.mapAttachments(value => controller.rebindAttachment(value));
+      services.folders[0].name = 'project';
+      await composer.mapAttachments(value => controller.rebindAttachment(value));
+      const send = vi.fn(async (_text: string, _attachments: readonly GlyphContextAttachment[]) => {});
+      await composer.submit(send);
+      await composer.sendQueued(composer.snapshot.queued[0].id, send);
+      const text = formatFolderAttachment('project/src', listing.files, true);
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+      const contentRevision = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+      const expected = { ...legacy, path: 'project/src', text, contentRevision };
+      expect(send.mock.calls.map(([prompt, attachments]) => [prompt, attachments])).toEqual([
+        ['@project/src', [{ ...expected, sourceRevision: 'original revision' }]],
+        ['@project/src', [{ ...expected, folderListing: listing, sourceRevision: capture.contentRevision }]],
+      ]);
+      expect(services.resolveAttachment).toHaveBeenCalledTimes(1);
     });
 
     it('names an unnamed workspace root as the current folder', async () => {
@@ -1206,9 +1239,9 @@ describe(GlyphContextController, () => {
       unavailable: 'Earlier problem.',
     };
 
-    it('keeps untitled captures without their token', () => {
+    it('keeps untitled captures without their token', async () => {
       expect(
-        createController(controllerServices()).rebindAttachment({ ...attachment, uri: 'untitled:Untitled-1' }),
+        await createController(controllerServices()).rebindAttachment({ ...attachment, uri: 'untitled:Untitled-1' }),
       ).toEqual({
         kind: GlyphContextAttachmentKind.FILE,
         uri: 'untitled:Untitled-1',
@@ -1218,25 +1251,25 @@ describe(GlyphContextController, () => {
       });
     });
 
-    it('marks captures of other resources unavailable', () => {
+    it('marks captures of other resources unavailable', async () => {
       expect(
-        createController(controllerServices()).rebindAttachment({
+        await createController(controllerServices()).rebindAttachment({
           ...attachment,
           uri: 'vscode-test-data://results/run',
         }),
       ).toMatchObject({ unavailable: 'Workspace changed. Capture this context again before sending.' });
     });
 
-    it('marks captures outside of the workspace unavailable', () => {
+    it('marks captures outside of the workspace unavailable', async () => {
       expect(
-        createController(controllerServices()).rebindAttachment({ ...attachment, uri: 'file:///elsewhere/a.ts' }),
+        await createController(controllerServices()).rebindAttachment({ ...attachment, uri: 'file:///elsewhere/a.ts' }),
       ).toMatchObject({
         unavailable: 'Source folder was removed. Remove this attachment or add its folder again before sending.',
       });
     });
 
-    it('renames workspace captures to their current path', () => {
-      const rebound = createController(controllerServices()).rebindAttachment({
+    it('renames workspace captures to their current path', async () => {
+      const rebound = await createController(controllerServices()).rebindAttachment({
         ...attachment,
         uri: 'file:///workspace/a.ts',
       });
@@ -1277,7 +1310,7 @@ describe(GlyphContextController, () => {
     const { ruleId: _ruleId, ...legacy } = attachment;
     expect(await controller.checkAttachment(legacy)).toContain('instructions changed');
     expect((await controller.refreshAttachment(legacy)).contentRevision).toBe('new');
-    expect(controller.rebindAttachment({ ...attachment, unavailable: 'previous root' })).toEqual(attachment);
+    expect(await controller.rebindAttachment({ ...attachment, unavailable: 'previous root' })).toEqual(attachment);
     expect(await controller.checkAttachment(attachment)).toContain('instructions changed');
     const current = await controller.refreshAttachment({ ...attachment, unavailable: 'previously disabled' });
     expect(current).toMatchObject({ path: 'New name', contentRevision: 'new' });
