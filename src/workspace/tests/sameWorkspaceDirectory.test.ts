@@ -3,7 +3,11 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
-import { sameWorkspaceDirectory, WorkspaceDirectoryIdentity } from '#src/workspace/sameWorkspaceDirectory.js';
+import {
+  relativeWorkspaceSpelling,
+  sameWorkspaceDirectory,
+  WorkspaceDirectoryIdentity,
+} from '#src/workspace/sameWorkspaceDirectory.js';
 
 it('compares physical entries and falls back to configured casing for absent directory pairs', () => {
   const root = mkdtempSync(join(tmpdir(), 'glyph-directory-identity-'));
@@ -68,4 +72,13 @@ it('compares the actual directory even when its mounted names have unrelated spe
   } finally {
     stat.mockRestore();
   }
+});
+
+it('projects only absolute paths below the captured folder', () => {
+  const root = tmpdir();
+  expect(relativeWorkspaceSpelling(root, root)).toBe('');
+  expect(relativeWorkspaceSpelling(root, join(root, 'next'))).toBe('next');
+  expect(relativeWorkspaceSpelling(join(root, 'next'), root)).toBeUndefined();
+  expect(relativeWorkspaceSpelling(root, 'relative')).toBeUndefined();
+  expect(relativeWorkspaceSpelling('relative', root)).toBeUndefined();
 });

@@ -1,4 +1,4 @@
-import { basename, dirname } from 'node:path';
+import { basename, dirname, join, normalize, parse, sep } from 'node:path';
 import { normalizeVolumeName } from './FilesystemNamePolicy.ts';
 import fs from 'node:fs';
 
@@ -29,6 +29,26 @@ export function sameWorkspaceDirectorySpelling(first: string, second: string, ca
     normalizeVolumeName(first, folding) === normalizeVolumeName(second, folding) &&
     sameWorkspaceDirectory(first, second, caseSensitive)
   );
+}
+
+/** Project a saved absolute path under a selected directory. Every differently spelled component
+ * must name the same existing entry so a sibling directory or a separate symlink cannot supply it. */
+export function relativeWorkspaceSpelling(anchor: string, selected: string): string | undefined {
+  anchor = normalize(anchor);
+  selected = normalize(selected);
+  const root = parse(anchor).root;
+  const selectedRoot = parse(selected).root;
+  if (!root || root.toLowerCase() !== selectedRoot.toLowerCase()) return undefined;
+  const prefix = anchor.slice(root.length).split(sep).filter(Boolean);
+  const parts = selected.slice(selectedRoot.length).split(sep).filter(Boolean);
+  if (parts.length < prefix.length) return undefined;
+  for (const [index, name] of prefix.entries()) {
+    if (name === parts[index]) continue;
+    const current = join(root, ...prefix.slice(0, index + 1));
+    const saved = join(selectedRoot, ...parts.slice(0, index + 1));
+    if (!sameWorkspaceDirectorySpelling(current, saved, true)) return undefined;
+  }
+  return parts.slice(prefix.length).join(sep);
 }
 
 /** A catalog can encounter the same profile directory for every package or rule in one listing.
