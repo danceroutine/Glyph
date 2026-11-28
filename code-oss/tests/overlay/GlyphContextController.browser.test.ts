@@ -881,6 +881,16 @@ describe(GlyphContextController, () => {
       expect(services.composer.insertAttachments).not.toHaveBeenCalled();
     });
 
+    it('attaches an untitled selection from its editor without requesting a disk resource', async () => {
+      const services = controllerServices();
+      services.editors.activeTextEditorControl = codeEditor({ uri: URI.parse('untitled:Draft') });
+      await createController(services).attachSelection();
+      expect(services.composer.insertAttachments).toHaveBeenCalledWith([
+        expect.objectContaining({ uri: 'untitled:Draft', kind: GlyphContextAttachmentKind.SELECTION }),
+      ]);
+      expect(services.resolveAttachment).not.toHaveBeenCalled();
+    });
+
     it('attaches every highlighted range of a plain editor', async () => {
       const services = controllerServices();
       services.editors.activeTextEditorControl = codeEditor({ uri: URI.file('/workspace/a.ts') }, [
@@ -1188,6 +1198,16 @@ describe(GlyphContextController, () => {
   });
 
   describe(GlyphContextController.prototype.captureFolder, () => {
+    it('reports an unavailable folder listing separately from an empty folder', async () => {
+      const services = controllerServices();
+      const uri = URI.file('/workspace');
+      services.stats.set(uri.path, { isDirectory: true });
+      services.resolveAttachment.mockResolvedValueOnce(undefined);
+      await expect(createController(services).captureFolder(uri.toString())).rejects.toThrow(
+        'Folder context is unavailable.',
+      );
+    });
+
     it('captures the search-visible outline of a nested folder', async () => {
       const services = controllerServices();
       services.stats.set('/workspace/src/deep', { isDirectory: true });
