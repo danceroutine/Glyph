@@ -73,7 +73,8 @@ it.describe('Mode switches', () => {
   }) => {
     provider.enqueue(
       { output: [swap('plan')] },
-      { output: [patch('plan.md', 'markdown'), patch('implementation.ts', 'code')] },
+      { output: [patch('plan.md', 'markdown')] },
+      { output: [patch('implementation.ts', 'code')] },
       { chunks: ['The Markdown plan is ready for review; code edits are blocked.'] },
     );
     await glyph.send('Switch to planning and propose both Markdown and code changes.');
@@ -84,9 +85,9 @@ it.describe('Mode switches', () => {
     await expect(glyph.page.getByRole('combobox', { name: 'Conversation mode' })).toContainText('Plan');
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
     const results = provider.requests.at(-1)?.body.input.filter(item => item.type === 'custom_tool_call_output') ?? [];
-    expect(editToolOutput.parse(parseJson(results.find(item => item.call_id === 'markdown')?.output)).status).toBe(
-      'APPLIED_WITH_REVERT',
-    );
+    expect(editToolOutput.parse(parseJson(results.find(item => item.call_id === 'markdown')?.output))).toMatchObject({
+      status: 'APPLIED_WITH_REVERT',
+    });
     expect(
       editToolOutput.parse(parseJson(results.find(item => item.call_id === 'code')?.output)).error?.message,
     ).toContain('only edit Markdown');
