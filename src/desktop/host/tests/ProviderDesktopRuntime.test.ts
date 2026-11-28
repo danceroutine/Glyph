@@ -86,7 +86,7 @@ async function fixture(
     readonly trusted?: boolean;
     readonly records?: readonly ChatSessionRecord[];
     readonly refreshCatalogs?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['refreshCatalogs'];
-    readonly restoreAttachmentPath?: (path: string) => string;
+    readonly restoreAttachmentPath?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['restoreAttachmentPath'];
     readonly referenceResources?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['referenceResources'];
     readonly instructionCatalog?: NonNullable<
       ConstructorParameters<typeof ProviderDesktopRuntime>[0]['instructionCatalog']

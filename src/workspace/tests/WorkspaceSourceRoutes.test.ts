@@ -12,6 +12,20 @@ import {
 } from '#src/instructions/AgentInstructionSource.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 
+it('routes saved file URIs through the most specific remaining folder or its selected alias', () => {
+  const app = { name: 'app', path: '/project', uri: 'file:///selected' };
+  const many = new WorkspaceSourceRoutes([app, { name: 'pkg', path: '/project/packages/pkg' }]);
+  expect(many.routeForFileUri('file:///project/packages/pkg/readme')).toBe('pkg/readme');
+  expect(many.routeForFileUri('file:///selected/a%20b')).toBe('app/a b');
+  expect(many.routeForFileUri('file:///project')).toBe('app');
+  expect(many.routeForFileUri('file:///project-old/readme')).toBeUndefined();
+  expect(many.routeForFileUri('untitled:notes')).toBeUndefined();
+  expect(many.routeForFileUri()).toBeUndefined();
+  const one = new WorkspaceSourceRoutes([app]);
+  expect(one.routeForFileUri('file:///selected')).toBe('.');
+  expect(one.routeForFileUri('file:///project/notes')).toBe('notes');
+});
+
 it('keeps logical aliases and selects the most specific indexed route for each physical file', () => {
   const outer = { name: 'Outer', path: '/work' };
   const inner = { name: 'Inner', path: '/work/sub' };

@@ -213,7 +213,11 @@ describe(DesktopAttachmentAccess, () => {
       await expect(access.admit([review(source)], signal)).rejects.toThrow();
     await rm(alias);
     await symlink(other, alias);
-    await expect(access.resolve(file, signal)).rejects.toThrow('changed its workspace location');
+    const restoredPath = routes.routeForFileUri(file.uri);
+    expect(restoredPath).toBe(file.path);
+    await expect(access.resolve({ ...file, path: restoredPath! }, signal)).rejects.toThrow(
+      'changed its workspace location',
+    );
   });
 
   it.each([false, true])(
