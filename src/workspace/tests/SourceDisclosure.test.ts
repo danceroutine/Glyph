@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
-import { NativeFilesystemMetadata } from '../NativeFilesystemMetadata.ts';
-import { NativePinnedSourceAuthority } from '../PinnedSourceAuthority.ts';
-import { authorizeSources, enrollSources, sourceReads } from '../SourceDisclosure.ts';
-import { WorkspaceAccessPolicy } from '../policy/WorkspaceAccessPolicy.ts';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
+import { NativePinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { authorizeSources, enrollSources, sourceReads } from '#src/workspace/SourceDisclosure.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 it('retries unavailable catalog reads against their original identity and isolates invalid source URIs', async () => {
   const root = await mkdtemp(join(tmpdir(), 'glyph-enrolled-sources-'));

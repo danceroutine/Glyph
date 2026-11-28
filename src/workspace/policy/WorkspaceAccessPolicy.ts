@@ -1,5 +1,5 @@
 import { basename, dirname, posix, resolve, sep } from 'node:path';
-import { isPrivateDirectory, privateDirectories } from '../ReservedWorkspaceDirectory.ts';
+import { isPrivateDirectory, privateDirectories } from '#src/workspace/ReservedWorkspaceDirectory.js';
 import { z } from 'zod';
 import type { WorkspaceAccessPolicyOptions } from './WorkspaceAccessPolicyOptions.ts';
 

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RuleTester } from 'oxlint/plugins-dev';
 import { describe, expect, it } from 'vitest';
-import accessPlugin from '../workspace-access.mjs';
+import accessPlugin from '#scripts/lint/workspace-access.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const name = 'glyph-access/mediated-workspace-access';

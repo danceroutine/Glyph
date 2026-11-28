@@ -3,7 +3,7 @@ import { toGlyphPromptText } from '#src/desktop/workbench/GlyphPromptDocument.js
 import { formatFolderAttachment } from '#src/desktop/workbench/formatFolderContextOutline.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
-import { DesktopAttachmentAccess } from '../DesktopAttachmentAccess.ts';
+import { DesktopAttachmentAccess } from '#src/desktop/host/DesktopAttachmentAccess.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
