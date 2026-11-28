@@ -124,6 +124,53 @@ describe(TurnContextCoordinator, () => {
     expect(planner.disclosurePins()).toEqual([]);
   });
 
+  it.each(['replacement', 'unavailable', 'incomplete'] as const)(
+    'isolates a %s reference until its rule body is selected',
+    async failure => {
+      const { coordinator, capture, authorize, files, paths } = fixture();
+      if (failure === 'replacement') files[1]!.identity = 'replacement';
+      else
+        capture.mockImplementation(async selected => {
+          if (selected.includes(paths[1]!)) {
+            if (failure === 'incomplete') return [];
+            throw new Error('Reference unavailable');
+          }
+          return selected.map(path => files.find(file => file.path === path)!);
+        });
+
+      const session = await coordinator.beginTurn({ turnId: 't', attachmentPaths: [] });
+      expect(session.initialEnvelope().candidates).toEqual([expect.objectContaining({ id: 'rule' })]);
+      expect(authorize.mock.calls[0]![0].map(file => file.path)).toEqual([paths[0]]);
+      await expect(coordinator.activateRule('t', 'rule')).rejects.toThrow();
+      expect(session.snapshot().sources).toEqual([]);
+    },
+  );
+
+  it('admits a plain turn when a manual rule changes during discovery and rejects selection of its stale body', async () => {
+    const { source, files } = fixture();
+    const manual = { ...source, activation: AgentInstructionActivationMode.MANUAL };
+    const coordinator = new TurnContextCoordinator(new AgentInstructionCatalog([{ discover: async () => [manual] }]));
+    files[0]!.identity = 'replacement';
+    const session = await coordinator.beginTurn({ turnId: 'plain', attachmentPaths: [] });
+    expect(session.initialEnvelope().sources).toEqual([]);
+    await expect(coordinator.activateManualRules('plain', [manual.id])).rejects.toThrow('changed during discovery');
+    await expect(
+      coordinator.beginTurn({ turnId: 'selected', manualRuleIds: [manual.id], attachmentPaths: [] }),
+    ).rejects.toThrow('changed during discovery');
+  });
+
+  it('propagates cancellation while enrolling optional catalog entries', async () => {
+    const { capture, coordinator } = fixture();
+    const controller = new AbortController();
+    capture.mockImplementation(async () => {
+      controller.abort(new Error('Stopped'));
+      throw controller.signal.reason;
+    });
+    await expect(coordinator.beginTurn({ turnId: 't', attachmentPaths: [] }, controller.signal)).rejects.toThrow(
+      'Stopped',
+    );
+  });
+
   it('rejects a changed read identity before admitting the turn', async () => {
     const { coordinator, files } = fixture();
     files[0]!.identity = '1:2';

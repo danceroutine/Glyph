@@ -1,4 +1,4 @@
-import { authorizeSources, type SourcePin } from '#src/workspace/SourceDisclosure.js';
+import { authorizeSources, type PinnedSourceFile } from '#src/workspace/SourceDisclosure.js';
 import { packageRevision } from './skillPackageRevision.ts';
 import { posix } from 'node:path';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
@@ -28,7 +28,7 @@ export class SkillPackage {
     readonly descriptor: SkillDescriptor,
     readonly body: string,
     private readonly files: ReadonlyMap<string, SkillPackageFile>,
-    private readonly origins: ReadonlyMap<string, SourcePin> = new Map(),
+    private readonly origins: ReadonlyMap<string, PinnedSourceFile> = new Map(),
   ) {
     this.descriptor = structuredClone(descriptor);
     this.files = new Map([...files].map(([path, file]) => [path, { ...file, bytes: Uint8Array.from(file.bytes) }]));
@@ -41,7 +41,7 @@ export class SkillPackage {
 
   /** Return the manifest origin and the origins of only those resources included in a request.
    * A resource read checks its own route before its pinned bytes can enter a tool result or provenance. */
-  disclosurePins(paths: readonly string[] = []): SourcePin[] {
+  disclosurePins(paths: readonly string[] = []): PinnedSourceFile[] {
     const manifest = posix.relative(this.descriptor.directory, this.descriptor.path);
     return [manifest, ...paths].flatMap(path => {
       const pin = this.origins.get(path);
@@ -90,7 +90,7 @@ export async function captureSkillPackage(
   paths: readonly string[],
   signal?: AbortSignal,
   binaryStore?: Pick<FileSystemWorkspaceTextStore, 'readBytes'>,
-  origins?: ReadonlyMap<string, SourcePin>,
+  origins?: ReadonlyMap<string, PinnedSourceFile>,
 ): Promise<SkillPackage> {
   const files = await readSkillPackageFiles(descriptor, workspace, paths, signal, binaryStore);
   const entry = files.get(posix.relative(descriptor.directory, descriptor.path));
