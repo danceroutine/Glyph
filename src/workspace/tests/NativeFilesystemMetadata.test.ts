@@ -43,6 +43,16 @@ it('requires the native host path check to acknowledge the requested paths and e
 `,
   );
   await check();
+  await authority.assertHostPaths(['/host/file'], ['/project'], []);
+  const socket = '/host/credential.sock';
+  const receipt = join(root, 'request');
+  await writeFile(executable, '#!/bin/sh\n/bin/cat > "' + receipt + '"\necho verified\n');
+  await authority.assertHostPaths(['/host/file', socket], ['/project'], [socket]);
+  expect(JSON.parse(await readFile(receipt, 'utf8'))).toEqual({
+    paths: ['/host/file', socket],
+    workspaceRoots: ['/project'],
+    sockets: [socket],
+  });
 });
 
 it('passes physical exclusions and the opened identity to native path admission', async () => {

@@ -23,6 +23,23 @@ import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
 import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 
 describe(SkillPackageManager, () => {
+  it('preserves a package that appears while staging the first installation', async () => {
+    const { manager, state, location, root } = await aSkillLifecycle();
+    const preview = await manager.prepare(location.id, aSkillDraft());
+    const target = join(root, 'skills/example');
+    const stage = location.mutations.stagePackage.bind(location.mutations);
+    vi.spyOn(location.mutations, 'stagePackage').mockImplementationOnce(async (...args) => {
+      await stage(...args);
+      await mkdir(target);
+      await writeFile(join(target, 'SKILL.md'), 'created elsewhere');
+    });
+
+    await expect(manager.apply(preview.id)).rejects.toThrow('A skill appeared at the destination. Preview again.');
+    expect(await readFile(join(target, 'SKILL.md'), 'utf8')).toBe('created elsewhere');
+    expect(await readdir(target)).toEqual(['SKILL.md']);
+    expect(state.installations.size).toBe(0);
+  });
+
   it.each(['backup', 'replace', 'commit'] as const)(
     'honors a disconnect during the last source check before %s',
     async boundary => {
