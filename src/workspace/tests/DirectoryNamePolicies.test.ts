@@ -98,7 +98,10 @@ it.each([false, true])(
     expect(batch.matching('.', ['mounted/d*cs/**/r*.ts'])).toEqual(outerSensitive ? [existing, future] : []);
     expect(batch.matching('.', ['MOU*/Docs/**/*.ts'])).toEqual(outerSensitive ? [] : [existing, future]);
     expect(batch.matching('mounted/Docs', ['**/*.ts'])).toEqual([existing, future]);
-    expect(paths.key('mounted/Docs/new')).toBe(outerSensitive ? 'mounted/docs/new' : 'mounted/Docs/new');
+    // An existing name also needs a physical alias. A prospective child uses the containing directory's policy.
+    const docsIsAlias = fs.existsSync(join(mounted, 'docs'));
+    expect(batch.matching('mounted/docs')).toEqual(!inner.caseSensitive && docsIsAlias ? [existing, future] : []);
+    expect(batch.matching('mounted/Docs/NEW')).toEqual(inner.caseSensitive ? [] : [future]);
     expect(routes.componentPolicies('../bad')).toBeUndefined();
     routes.prepare(['../bad']);
     expect(routes.componentPolicies(existing)).toEqual([outer, inner, inner]);
