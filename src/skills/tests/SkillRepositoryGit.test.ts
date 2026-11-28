@@ -271,6 +271,7 @@ it('freezes URL-selected settings after recording the remote and before using tr
   await writeFile(
     join(root, 'trusted.config'),
     '[includeIf "hasconfig:remote.*.url:https://example.invalid/**"]\npath = company.config\n' +
+      '[remote "origin"]\nURL = https://other.invalid/default.git\npushURL = https://other.invalid/push.git\n' +
       '[remote "other"]\nurl = file:///unselected\npromisor = true\npartialCloneFilter = blob:none\n' +
       '[extensions]\npartialClone = other\n',
   );
@@ -284,7 +285,7 @@ it('freezes URL-selected settings after recording the remote and before using tr
       '--git-dir=source.git',
       'config',
       '--get-regexp',
-      '^(remote.other.(promisor|partialclonefilter)|extensions.partialclone)$',
+      '^(remote\\.other\\.(url|promisor|partialclonefilter)|remote\\.origin\\.pushurl|extensions\\.partialclone)$',
     ]),
   ).rejects.toThrow('Git repository access failed');
   const name = () => git.run(['--git-dir=source.git', 'config', '--get', 'user.name']);

@@ -84,8 +84,8 @@ function transportSetting(key: string, option: string): boolean {
   if (key.startsWith('credential.'))
     return ['helper', 'username', 'usehttppath', 'interactive', 'sanitizeprompt', 'protectprotocol'].includes(option);
   if (key.startsWith('url.')) return option === 'insteadof' || option === 'pushinsteadof';
+  // The private repository owns its remote URL. Host configuration can supply transport options and URL rewrites.
   return [
-    'remote.origin.url',
     'remote.origin.proxy',
     'remote.origin.proxyauthmethod',
     'user.name',
@@ -355,15 +355,7 @@ export async function captureRepositoryEnvironment(
     localMirrorPath(pinned);
     // The user's rules have selected the mirror. The private remote now uses its exact Git directory,
     // including for promisor fetches. Keep other captured settings and disable further URL rewrites.
-    env.GIT_CONFIG_GLOBAL = await writeConfig(
-      entries.filter(setting => {
-        const key = setting.key.toLowerCase();
-        return (
-          key !== 'remote.origin.url' &&
-          !(key.startsWith('url.') && (key.endsWith('.insteadof') || key.endsWith('.pushinsteadof')))
-        );
-      }),
-    );
+    env.GIT_CONFIG_GLOBAL = await writeConfig(entries.filter(setting => !setting.key.toLowerCase().startsWith('url.')));
     env.GIT_ALLOW_PROTOCOL = 'file';
     await readGit([repo, 'config', '--local', '--replace-all', 'remote.origin.url', pinned], 64 * 1024, undefined, env);
     // Local transport removes client Git directory/index variables when it starts the server.

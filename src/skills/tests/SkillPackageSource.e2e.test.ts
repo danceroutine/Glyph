@@ -44,6 +44,68 @@ async function fixture() {
   return { root, directory, reader };
 }
 describe(SkillPackageSourceReader, () => {
+  it('imports the selected repository and attributes its resolved tag when host remotes share that tag', async () => {
+    const { root, reader } = await fixture();
+    const requested = 'https://skills.invalid/example.git';
+    const createRepository = async (name: string) => {
+      const path = join(root, name);
+      const git = (...args: string[]) =>
+        execFileSync(
+          'git',
+          [
+            '-c',
+            'core.hooksPath=/dev/null',
+            '-c',
+            'user.name=Fixture',
+            '-c',
+            'user.email=fixture@example.test',
+            ...args,
+          ],
+          { cwd: path, encoding: 'utf8' },
+        ).trim();
+      await mkdir(path);
+      git('init', '--quiet', '--template=');
+      await writeFile(join(path, 'SKILL.md'), manifest.replace('Pinned', name));
+      git('add', 'SKILL.md');
+      git('commit', '--quiet', '-m', name);
+      git('tag', 'v1');
+      return { url: pathToFileURL(path).href, commit: git('rev-parse', 'HEAD') };
+    };
+    const selected = await createRepository('selected');
+    const other = await createRepository('other');
+    expect(other.commit).not.toBe(selected.commit);
+    await writeFile(
+      join(root, 'home/remotes.config'),
+      [
+        '[remote "origin"]',
+        'URL = ' + other.url,
+        'pushURL = ' + other.url,
+        '[remote "fallback"]',
+        'url = ' + other.url,
+        'promisor = true',
+        '[extensions]',
+        'partialClone = fallback',
+      ].join('\n'),
+    );
+    await writeFile(
+      process.env.GIT_CONFIG_GLOBAL!,
+      [
+        '[include]',
+        'path = remotes.config',
+        '[remote "origin"]',
+        'url = ' + other.url,
+        '[url "' + selected.url + '"]',
+        'insteadOf = ' + requested,
+        '[url "' + other.url + '"]',
+        'pushInsteadOf = ' + requested,
+      ].join('\n'),
+    );
+
+    const draft = await reader.read({ kind: 'repository', url: requested, revision: 'v1', directory: '' });
+    expect(draft.source).toBe('Requested repository ' + requested + '@' + selected.commit);
+    expect(Buffer.from(draft.files().get('SKILL.md')!).toString()).toBe(manifest.replace('Pinned', 'selected'));
+  });
+
   it('rejects a real non-UTF-8 Git tree and accepts the repaired root package through a trailing-slash URL', async () => {
     const { root, reader } = await fixture();
     const repository = join(root, 'source.git');
