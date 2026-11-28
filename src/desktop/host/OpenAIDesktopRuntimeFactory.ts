@@ -768,7 +768,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       ...(instructionCatalog
         ? { instructionCatalog, referenceResources: (path: string) => routes.referenceResources(path) }
         : {}),
-      ...(renamedRoots.size > 0 && { restoreAttachmentPath: restorePath }),
+      restoreAttachmentPath: (path, uri) => routes.routeForFileUri(uri) ?? restorePath(path),
       refreshCatalogs: async signal => {
         await instructionCatalog?.refresh(signal);
       },

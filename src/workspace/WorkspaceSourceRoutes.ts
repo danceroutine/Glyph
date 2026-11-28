@@ -208,6 +208,29 @@ export class WorkspaceSourceRoutes {
       .map(({ root, spelling }) => (spelling ? root.name + '/' + spelling : root.name));
   }
 
+  /** Reconstruct a saved file URI's route under today's workspace folder names. Use only the physical
+   * roots and their selected spellings. Send and Steer still admit the unchanged URI through its store. */
+  routeForFileUri(uri?: string): string | undefined {
+    if (!uri) return undefined;
+    let selected: string;
+    try {
+      selected = fileURLToPath(uri);
+    } catch {
+      return undefined;
+    }
+    let nearest: { name: string; local: string } | undefined;
+    for (const root of this.roots) {
+      for (const anchor of new Set([root.path, root.uri ? fileURLToPath(root.uri) : root.path])) {
+        const local = relative(anchor, selected);
+        if (contained(local) && (!nearest || local.length < nearest.local.length)) nearest = { name: root.name, local };
+      }
+    }
+    if (!nearest) return undefined;
+    const local = nearest.local.split(sep).join('/');
+    if (this.roots.length === 1) return local || '.';
+    return local ? nearest.name + '/' + local : nearest.name;
+  }
+
   /** Enumerate physical and attached editor URIs for a policy-authorized workspace reference. */
   referenceResources(route: string): { uri: string; caseSensitive: boolean }[] {
     const physical = this.physicalPath(route);
