@@ -444,16 +444,23 @@ async function credentialCacheFixture() {
       undefined,
       vi.fn(),
     );
-  const credential = async (env: NodeJS.ProcessEnv, operation: 'fill' | 'approve' | 'reject') => {
+  const credential = async (
+    env: NodeJS.ProcessEnv,
+    operation: 'fill' | 'approve' | 'reject',
+    url = 'https://fixture.invalid/selected',
+  ) => {
     const child = spawn(git, ['--git-dir=source.git', 'credential', operation], {
       cwd,
       env,
       stdio: ['pipe', 'ignore', 'ignore'],
     });
-    const done = once(child, 'close');
+    const done = new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', resolve);
+    });
     const value = operation === 'fill' ? '' : 'username=fixture\npassword=fixture-only\n';
-    child.stdin.end('protocol=https\nhost=fixture.invalid\n' + value + '\n');
-    expect((await done)[0]).toBe(0);
+    child.stdin.end('url=' + url + '\n' + value + '\n');
+    return done;
   };
   return { ...f, configured, legacy, checks, capture, credential };
 }
@@ -506,10 +513,10 @@ it.skipIf(process.platform === 'win32').each(['legacy', 'XDG', 'home'])(
     // The preview keeps using the same socket if the account's default changes.
     if (kind !== 'legacy') await mkdir(f.legacy);
     vi.stubEnv('XDG_CACHE_HOME', f.project);
-    await f.credential(env, 'approve');
+    expect(await f.credential(env, 'approve')).toBe(0);
     expect(await stat(join(f.home, '.git-credentials'))).toBeDefined();
-    await f.credential(env, 'reject');
-    await f.credential(env, 'fill');
+    expect(await f.credential(env, 'reject')).toBe(0);
+    expect(await f.credential(env, 'fill')).toBe(0);
     expect(daemon.actions).toEqual(['action=store', 'action=erase', 'action=get']);
   },
 );
@@ -527,7 +534,7 @@ it.skipIf(process.platform === 'win32').each(['missing', 'stale'])(
       await daemon.close();
     }
     const env = await f.capture();
-    await f.credential(env, 'approve');
+    expect(await f.credential(env, 'approve')).toBe(0);
     expect(await stat(join(f.home, '.git-credentials'))).toBeDefined();
     if (kind === 'missing') {
       await expect(stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -554,4 +561,108 @@ it.skipIf(process.platform === 'win32')('honors a helper reset before selecting 
   const env = await f.capture();
   expect(await readFile(env.GIT_CONFIG_GLOBAL!, 'utf8')).not.toContain('--socket');
   expect(f.checks.mock.calls.flatMap(([paths]) => paths)).not.toContain(join(f.configured, 'git/credential/socket'));
+});
+
+it.skipIf(process.platform === 'win32').each(['false', 'initial', 'true'])(
+  'honors matching helper resets and the original order with followRedirects=%s',
+  async redirects => {
+    const f = await credentialCacheFixture();
+    const inaccessible = join(f.project, 'helper');
+    const first = join(f.home, 'first-helper'),
+      second = join(f.home, 'second-helper');
+    await writeFile(first, '#!/bin/sh\necho "$1" >> "$0.log"\necho username=fixture\n', { mode: 0o700 });
+    await writeFile(second, '#!/bin/sh\necho "$1" >> "$0.log"\necho password=fixture-only\n', { mode: 0o700 });
+    await symlink(f.project, f.legacy);
+    await writeFile(join(f.project, 'credentials'), '');
+    await symlink(join(f.project, 'credentials'), join(f.home, '.git-credentials'));
+    await writeFile(
+      f.global,
+      `[http]
+followRedirects = ${redirects}
+[credential]
+helper = cache
+helper = store
+[credential "fixture.invalid"]
+helper = ${inaccessible}
+[credential "https://*.invalid/selected"]
+helper =
+helper = ${first}
+[credential "https://fixture.invalid/selected"]
+helper = ${second}
+`,
+    );
+    const env = await f.capture();
+    await expect(stat(first + '.log')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await f.credential(env, 'fill')).toBe(0);
+    expect(await readFile(first + '.log', 'utf8')).toBe('get\n');
+    expect(await readFile(second + '.log', 'utf8')).toBe('get\n');
+    const activeLease = f.checks.mock.calls.at(-1)![0];
+    expect(activeLease).not.toContain(inaccessible);
+    expect(activeLease).not.toContain(join(f.legacy, 'socket'));
+    expect(activeLease).not.toContain(join(f.home, '.git-credentials'));
+    // An unavailable cache or store cannot release credentials to a redirected host.
+    expect(await f.credential(env, 'fill', 'https://other.invalid/package')).not.toBe(0);
+  },
+);
+
+it.skipIf(process.platform === 'win32').each(['cache', 'store', 'executable'])(
+  'fails before transport when the selected URL requires an unavailable %s',
+  async kind => {
+    const f = await credentialCacheFixture();
+    const helper = kind === 'executable' ? join(f.project, 'helper') : kind;
+    await symlink(f.project, f.legacy);
+    await writeFile(join(f.project, 'credentials'), '');
+    await symlink(join(f.project, 'credentials'), join(f.home, '.git-credentials'));
+    await writeFile(f.global, `[credential "https://fixture.invalid"]\nhelper = ${helper}\n`);
+    await expect(f.capture()).rejects.toThrow('outside writable workspaces');
+  },
+);
+
+it.skipIf(process.platform === 'win32').each(['false', 'initial', 'true'])(
+  'makes an admitted downstream cache available only for possible redirects with followRedirects=%s',
+  async redirects => {
+    const f = await credentialCacheFixture();
+    for (const name of ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY']) vi.stubEnv(name, undefined);
+    const directory = join(f.configured, 'git/credential');
+    const daemon = await fixtureCacheDaemon(directory);
+    onTestFinished(daemon.close);
+    await writeFile(
+      f.global,
+      `[http "https://fixture.invalid"]\nfollowRedirects = ${redirects}\n[credential "https://downstream.invalid"]\nhelper = cache\n`,
+    );
+    const env = await f.capture();
+    expect(await f.credential(env, 'reject')).toBe(0);
+    expect(daemon.actions).toEqual([]);
+    expect(await f.credential(env, 'reject', 'https://downstream.invalid/repository')).toBe(0);
+    const lease = f.checks.mock.calls.at(-1)![0];
+    if (redirects === 'false') {
+      expect(daemon.actions).toEqual([]);
+      expect(lease).not.toContain(join(directory, 'socket'));
+    } else {
+      expect(daemon.actions).toEqual(['action=erase']);
+      expect(lease).toContain(join(directory, 'socket'));
+    }
+  },
+);
+
+it.skipIf(process.platform === 'win32').each([
+  ['URL-matched proxy', '[http "https://fixture.invalid"]\nproxy = http://proxy.invalid', true],
+  ['unrelated proxy', '[http "https://other.invalid"]\nproxy = http://proxy.invalid', false],
+  ['remote proxy reset', '[http]\nproxy = http://proxy.invalid\n[remote "origin"]\nproxy =', false],
+  ['environment proxy', '', true],
+  ['certificate passphrase', '[http "https://fixture.invalid"]\nsslCertPasswordProtected', true],
+] as const)('admits secondary helper inputs according to the selected %s', async (kind, settings, active) => {
+  const f = await credentialCacheFixture();
+  const proxy = kind === 'environment proxy' ? 'http://proxy.invalid' : undefined;
+  vi.stubEnv('https_proxy', proxy);
+  vi.stubEnv('HTTPS_PROXY', kind === 'remote proxy reset' ? 'http://proxy.invalid' : undefined);
+  const directory = join(f.configured, 'git/credential');
+  const daemon = await fixtureCacheDaemon(directory);
+  onTestFinished(daemon.close);
+  const scope = kind === 'certificate passphrase' ? 'cert:///' : 'http://proxy.invalid';
+  await writeFile(f.global, `[http]\nfollowRedirects = off\n${settings}\n[credential "${scope}"]\nhelper = cache\n`);
+  const env = await f.capture();
+  expect(await f.credential(env, 'reject', scope + '/fixture')).toBe(0);
+  expect(daemon.actions).toEqual(active ? ['action=erase'] : []);
+  expect(f.checks.mock.calls.at(-1)![0].includes(join(directory, 'socket'))).toBe(active);
 });

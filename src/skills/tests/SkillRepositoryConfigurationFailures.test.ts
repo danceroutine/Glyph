@@ -27,7 +27,7 @@ vi.mock('node:child_process', () => ({
     _path: string,
     args: string[],
     options: { signal: AbortSignal; env: NodeJS.ProcessEnv },
-    callback: (error: Error | null, output: Buffer | string) => void,
+    callback: (error: Error | null, output: Buffer | string, diagnostics?: Buffer) => void,
   ) => {
     parser.commands.push(args);
     parser.environments.push({ ...options.env });
@@ -51,7 +51,7 @@ vi.mock('node:child_process', () => ({
       queueMicrotask(() => {
         if (parser.inputError) stdin.emit('error', new Error('Configuration input closed'));
         if (next instanceof Error) callback(next, Buffer.alloc(0));
-        else callback(null, Buffer.from(next));
+        else callback(null, Buffer.from(next), Buffer.alloc(0));
         child.emit('close', next instanceof Error ? 1 : 0);
       });
     };
@@ -334,4 +334,21 @@ it('rejects an unsupported effective remote before launching a fetch', async () 
       vi.fn(),
     ),
   ).rejects.toThrow('supports HTTPS, SSH and local');
+});
+
+it('stops before transport when Git returns an incomplete credential selection', async () => {
+  const value = 'credential.https://fixture.invalid.helper\ncache\0';
+  const f = await fixture('[credential "https://fixture.invalid"]\nhelper = cache\n');
+  parser.replies.push(`global\0file:${f.config}\0${value}`, value, 'https://fixture.invalid/repo\n', '');
+  await expect(
+    captureRepositoryEnvironment(
+      [],
+      f.root,
+      new AbortController().signal,
+      testFilesystemMetadata,
+      'source.git',
+      undefined,
+      vi.fn(),
+    ),
+  ).rejects.toThrow('could not determine the credential helpers');
 });

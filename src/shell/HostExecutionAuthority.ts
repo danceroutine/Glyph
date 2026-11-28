@@ -46,6 +46,19 @@ export class HostExecutionAuthority {
     return this.admit(trustedHostExecutable(name, this.workspaceRoots));
   }
 
+  /** Publish a helper's executable and inputs together after the complete selection has passed admission.
+   * A rejected optional helper contributes no paths to subsequent process leases. */
+  async admitGroup<T>(
+    prepare: (group: Pick<HostExecutionAuthority, 'admit' | 'admitSocket'>) => Promise<T>,
+  ): Promise<T> {
+    const group = new HostExecutionAuthority(this.processes, this.host);
+    const result = await prepare(group);
+    await group.validate();
+    for (const path of group.paths) this.paths.add(path);
+    for (const path of group.sockets) this.sockets.add(path);
+    return result;
+  }
+
   /** Reauthorize at handoff. The operation settles after its child closes or its temporary store is removed. */
   async run<T>(signal: AbortSignal, launch: (signal: AbortSignal) => Promise<T>): Promise<T> {
     signal.throwIfAborted();

@@ -121,7 +121,7 @@ function httpPathValue(
 async function pinCredentialHelper(
   value: string,
   directory: string,
-  authority: HostExecutionAuthority,
+  authority: Pick<HostExecutionAuthority, 'admit'>,
 ): Promise<{ path: string; kind?: 'store' | 'cache' }> {
   if (value.startsWith('!') || (!isAbsolute(value) && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(value)))
     throw new Error(
@@ -148,16 +148,17 @@ async function pinCredentialHelper(
 
 /** Pin Git's account cache once, including a prospective endpoint. The account's existing daemon
  * belongs to the user. A cache miss during preview must not start a new long-lived service. */
-async function repositoryCacheSocket(home: string, authority: HostExecutionAuthority): Promise<string> {
+async function repositoryCacheSocket(
+  home: string,
+  authority: Pick<HostExecutionAuthority, 'admitSocket'>,
+): Promise<string> {
   const legacy = join(home, '.git-credential-cache');
   // Git prefers the legacy directory only when its stat succeeds and reports a directory.
   const legacyDirectory = await stat(legacy).catch(() => undefined);
   const configured = process.env.XDG_CACHE_HOME;
   const xdg = configured && isAbsolute(configured) ? configured : join(home, '.cache');
   const directory = legacyDirectory?.isDirectory() ? legacy : join(xdg, 'git/credential');
-  const socket = authority.admitSocket(join(directory, 'socket'));
-  await authority.validate();
-  return socket;
+  return authority.admitSocket(join(directory, 'socket'));
 }
 
 /**
@@ -191,7 +192,7 @@ export async function captureRepositoryEnvironment(
     maxBuffer: number,
     input?: Buffer,
     env: NodeJS.ProcessEnv = isolated,
-    allowNoMatch = false,
+    outputMode?: 'allow-no-match' | 'diagnostics',
   ) =>
     authority.run(
       signal,
@@ -204,9 +205,9 @@ export async function captureRepositoryEnvironment(
             args,
             { cwd, env, signal: processSignal, timeout: 5000, maxBuffer, encoding: 'buffer' },
             (error, bytes, diagnostics) => {
-              const noMatch = allowNoMatch && error?.code === 1 && !diagnostics?.length;
+              const noMatch = outputMode === 'allow-no-match' && error?.code === 1 && !diagnostics?.length;
               failure ??= noMatch ? null : error;
-              output = bytes;
+              output = outputMode === 'diagnostics' ? diagnostics : bytes;
             },
           );
           // Node can invoke execFile's callback on abort before the child has exited.
@@ -242,7 +243,7 @@ export async function captureRepositoryEnvironment(
       1024 * 1024,
       undefined,
       isolated,
-      true,
+      'allow-no-match',
     );
     if (locations.length > 0) {
       const first = new TextDecoder('utf-8', { fatal: true }).decode(locations).split('\0')[0]!;
@@ -274,8 +275,7 @@ export async function captureRepositoryEnvironment(
   if (records.length % 3 !== 0) throw new Error('Git returned invalid configuration origins.');
   const sources = new Map<string, Set<string>>();
   const entries: Entry[] = [];
-  let credentialStore = false;
-  const credentialCaches = new Map<Entry, string>();
+  const helpers = new Map<{ readonly key: string; value: string }, string>();
   let bytes = 0;
   for (let index = 0; index < records.length; index += 3) {
     const scope = records[index]!;
@@ -325,20 +325,13 @@ export async function captureRepositoryEnvironment(
       continue;
     }
     if (key.startsWith('credential.') && key.endsWith('.helper') && parsed.value) {
-      const helper = await pinCredentialHelper(parsed.value, executionDirectory, authority);
-      credentialStore ||= helper.kind === 'store';
-      const setting = {
-        key: parsed.key,
-        value: helper.kind === 'cache' ? '!:' : '!exec ' + shellArgument(helper.path),
-      };
-      if (helper.kind === 'cache') credentialCaches.set(setting, helper.path);
+      // Resolve the selected remote from an inert snapshot, then admit the helpers it can use.
+      const setting = { key: parsed.key, value: '!:' };
+      helpers.set(setting, parsed.value);
       entries.push(setting);
       continue;
     }
-    if (key === 'credential.helper' && !parsed.value) {
-      credentialStore = false;
-      credentialCaches.clear();
-    }
+    if (key === 'credential.helper' && !parsed.value) helpers.clear();
     entries.push(parsed);
   }
   const writeConfig = async (entriesToWrite: readonly Entry[]) => {
@@ -365,6 +358,28 @@ export async function captureRepositoryEnvironment(
     authority.admit(path);
     return path;
   };
+  const resolveHelper = (name: string, https: boolean) =>
+    authority.admitGroup(async group => {
+      const helper = await pinCredentialHelper(name, executionDirectory, group);
+      if (helper.kind === 'cache') {
+        if (!https) return '!:';
+        const socket = shellArgument(await repositoryCacheSocket(home, group));
+        // An unavailable daemon must never launch a background service outside this preview's lease.
+        const noPrograms = shellArgument(nullDevice);
+        return `!test -S ${socket} || exit 0; PATH=${noPrograms} GIT_EXEC_PATH=${noPrograms} exec ${shellArgument(helper.path)} --socket ${socket}`;
+      }
+      if (https && helper.kind === 'store') {
+        for (const path of [join(home, '.git-credentials'), join(xdg, 'git/credentials')]) {
+          const physical = group.admit(path);
+          group.admit(path + '.lock');
+          group.admit(physical + '.lock');
+        }
+      }
+      return '!exec ' + shellArgument(helper.path);
+    });
+  if (!gitDirectory || !selectLocalMirror) {
+    for (const [setting, name] of helpers) setting.value = await resolveHelper(name, false);
+  }
   const env: NodeJS.ProcessEnv = {
     ...isolated,
     GIT_CONFIG_GLOBAL: await writeConfig(entries),
@@ -399,38 +414,100 @@ export async function captureRepositoryEnvironment(
     env.GIT_SSH_COMMAND = await repositorySshCommand(env, process.env.SSH_AUTH_SOCK, authority);
     env.GIT_ALLOW_PROTOCOL = 'ssh';
   } else if (/^https:\/\//iu.test(remote)) {
-    if (credentialCaches.size > 0) {
-      const socket = shellArgument(await repositoryCacheSocket(home, authority));
-      // Cache clients use their own executable to talk to a live socket. On a stale socket,
-      // Git would launch "git credential-cache--daemon" via PATH. Give this helper no executable
-      // lookup directories. Only an existing account daemon may serve this preview.
-      const noPrograms = shellArgument(nullDevice);
-      env.GIT_CONFIG_GLOBAL = await writeConfig(
-        entries.map(setting => {
-          const helper = credentialCaches.get(setting);
-          if (!helper) return setting;
-          return {
-            key: setting.key,
-            value: `!test -S ${socket} || exit 0; PATH=${noPrograms} GIT_EXEC_PATH=${noPrograms} exec ${shellArgument(helper)} --socket ${socket}`,
-          };
-        }),
-      );
+    if (helpers.size > 0) {
+      const selected = await selectedCredentialHelpers(entries, [...helpers.keys()], async probes => {
+        const markers = await readGit(
+          [repo, 'credential', 'reject'],
+          1024 * 1024,
+          Buffer.from('url=' + remote + '\n\n'),
+          { ...env, GIT_CONFIG_GLOBAL: await writeConfig(probes) },
+          'diagnostics',
+        );
+        return markers.toString('utf8');
+      });
+      let additionalOrigins = false;
+      if (selected.size !== helpers.size) {
+        const http = await readGit(
+          [repo, 'config', '--null', '--type=bool-or-str', '--get-urlmatch', 'http', remote],
+          1024 * 1024,
+          undefined,
+          env,
+          'allow-no-match',
+        );
+        const settings = new Map(
+          http
+            .toString('utf8')
+            .split('\0')
+            .slice(0, -1)
+            .map(text => {
+              const { key, value } = entry(text);
+              return [key, value];
+            }),
+        );
+        // The named remote overrides HTTP's URL-matched proxy, including an explicit empty override.
+        const proxy =
+          entries.findLast(setting => setting.key.toLowerCase() === 'remote.origin.proxy')?.value ??
+          settings.get('http.proxy') ??
+          env.https_proxy ??
+          env.HTTPS_PROXY;
+        // Proxies and encrypted client certificates can request credentials independently of the fetch URL.
+        additionalOrigins =
+          settings.get('http.followredirects') !== 'false' ||
+          Boolean(proxy) ||
+          settings.get('http.sslcertpasswordprotected') === 'true';
+      }
+      for (const [setting, name] of helpers) {
+        if (selected.has(setting)) {
+          setting.value = await resolveHelper(name, true);
+        } else if (additionalOrigins) {
+          try {
+            setting.value = await resolveHelper(name, true);
+          } catch {
+            signal.throwIfAborted();
+            // Git can select this scope after a redirect or for a proxy. Block a denied lookup at
+            // that point, without making a different host depend on the rejected file or socket.
+            setting.value = "!echo 'quit=true'; :";
+          }
+        }
+      }
+      env.GIT_CONFIG_GLOBAL = await writeConfig(entries);
     }
     authority.admit(join(home, '.netrc'));
     if (process.platform === 'win32') authority.admit(join(home, '_netrc'));
-    if (credentialStore) {
-      for (const path of [join(home, '.git-credentials'), join(xdg, 'git/credentials')]) {
-        const physical = authority.admit(path);
-        // Git updates the selected credential file under a lock alongside its physical target.
-        authority.admit(path + '.lock');
-        authority.admit(physical + '.lock');
-      }
-    }
     await authority.validate();
   } else {
     throw new Error('Repository preview supports HTTPS, SSH and local Git mirrors.');
   }
   return env;
+}
+
+function credentialProbeMarker(marker: string): string {
+  return '!echo ' + marker + ' >&2; :';
+}
+
+/** Git's credential command accumulates matching helpers, including partial URL scopes, and honors
+ * empty resets in order. Probe these scopes with host-authored markers. No configured helper runs. */
+async function selectedCredentialHelpers(
+  entries: readonly Entry[],
+  helpers: readonly Entry[],
+  probe: (settings: readonly Entry[]) => Promise<string>,
+): Promise<Set<Entry>> {
+  const scopes = entries.filter(setting => /^credential\.(?:.*\.)?helper$/iu.test(setting.key));
+  if (scopes.every(setting => setting.key.toLowerCase() === 'credential.helper')) return new Set(helpers);
+  const prefix = 'glyph-helper-' + randomUUID() + '-';
+  const markers = new Map(helpers.map((setting, index) => [setting, prefix + index]));
+  const settings = scopes.map(setting => {
+    const marker = markers.get(setting);
+    return marker ? { key: setting.key, value: credentialProbeMarker(marker) } : setting;
+  });
+  // Git can exit successfully after a credential subprocess fails. Require a complete probe
+  // with only our markers before interpreting an absent helper as unselected.
+  settings.push({ key: 'credential.helper', value: credentialProbeMarker(prefix + 'end') });
+  const output = await probe(settings);
+  if (!new RegExp(`^(?:${prefix}[0-9]+\\r?\\n)*${prefix}end\\r?\\n$`, 'u').test(output))
+    throw new Error('Git could not determine the credential helpers selected for this repository.');
+  const active = new Set(output.split(/\r?\n/u));
+  return new Set(helpers.filter(setting => active.has(markers.get(setting)!)));
 }
 
 /** OpenSSH receives explicit authentication paths only for an effective SSH remote.
