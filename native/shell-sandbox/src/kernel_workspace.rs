@@ -82,10 +82,11 @@ impl Mounts for &mut KernelWorkspace {
         fs::File::create_new(&target)?;
         mount_bind(format!("/proc/self/fd/{}", fd.as_raw_fd()), &target)?;
         verify_file(fd, &target)?;
-        if !writable {
-            readonly(&target, MountFlags::BIND)?;
+        if writable {
+            Ok(())
+        } else {
+            readonly(&target, MountFlags::BIND)
         }
-        Ok(())
     }
     fn finish(&mut self, root: &Path) -> io::Result<Vec<OsString>> {
         readonly(&self.target, MountFlags::empty())?;

@@ -30,10 +30,10 @@ impl Workspace {
         }
     }
 
-    fn command(&self) -> Command {
+    fn command(&self, profile: &str) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_glyph-shell-sandbox"));
         command
-            .args(["--profile", "read-only", "--working-directory"])
+            .args(["--profile", profile, "--working-directory"])
             .arg(&self.root)
             .arg("--state-directory")
             .arg(&self.state)
@@ -44,7 +44,7 @@ impl Workspace {
     }
 
     fn run(&self, script: &str) -> Output {
-        self.command()
+        self.command("read-only")
             .args(["--", "/bin/sh", "-c", script])
             .output()
             .expect("run native sandbox helper")
@@ -90,7 +90,7 @@ fn fails_when_the_sandboxed_command_is_terminated_by_a_signal() {
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the Linux sandbox backend"]
-fn reads_ordinary_files_across_two_projected_workspace_roots() {
+fn enforces_the_selected_file_permissions_across_two_projected_roots() {
     let workspace = Workspace::new();
     let private = workspace.root.join("personal");
     fs::create_dir(&private).unwrap();
@@ -105,22 +105,38 @@ fn reads_ordinary_files_across_two_projected_workspace_roots() {
     let second_file = second.join("file");
     fs::write(&second_file, " and second fixture").unwrap();
 
-    let output = workspace
-        .command()
-        .arg("--workspace-root")
-        .arg(&second)
-        .arg("--private-path")
-        .arg(private)
-        .arg("--private-path")
-        .arg(second_private)
-        .args(["--", "/bin/cat", "link"])
-        .arg(second_file)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(output.stdout, b"projected fixture and second fixture");
+    for profile in ["read-only", "workspace-write"] {
+        let output = workspace
+            .command(profile)
+            .arg("--workspace-root")
+            .arg(&second)
+            .arg("--private-path")
+            .arg(&private)
+            .arg("--private-path")
+            .arg(&second_private)
+            .args([
+                "--",
+                "/bin/sh",
+                "-c",
+                r#"cat link "$1" && printf edited > "$1""#,
+                "fixture",
+            ])
+            .arg(&second_file)
+            .output()
+            .unwrap();
+        assert_eq!(output.stdout, b"projected fixture and second fixture");
+        let writable = profile == "workspace-write";
+        assert_eq!(
+            output.status.success(),
+            writable,
+            "{profile}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let expected = if writable {
+            "edited"
+        } else {
+            " and second fixture"
+        };
+        assert_eq!(fs::read_to_string(&second_file).unwrap(), expected);
+    }
 }
