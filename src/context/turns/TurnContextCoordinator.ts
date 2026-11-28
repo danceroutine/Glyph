@@ -152,16 +152,41 @@ export class TurnContextCoordinator {
     });
   }
   disclosePaths(turnId: string, paths: readonly string[], signal?: AbortSignal) {
-    return this.disclose(turnId, part => part.disclosePaths?.(paths), signal);
+    return this.withPathInstructions(turnId, paths, context => context, signal);
+  }
+  /** Admit a project result and its scoped guidance in one synchronous delivery.
+   * A failed result check leaves the instructions available to a later read or proposal. */
+  withPathInstructions<T>(
+    turnId: string,
+    paths: readonly string[],
+    deliver: (context: TurnContextEnvelope | undefined) => T,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.disclose(turnId, part => part.disclosePaths?.(paths), deliver, signal);
   }
   discloseAttachments(turnId: string, paths: readonly string[], signal?: AbortSignal) {
-    return this.disclose(turnId, part => part.discloseAttachments?.(paths), signal);
+    return this.disclose(
+      turnId,
+      part => part.discloseAttachments?.(paths),
+      context => context,
+      signal,
+    );
   }
   activateManualRules(turnId: string, ids: readonly string[], signal?: AbortSignal) {
-    return this.disclose(turnId, part => part.activateManualRules?.(ids), signal);
+    return this.disclose(
+      turnId,
+      part => part.activateManualRules?.(ids),
+      context => context,
+      signal,
+    );
   }
   activateRule(turnId: string, id: string, signal?: AbortSignal) {
-    return this.disclose(turnId, part => part.activateRule?.(id, AgentInstructionActivationReason.MODEL), signal);
+    return this.disclose(
+      turnId,
+      part => part.activateRule?.(id, AgentInstructionActivationReason.MODEL),
+      context => context,
+      signal,
+    );
   }
   async activateSource(
     turnId: string,
@@ -208,13 +233,14 @@ export class TurnContextCoordinator {
       check();
     });
   }
-  private async disclose(
+  private async disclose<T>(
     turnId: string,
     operation: (part: TurnContextContribution) => TurnContextEnvelope | undefined,
+    deliver: (context: TurnContextEnvelope | undefined) => T,
     signal?: AbortSignal,
-  ): Promise<TurnContextEnvelope | undefined> {
+  ): Promise<T> {
     const session = this.sessions.get(turnId);
-    if (!session) return undefined;
+    if (!session) return deliver(undefined);
     return this.disclosures.get(session)!.publish(
       () => session.checkpoint(),
       () => {
@@ -225,6 +251,7 @@ export class TurnContextCoordinator {
         return prepareModelContext(mergeTurnContext(parts));
       },
       context => (context ? session.disclosurePins(context) : []),
+      deliver,
       signal,
     );
   }

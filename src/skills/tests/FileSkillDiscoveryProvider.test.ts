@@ -3,7 +3,7 @@ import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { WorkspaceReadFailure } from '#src/workspace/WorkspaceReadFailure.js';
 import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
 import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
-import { mkdtemp, mkdir, rm, writeFile, symlink, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, rename, writeFile, symlink, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -44,6 +44,41 @@ it('retains missing manifest diagnostics and the stored path of a physically cla
 });
 
 describe(FileSkillDiscoveryProvider, () => {
+  it('admits an unrelated turn after a nested manifest is replaced and checks its original identity on selection', async () => {
+    const fixture = await skillFixture();
+    const manifestPath = 'nested/.glyph/skills/example/SKILL.md';
+    const file = join(fixture.root, manifestPath);
+    await fixture.write(manifestPath, manifest());
+    // The replacement has the same revision but belongs to a distinct file.
+    await fixture.write(manifestPath + '.save', manifest());
+    const capture = async (paths: readonly string[]) =>
+      Promise.all(
+        paths.map(async path => {
+          const entry = await stat(path);
+          return { path, origin: path, identity: entry.dev + ':' + entry.ino };
+        }),
+      );
+    const authority: PinnedSourceAuthority = {
+      capture: vi.fn(capture).mockImplementationOnce(async paths => {
+        await rename(file + '.save', file);
+        return capture(paths);
+      }),
+      authorize: async () => () => {},
+    };
+    const catalog = new SkillCatalog([fixture.provider([manifestPath], 'project', authority)]);
+    const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
+    const session = await turns.beginTurn({ turnId: 'plain', attachmentPaths: [] });
+    expect(session.initialEnvelope().skillCandidates ?? []).toEqual([]);
+    const id = catalog.skills[0]!.id;
+    await expect(turns.disclosePaths('plain', ['nested/file.ts'])).rejects.toThrow('changed during discovery');
+    await expect(turns.steer({ turnId: 'plain', attachmentPaths: [], skillIds: [id] })).rejects.toThrow(
+      'changed during discovery',
+    );
+    expect(session.snapshot().skills ?? []).toEqual([]);
+    const fresh = await turns.beginTurn({ turnId: 'fresh', attachmentPaths: [], skillIds: [id] });
+    expect(fresh.initialEnvelope().skills?.[0]?.body).toBe('BODY');
+  });
+
   it('discloses pinned resource bytes only while the manifest and selected file remain authorized', async () => {
     const fixture = await skillFixture();
     const manifestPath = '.glyph/skills/example/SKILL.md';
