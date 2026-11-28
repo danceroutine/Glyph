@@ -14,6 +14,8 @@ struct Request {
     paths: Vec<PathBuf>,
     private_paths: Vec<PathBuf>,
     #[serde(default)]
+    allow_unavailable: bool,
+    #[serde(default)]
     directories: bool,
 }
 
@@ -85,43 +87,57 @@ fn directory_origin(path: &Path, cache: &mut HashMap<PathBuf, [u8; 32]>) -> io::
     Ok(origin)
 }
 
+fn inspect_path(
+    path: &Path,
+    authority: &WorkspacePaths,
+    directories: &mut HashMap<PathBuf, [u8; 32]>,
+    inspect_directory: bool,
+) -> io::Result<SourceOrigin> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let meta = file.metadata()?;
+    let admitted = if inspect_directory {
+        meta.is_dir()
+    } else {
+        meta.is_file() && meta.nlink() == 1
+    };
+    if !admitted {
+        return Err(denied());
+    }
+    let (dev, ino) = (meta.dev().to_string(), meta.ino().to_string());
+    authority.assert_batch_path(path, Some((&dev, &ino)))?;
+    let canonical = fs::canonicalize(path)?;
+    let mut hash = Sha256::new();
+    hash.update(directory_origin(
+        if inspect_directory {
+            &canonical
+        } else {
+            canonical.parent().ok_or_else(denied)?
+        },
+        directories,
+    )?);
+    hash.update(meta.dev().to_le_bytes());
+    mount_identity(&file, &mut hash)?;
+    hash.update(canonical.as_os_str().as_encoded_bytes());
+    Ok(SourceOrigin {
+        identity: format!("{dev}:{ino}"),
+        origin: format!("{:x}", hash.finalize()),
+    })
+}
+
 pub fn inspect() -> io::Result<()> {
     let req: Request = serde_json::from_reader(io::stdin().lock())?;
     let authority = WorkspacePaths::current(&req.private_paths)?;
     let mut directories = HashMap::new();
     let mut sources = Vec::with_capacity(req.paths.len());
     for path in req.paths {
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&path)?;
-        let meta = file.metadata()?;
-        let admitted = if req.directories {
-            meta.is_dir()
+        let origin = inspect_path(&path, &authority, &mut directories, req.directories);
+        sources.push(if req.allow_unavailable {
+            origin.ok()
         } else {
-            meta.is_file() && meta.nlink() == 1
-        };
-        if !admitted {
-            return Err(denied());
-        }
-        let (dev, ino) = (meta.dev().to_string(), meta.ino().to_string());
-        authority.assert_batch_path(&path, Some((&dev, &ino)))?;
-        let canonical = fs::canonicalize(&path)?;
-        let mut hash = Sha256::new();
-        hash.update(directory_origin(
-            if req.directories {
-                &canonical
-            } else {
-                canonical.parent().ok_or_else(denied)?
-            },
-            &mut directories,
-        )?);
-        hash.update(meta.dev().to_le_bytes());
-        mount_identity(&file, &mut hash)?;
-        hash.update(canonical.as_os_str().as_encoded_bytes());
-        sources.push(SourceOrigin {
-            identity: format!("{dev}:{ino}"),
-            origin: format!("{:x}", hash.finalize()),
+            Some(origin?)
         });
     }
     authority.finish_batch()?;

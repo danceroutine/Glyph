@@ -1,3 +1,4 @@
+import { relativeWorkspaceSpelling } from './sameWorkspaceDirectory.ts';
 import { DirectoryNamePolicies } from './DirectoryNamePolicies.ts';
 import {
   normalizeVolumeName,
@@ -165,16 +166,11 @@ export class WorkspaceSourceRoutes {
    * Recover the selected spelling of an enrolled physical source. The native disclosure receipt uses this route
    * so a later retarget of an attached folder changes its origin. Overlapping roots use the most specific owner.
    */
-  selectedSourcePath(path: string): string {
+  selectedSourceRoute(path: string): { path: string; assertCurrent?: () => void } {
     const root = this.sourceRoot(path);
-    return join(root.selectedPath ?? root.path, relative(root.path, path));
-  }
-
-  /** Retain the selected directories contributing to this disclosure. Recheck them at transport handoff. */
-  beginSourceAccess(paths: readonly string[]): () => void {
-    const roots = new Set(paths.map(path => this.sourceRoot(path)));
-    return () => {
-      for (const root of roots) root.assertCurrent?.();
+    return {
+      path: join(root.selectedPath ?? root.path, relative(root.path, path)),
+      ...(root.assertCurrent && { assertCurrent: root.assertCurrent }),
     };
   }
 
@@ -228,8 +224,9 @@ export class WorkspaceSourceRoutes {
     let nearest: { name: string; local: string } | undefined;
     for (const root of this.roots) {
       for (const anchor of new Set([root.path, root.uri ? fileURLToPath(root.uri) : root.path])) {
-        const local = relative(anchor, selected);
-        if (contained(local) && (!nearest || local.length < nearest.local.length)) nearest = { name: root.name, local };
+        const local = relativeWorkspaceSpelling(anchor, selected);
+        if (local !== undefined && (!nearest || local.length < nearest.local.length))
+          nearest = { name: root.name, local };
       }
     }
     if (!nearest) return undefined;

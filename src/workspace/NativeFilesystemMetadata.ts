@@ -8,6 +8,10 @@ import type { FilesystemMetadata } from './FilesystemMetadata.ts';
 
 import type { HostFilesystemAuthority } from './HostFilesystemAuthority.ts';
 
+const sourceOrigin = z
+  .object({ origin: z.string().regex(/^[a-f0-9]{64}$/u), identity: z.string().regex(/^\d+:\d+$/u) })
+  .strict();
+
 /**
  * Bridges host operations to the native physical identity and metadata checks.
  * Workspace path admission can bind a route to the caller's open handle. File
@@ -26,6 +30,24 @@ export class NativeFilesystemMetadata
     signal?: AbortSignal,
     directories = false,
   ) {
+    return z
+      .array(sourceOrigin)
+      .length(paths.length)
+      .parse(await this.inspectSources(paths, privatePaths, signal, directories ? { directories } : {}));
+  }
+
+  /** Enroll readable catalog files together, preserving the positions of unavailable siblings. */
+  async availableSourceOrigins(paths: readonly string[], privatePaths: readonly string[], signal?: AbortSignal) {
+    const output = await this.inspectSources(paths, privatePaths, signal, { allowUnavailable: true });
+    return z.array(sourceOrigin.nullable()).length(paths.length).parse(output);
+  }
+
+  private async inspectSources(
+    paths: readonly string[],
+    privatePaths: readonly string[],
+    signal: AbortSignal | undefined,
+    options: { readonly directories?: boolean; readonly allowUnavailable?: boolean },
+  ): Promise<unknown> {
     signal?.throwIfAborted();
     if (paths.length === 0) return [];
     const output = await new Promise<string>((resolve, reject) => {
@@ -39,14 +61,9 @@ export class NativeFilesystemMetadata
         },
       );
       child.stdin!.on('error', reject);
-      child.stdin!.end(JSON.stringify({ paths, privatePaths, ...(directories ? { directories } : {}) }));
+      child.stdin!.end(JSON.stringify({ paths, privatePaths, ...options }));
     });
-    return z
-      .array(
-        z.object({ origin: z.string().regex(/^[a-f0-9]{64}$/u), identity: z.string().regex(/^\d+:\d+$/u) }).strict(),
-      )
-      .length(paths.length)
-      .parse(JSON.parse(output));
+    return JSON.parse(output);
   }
 
   /** Verify that an approved source was actually unlinked. A renamed or inaccessible directory fails this check. */

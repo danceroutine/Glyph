@@ -1,4 +1,5 @@
 import * as sourceAliases from '#src/workspace/SourcePathAliases.js';
+import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 import { restoreGlyphPrompt } from '#src/desktop/workbench/restoreGlyphPrompt.js';
 import { formatFolderAttachment } from '#src/desktop/workbench/formatFolderContextOutline.js';
@@ -98,6 +99,9 @@ let isolatedUserDirectory: string;
 beforeEach(async () => {
   vi.spyOn(NativeFilesystemMetadata.prototype, 'sourceOrigins').mockImplementation(
     testFilesystemMetadata.sourceOrigins,
+  );
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'availableSourceOrigins').mockImplementation(
+    testFilesystemMetadata.availableSourceOrigins,
   );
   vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
   vi.spyOn(NativeFilesystemMetadata.prototype, 'assertHostPaths').mockResolvedValue(undefined);
@@ -576,17 +580,18 @@ describe(OpenAIDesktopRuntimeFactory, () => {
   });
   it('restores and queues single-folder captures from a saved chat after reopening with more folders', async () => {
     const test = await factoryFixture();
-    const app = await test.folder('app', { 'notes.md': 'new editor contents' });
     const other = await test.folder('other');
-    await mkdir(join(app, 'src'));
-    await writeFile(join(app, 'src', 'original.ts'), '');
-    await writeFile(join(app, 'src', 'new.ts'), '');
-    const roots = [{ name: 'app', path: app }];
+    const capturedName = workspaceCaseSensitivity(dirname(other)) ? 'app' : 'App';
+    const original = await test.folder(capturedName, { 'notes.md': 'new editor contents' });
+    await mkdir(join(original, 'src'));
+    await writeFile(join(original, 'src', 'original.ts'), '');
+    await writeFile(join(original, 'src', 'new.ts'), '');
+    const roots = [{ name: capturedName, path: original }];
     const context = {
       id: ProjectContextIdentity.create(ProjectContextKind.WORKSPACE, 'file', 'profile:workspace'),
       mutationIdentity: ProjectContextIdentity.createMutationScope(ProjectContextKind.FOLDER, 'file', roots),
       kind: ProjectContextKind.FOLDER,
-      name: 'app',
+      name: capturedName,
       authority: 'file',
       roots,
     };
@@ -597,7 +602,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       kind: 'file' | 'folder' | 'terminal',
       path: string,
       text: string,
-      uri = pathToFileURL(join(app, path)).href,
+      uri = pathToFileURL(join(original, path)).href,
     ) => {
       const revision = contentRevision(text, false);
       return {
@@ -655,6 +660,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     } finally {
       await saved.dispose();
     }
+    const app = join(dirname(original), 'app');
+    if (app !== original) await rename(original, app);
     test.initialize.mockRestore();
     vi.spyOn(RustWorkspacePathIndex.prototype, 'initialize').mockResolvedValue({
       root: app,

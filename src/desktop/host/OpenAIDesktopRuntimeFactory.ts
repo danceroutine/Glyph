@@ -455,17 +455,10 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       readDirectoryNamePolicies.bind(undefined, indexExecutable),
     );
     const projectSourceAuthority = new NativePinnedSourceAuthority(
-      {
-        beginSourceAccess: paths => routes.beginSourceAccess(paths),
-        sourceOrigins: (paths, reservations, signal) =>
-          filesystemMetadata.sourceOrigins(
-            paths.map(path => routes.selectedSourcePath(path)),
-            reservations,
-            signal,
-          ),
-      },
+      filesystemMetadata,
       policy,
       input.assertTrusted,
+      path => routes.selectedSourceRoute(path),
     );
     const workspace =
       roots.length === 1
