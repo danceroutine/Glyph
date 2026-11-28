@@ -1033,6 +1033,25 @@ fn searching_a_content_source_reports_admission_and_in_flight_cancellation_or_re
 
 #[cfg(unix)]
 #[test]
+fn returns_the_opened_identity_for_disk_matches_and_defers_editor_identity_to_the_host() {
+    use std::os::unix::fs::MetadataExt;
+    let (_directory, search) = context(&[("a.txt", "needle"), ("b.txt", "disk")]);
+    let mut params = parameters(ContentSearchOutputMode::Content);
+    params.include_source_identity = true;
+    params.overrides.insert("b.txt".into(), "needle".into());
+    let result = search.search(params, &AtomicBool::new(false)).unwrap();
+    let wire = serde_json::to_value(result).unwrap();
+    let disk = fs::metadata(search.root.join("a.txt")).unwrap();
+    assert_eq!(
+        wire["matches"][0]["sourceIdentity"],
+        format!("{}:{}", disk.dev(), disk.ino())
+    );
+    assert_eq!(wire["matches"][1]["matchedText"], "needle");
+    assert!(wire["matches"][1].get("sourceIdentity").is_none());
+}
+
+#[cfg(unix)]
+#[test]
 fn excludes_unverified_hardlink_content_from_disk_searches() {
     let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path().canonicalize().unwrap();
