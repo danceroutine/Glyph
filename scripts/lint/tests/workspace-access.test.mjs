@@ -3,9 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RuleTester } from 'oxlint/plugins-dev';
-import { describe, expect, it } from 'vitest';
-import accessPlugin from '#scripts/lint/workspace-access.mjs';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const name = 'glyph-access/mediated-workspace-access';
@@ -54,6 +52,16 @@ const cases = [
   ['src/chat/tests/raw.test.ts', "import { open } from 'node:fs/promises';", false],
   ['code-oss/ui/src/Rogue.tsx', "import { IFileService as files } from '#vs/platform/files/common/files.js';", true],
   ['code-oss/ui/src/Enum.tsx', "import { FileChangeType } from '#vs/platform/files/common/files.js';", false],
+  [
+    'code-oss/ui/src/FileChanges.ts',
+    "import { type IFileService, FileChangeType } from '#vs/platform/files/common/files.js';",
+    false,
+  ],
+  [
+    'code-oss/ui/src/FileServices.ts',
+    "export { type FileChangeType, IFileService as fileService } from '#vs/platform/files/common/files.js';",
+    true,
+  ],
   ['src/chat/Nothing.ts', "import type { FileHandle } from 'fs/promises'; export type { FileHandle };", false],
   [
     'src/chat/ForwardType.ts',
@@ -95,22 +103,24 @@ const cases = [
   ],
 ];
 
-const runtimeRule = accessPlugin.rules['mediated-workspace-access'];
-RuleTester.describe = (title, body) => {
-  describe(title, body);
-};
-RuleTester.it = it;
-new RuleTester({ cwd: root }).run('workspace access at a module boundary', runtimeRule, {
-  valid: cases
-    .filter(([file, , denied]) => !denied && !file.includes('/tests/'))
-    .map(([filename, code]) => ({ filename: join(root, filename), code })),
-  invalid: cases
-    .filter(([, , denied]) => denied)
-    .map(([filename, code]) => ({
-      filename: join(root, filename),
-      code,
-      errors: [{ messageId: 'mediated' }],
-    })),
+describe('workspace access at a module boundary', () => {
+  const fixtures = cases.filter(([file]) => !file.includes('/tests/'));
+  /** @type {Map<string, string | null>} */
+  let outcomes;
+  beforeAll(() => {
+    const result = spawnSync(process.execPath, ['scripts/lint/tests/fixtures/check-workspace-rule.mjs'], {
+      cwd: root,
+      input: JSON.stringify(fixtures),
+      encoding: 'utf8',
+      timeout: 20000,
+    });
+    if (result.error) throw result.error;
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    outcomes = new Map(JSON.parse(result.stdout));
+  });
+  it.each(fixtures)('%s', file => {
+    expect(outcomes.get(file)).toBeNull();
+  });
 });
 
 it('enforces the production ownership map through Oxlint using the repository overrides', () => {
