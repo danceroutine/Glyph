@@ -217,7 +217,9 @@ export class SkillTurnContext implements TurnContextContribution {
     }
     if (selected.length === 0) return undefined;
     if (reason === 'manual') {
-      const names = new Set([...this.packages.values()].map(active => active.package.descriptor.name));
+      const names = new Set(
+        [...this.packages].filter(([id]) => !this.retired.has(id)).map(([, active]) => active.package.descriptor.name),
+      );
       for (const skill of selected) {
         if (names.has(skill.name))
           throw new Error('Selected same-name skills from different origins. Choose the intended package.');
