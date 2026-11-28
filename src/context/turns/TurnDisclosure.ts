@@ -20,12 +20,13 @@ export class TurnDisclosure {
     );
     return operation;
   }
-  async publish<T>(
+  async publish<T, R>(
     checkpoint: () => () => void,
     prepare: () => T,
     pins: (value: T) => readonly SourcePin[],
+    deliver: (value: T) => R,
     signal?: AbortSignal,
-  ): Promise<T> {
+  ): Promise<R> {
     const operation = this.exclusive(async () => {
       const undo = checkpoint();
       let value: T;
@@ -39,8 +40,9 @@ export class TurnDisclosure {
       const check = await authorizeSources(pins(value), signal);
       check();
       this.assertActive();
+      const result = deliver(value);
       commit();
-      return value;
+      return result;
     });
     return operation;
   }
