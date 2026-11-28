@@ -35,10 +35,12 @@ const rangeOf = (range: Range) => ({
   start: { line: range.startLineNumber, column: range.startColumn },
   end: { line: range.endLineNumber, column: range.endColumn },
 });
-const digest = async (text: string) =>
-  [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
-    .map(byte => byte.toString(16).padStart(2, '0'))
-    .join('');
+/** SHA-256 revision of a workbench text capture's exact UTF-8 bytes. */
+export async function contextTextRevision(value: string | Uint8Array<ArrayBuffer>): Promise<string> {
+  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
 
 /** Explicit workbench captures. No repository history or language-service cache is searched implicitly. */
 enum DiffChoice {
@@ -319,7 +321,7 @@ export class GlyphIdeContext {
         GlyphDesktopErrorCode.STALE_DOCUMENT,
         'The Git comparison changed during capture. Capture it again.',
       );
-    const text = `Git diff: ${base}\nBase URI: ${before?.toString() ?? '/dev/null'}\nTarget URI: ${after?.toString() ?? '/dev/null'}\nBase SHA-256: ${await digest(oldText)}\nTarget SHA-256: ${await digest(newText)}\n\n--- ${before ? path : '/dev/null'}\n+++ ${after ? path : '/dev/null'}\n${this.diffBody(oldText, newText)}`;
+    const text = `Git diff: ${base}\nBase URI: ${before?.toString() ?? '/dev/null'}\nTarget URI: ${after?.toString() ?? '/dev/null'}\nBase SHA-256: ${await contextTextRevision(oldText)}\nTarget SHA-256: ${await contextTextRevision(newText)}\n\n--- ${before ? path : '/dev/null'}\n+++ ${after ? path : '/dev/null'}\n${this.diffBody(oldText, newText)}`;
     const result = await this.snapshot(
       Kind.DIFF,
       { uri: selected.toString(), path, ...(projectFile && { projectFile: true }) },
@@ -392,7 +394,7 @@ export class GlyphIdeContext {
       this.adapter.contextPath(URI.parse(source.uri)) !== source.path
     )
       throw new GlyphContextError(GlyphDesktopErrorCode.STALE_DOCUMENT, 'The workspace changed during capture.');
-    const contentRevision = await digest(text);
+    const contentRevision = await contextTextRevision(text);
     const uri = URI.parse(source.uri);
     if (uri.scheme === 'file') await this.admitFile(uri, kind === Kind.SYMBOL || source.projectFile === true);
     this.assertTrusted();

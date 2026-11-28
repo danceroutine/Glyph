@@ -2,11 +2,11 @@ import { resolveInstructionId } from '#vs/platform/glyph/instructions/resolveIns
 import { Emitter } from '#vs/base/common/event.js';
 import { RunOnceScheduler } from '#vs/base/common/async.js';
 import { DisposableStore, DisposableMap, MutableDisposable, type IDisposable } from '#vs/base/common/lifecycle.js';
-import { GlyphIdeContext } from './GlyphIdeContext.js';
+import { contextTextRevision, GlyphIdeContext } from './GlyphIdeContext.js';
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { basename, dirname, ExtUri, extUri, extUriIgnorePathCase } from '#vs/base/common/resources.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
-import { formatFolderAttachment } from '#glyph/workbench/formatFolderContextOutline.js';
+import { formatFolderAttachment, rebindFolderAttachmentText } from '#glyph/workbench/formatFolderContextOutline.js';
 import { GlyphContextAttachmentKind } from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import { GlyphContextCandidateKind } from '#glyph/workbench/GlyphContextActions.js';
 import type { GlyphAttachmentPreview } from '#glyph/protocol/events/GlyphAttachmentPreview.js';
@@ -417,8 +417,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED,
         'This folder outline exceeds the attachment limit. Choose a smaller folder.',
       );
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
-    const contentRevision = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    const contentRevision = await contextTextRevision(bytes);
     this.assertTrusted();
     const currentWorkspaceFolder = this.workspace.getWorkspaceFolder(uri);
     if (!currentWorkspaceFolder || (this.adapter.contextPath(uri).replace(/\/$/u, '') || '.') !== path)
@@ -498,7 +497,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     return undefined;
   }
 
-  rebindAttachment(attachment: GlyphContextAttachment): GlyphContextAttachment {
+  async rebindAttachment(attachment: GlyphContextAttachment): Promise<GlyphContextAttachment> {
     const { unavailable: _unavailable, token: _token, ...capture } = attachment;
     if (attachment.kind === GlyphContextAttachmentKind.RULE) return capture;
     const uri = URI.parse(attachment.uri);
@@ -510,7 +509,19 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         ...capture,
         unavailable: 'Source folder was removed. Remove this attachment or add its folder again before sending.',
       };
-    return { ...capture, path: this.adapter.contextPath(uri).replace(/\/$/u, '') || '.' };
+    const path = this.adapter.contextPath(uri).replace(/\/$/u, '') || '.';
+    if (capture.kind === GlyphContextAttachmentKind.FOLDER) {
+      const text = rebindFolderAttachmentText(capture.text, capture.path, path);
+      if (text !== capture.text)
+        return {
+          ...capture,
+          path,
+          text,
+          sourceRevision: capture.sourceRevision ?? capture.contentRevision,
+          contentRevision: await contextTextRevision(text),
+        };
+    }
+    return { ...capture, path };
   }
   async openAttachment(attachment: Pick<GlyphAttachmentPreview, 'path' | 'uri' | 'range'>): Promise<void> {
     if (attachment.uri?.startsWith('glyph-rule:'))
