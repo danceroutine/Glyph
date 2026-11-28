@@ -165,16 +165,11 @@ export class WorkspaceSourceRoutes {
    * Recover the selected spelling of an enrolled physical source. The native disclosure receipt uses this route
    * so a later retarget of an attached folder changes its origin. Overlapping roots use the most specific owner.
    */
-  selectedSourcePath(path: string): string {
+  selectedSourceRoute(path: string): { path: string; assertCurrent?: () => void } {
     const root = this.sourceRoot(path);
-    return join(root.selectedPath ?? root.path, relative(root.path, path));
-  }
-
-  /** Retain the selected directories contributing to this disclosure. Recheck them at transport handoff. */
-  beginSourceAccess(paths: readonly string[]): () => void {
-    const roots = new Set(paths.map(path => this.sourceRoot(path)));
-    return () => {
-      for (const root of roots) root.assertCurrent?.();
+    return {
+      path: join(root.selectedPath ?? root.path, relative(root.path, path)),
+      ...(root.assertCurrent && { assertCurrent: root.assertCurrent }),
     };
   }
 

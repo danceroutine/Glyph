@@ -234,11 +234,15 @@ vi.mock('#src/providers/openai/OpenAIProviderFactory.js', async importOriginal =
 });
 
 const readNativeOrigins = NativeFilesystemMetadata.prototype.sourceOrigins;
+const readAvailableNativeOrigins = NativeFilesystemMetadata.prototype.availableSourceOrigins;
 let isolatedUserDirectory: string;
 beforeEach(async () => {
   const originReader = new NativeFilesystemMetadata(join(repositoryRoot, 'target/release/glyph-context-index'));
   vi.spyOn(NativeFilesystemMetadata.prototype, 'sourceOrigins').mockImplementation(
     readNativeOrigins.bind(originReader),
+  );
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'availableSourceOrigins').mockImplementation(
+    readAvailableNativeOrigins.bind(originReader),
   );
   vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
   vi.spyOn(NativeFilesystemMetadata.prototype, 'assertWorkspacePath').mockResolvedValue(undefined);
