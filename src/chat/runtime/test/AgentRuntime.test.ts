@@ -276,19 +276,22 @@ describe(AgentRuntime, () => {
     expect(adapter.requests).toEqual([]);
   });
 
-  it.each(['send', 'steer'] as const)('checks %s attachments after provider preparation', async phase => {
+  it.each(['send', 'steer', 'final steer'])('checks %s attachments after provider preparation', async phase => {
     const disclosure = new WorkspaceDisclosure();
     let available = true;
     disclosure.retain(() => {
       if (!available) throw new Error('Workspace changed');
     });
     disclosure.additionalPaths.add('old/renamed.md');
+    const capture = { text: 'review', attachments: [], disclosure };
+    const pending = phase === 'send' ? [] : [capture];
+    const checkpoints: ChatProviderState[] = [];
     const coordinator = new TurnContextCoordinator(new AgentInstructionCatalog([]));
     const begin = vi.spyOn(coordinator, 'beginTurn');
     const adapter = new ClaudeShapedAdapter();
     const prepare = adapter.prepareStep.bind(adapter);
     adapter.prepareStep = async (turn, context) => {
-      available = false;
+      if (pending.length === 0) available = false;
       return prepare(turn, context);
     };
     const runtime = new AgentRuntime(
@@ -298,16 +301,19 @@ describe(AgentRuntime, () => {
       undefined,
       coordinator,
     );
-    const capture = { text: 'review', attachments: [], disclosure };
-    const pending = phase === 'steer' ? [capture] : [];
     await expect(
       runtime.send(phase === 'send' ? capture : 'start', {
         signal: new AbortController().signal,
         onText: () => {},
-        takeSteering: () => pending.splice(0),
+        onStateCheckpoint: state => {
+          checkpoints.push(state);
+        },
+        takeSteering: finishing => (phase === 'final steer' && !finishing ? [] : pending.splice(0)),
       }),
     ).rejects.toThrow('Workspace changed');
-    expect(adapter.requests).toEqual([]);
+    expect(adapter.requests).toHaveLength(phase === 'final steer' ? 2 : 0);
+    expect(JSON.stringify(adapter.requests)).not.toContain('review');
+    expect(JSON.stringify(checkpoints)).not.toContain('review');
     expect(JSON.stringify(runtime.exportState())).not.toContain('review');
     if (phase === 'send')
       expect(begin).toHaveBeenCalledWith(
