@@ -1,7 +1,9 @@
+import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { WorkspaceRootSelections } from '#src/workspace/WorkspaceRootSelections.js';
 import { Deferred } from '#src/shared/Deferred.js';
-import { link, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -146,6 +148,69 @@ describe(DesktopAttachmentAccess, () => {
     await expect(
       access.resolve({ uri: 'file:///workspace/a', path: 'missing/a', folder: false }, signal),
     ).rejects.toThrow('workspace folder is unavailable');
+  });
+
+  it('admits saved URI spellings only when the reopened folder is the same directory entry', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'glyph-attachment-spelling-')));
+    onTestFinished(() => rm(base, { recursive: true, force: true }));
+    const original = join(base, 'Projéct'.normalize('NFD'));
+    const reopened = join(base, 'projéct');
+    await mkdir(original);
+    await writeFile(join(original, 'notes.md'), 'changed editor contents');
+    const sameEntry = (await stat(reopened).catch(() => undefined))?.ino === (await stat(original)).ino;
+    if (sameEntry) await rename(original, reopened);
+    else {
+      await mkdir(reopened);
+      await writeFile(join(reopened, 'notes.md'), 'a different file');
+    }
+    const routes = new WorkspaceSourceRoutes([
+      { name: 'project', path: reopened },
+      { name: 'other', path: base + '-other' },
+    ]);
+    const root = new WorkspaceRootAccess(new WorkspaceAccessPolicy(), reopened, workspaceCaseSensitivity(reopened));
+    const store = new FileSystemWorkspaceTextStore(reopened, {
+      access: root,
+      physicalAccess: new NativeFilesystemMetadata(resolve('target/release/glyph-context-index')),
+    });
+    const access = new DesktopAttachmentAccess(
+      routes,
+      ['project', 'other'].map(name => ({
+        name,
+        selectedDisk: store,
+        disk: store,
+        index: { glob: vi.fn() },
+      })),
+      () => root.beginOperation().assertCurrent,
+    );
+    const uri = pathToFileURL(join(original, 'notes.md')).href;
+    const file = {
+      kind: Kind.SELECTION,
+      uri,
+      path: 'project/notes.md',
+      text: 'captured editor text',
+      contentRevision: 'captured',
+    };
+    const signal = new AbortController().signal;
+    if (!sameEntry) {
+      expect(routes.routeForFileUri(uri)).toBeUndefined();
+      await expect(access.admit([file], signal)).rejects.toThrow('declared workspace path');
+      // An independent link can reach the identical leaf without sharing the captured root's entry.
+      await rm(reopened, { recursive: true });
+      await symlink(original, reopened);
+      expect((await stat(join(reopened, 'notes.md'))).ino).toBe((await stat(join(original, 'notes.md'))).ino);
+      expect(routes.routeForFileUri(uri)).toBeUndefined();
+      await expect(access.admit([file], signal)).rejects.toThrow('declared workspace path');
+      return;
+    }
+    expect(routes.routeForFileUri(uri)).toBe(file.path);
+    await access.admit([file], signal);
+    const git =
+      'git:/old?' + encodeURIComponent(JSON.stringify({ path: join(original, 'notes.md'), submoduleOf: original }));
+    const comparison = { ...file, kind: Kind.DIFF, text: `Git diff: staged\nBase URI: ${git}\nTarget URI: ${uri}\n` };
+    const disclosure = new WorkspaceDisclosure();
+    await access.admit([comparison], signal, disclosure);
+    expect([...disclosure.additionalPaths]).toEqual([file.path]);
+    (await disclosure.authorize(signal))();
   });
 
   it('binds root-qualified captures to the selected alias and excludes siblings from root folder listings', async () => {

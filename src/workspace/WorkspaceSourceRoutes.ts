@@ -1,3 +1,4 @@
+import { relativeWorkspaceSpelling } from './sameWorkspaceDirectory.ts';
 import { DirectoryNamePolicies } from './DirectoryNamePolicies.ts';
 import {
   normalizeVolumeName,
@@ -216,8 +217,9 @@ export class WorkspaceSourceRoutes {
     let nearest: { name: string; local: string } | undefined;
     for (const root of this.roots) {
       for (const anchor of new Set([root.path, root.uri ? fileURLToPath(root.uri) : root.path])) {
-        const local = relative(anchor, selected);
-        if (contained(local) && (!nearest || local.length < nearest.local.length)) nearest = { name: root.name, local };
+        const local = relativeWorkspaceSpelling(anchor, selected);
+        if (local !== undefined && (!nearest || local.length < nearest.local.length))
+          nearest = { name: root.name, local };
       }
     }
     if (!nearest) return undefined;
