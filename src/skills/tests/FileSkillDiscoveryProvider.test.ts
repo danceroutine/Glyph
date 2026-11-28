@@ -1,3 +1,6 @@
+import { NativePinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { WorkspaceReadFailure } from '#src/workspace/WorkspaceReadFailure.js';
@@ -77,6 +80,35 @@ describe(FileSkillDiscoveryProvider, () => {
     expect(session.snapshot().skills ?? []).toEqual([]);
     const fresh = await turns.beginTurn({ turnId: 'fresh', attachmentPaths: [], skillIds: [id] });
     expect(fresh.initialEnvelope().skills?.[0]?.body).toBe('BODY');
+  });
+
+  it('preserves a healthy scoped advertisement across an atomic save when a sibling manifest disappears during enrollment', async () => {
+    const fixture = await skillFixture();
+    const present = 'active/.glyph/skills/example/SKILL.md';
+    const missing = 'other/.glyph/skills/other/SKILL.md';
+    await fixture.write(present, manifest());
+    await fixture.write(missing, manifest().replace('name: example', 'name: other'));
+    const metadata = new NativeFilesystemMetadata(join(process.cwd(), 'target/release/glyph-context-index'));
+    const provider = fixture.provider(
+      [present, missing],
+      'project',
+      new NativePinnedSourceAuthority(metadata, new WorkspaceAccessPolicy(), () => {}),
+    );
+    const discover = provider.discover.bind(provider);
+    vi.spyOn(provider, 'discover').mockImplementationOnce(async signal => {
+      const discovered = await discover(signal);
+      await rename(join(fixture.root, missing), join(fixture.root, missing + '.moved'));
+      return discovered;
+    });
+    const turns = new TurnContextCoordinator([new SkillContextContributor(new SkillCatalog([provider]))]);
+    const turn = await turns.beginTurn({ turnId: 'plain', attachmentPaths: [] });
+    expect(turn.initialEnvelope().skillCandidates ?? []).toEqual([]);
+    await fixture.write(present + '.save', manifest().replace('Use for examples', 'New description'));
+    await rename(join(fixture.root, present + '.save'), join(fixture.root, present));
+    await expect(turns.disclosePaths('plain', ['other/file'])).rejects.toThrow('inspection failed');
+    await expect(turns.disclosePaths('plain', ['active/file'])).resolves.toMatchObject({
+      skillCandidates: [{ description: 'Use for examples' }],
+    });
   });
 
   it('discloses pinned resource bytes only while the manifest and selected file remain authorized', async () => {
