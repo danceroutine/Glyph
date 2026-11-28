@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { NativePinnedSourceAuthority } from '../PinnedSourceAuthority.ts';
-import { WorkspaceAccessPolicy } from '../policy/WorkspaceAccessPolicy.ts';
+import { NativePinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 describe(NativePinnedSourceAuthority, () => {
   it('batches captured sources and accepts a saved revision only at the original authorized location', async () => {

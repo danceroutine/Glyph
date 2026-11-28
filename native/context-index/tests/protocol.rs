@@ -359,6 +359,44 @@ fn reports_individual_source_availability_only_on_request() {
     assert_eq!(origins[1], origins[4]);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn reports_a_source_whose_parent_creation_time_cannot_be_fingerprinted() {
+    use std::os::macos::fs::FileTimesExt;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let root = tempfile::tempdir().unwrap();
+    let historical = root.path().join("historical");
+    fs::create_dir(&historical).unwrap();
+    let source = historical.join("AGENTS.md");
+    let healthy = root.path().join("AGENTS.md");
+    fs::write(&source, "old").unwrap();
+    fs::write(&healthy, "current").unwrap();
+    fs::File::open(&historical)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_created(UNIX_EPOCH - Duration::from_secs(1)))
+        .unwrap();
+
+    let inspect = |optional| {
+        run_with_input(
+            &serde_json::json!({
+                "paths": [&source, &healthy], "privatePaths": [], "allowUnavailable": optional
+            })
+            .to_string(),
+            |cmd| {
+                cmd.arg("--source-origins");
+            },
+        )
+    };
+    assert!(!inspect(false).status.success());
+    let output = inspect(true);
+    assert!(output.status.success());
+    let origins: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(origins.len(), 2);
+    assert_eq!(origins[0], Value::Null);
+    assert!(origins[1]["origin"].is_string());
+}
+
 #[cfg(unix)]
 #[test]
 fn pins_source_locations_across_regular_saves_and_checks_current_reservations() {

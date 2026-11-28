@@ -3,8 +3,8 @@ import { readFileSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
-import { storedSourcePath, readSourcePathAliases } from '../SourcePathAliases.ts';
-import { UserStoreProjectRoutes } from '../UserStoreProjectRoutes.ts';
+import { storedSourcePath, readSourcePathAliases } from '#src/workspace/SourcePathAliases.js';
+import { UserStoreProjectRoutes } from '#src/workspace/UserStoreProjectRoutes.js';
 
 it('resolves prospective names through their actual parent and rejects an inaccessible directory chain', () => {
   const directory = mkdtempSync(join(tmpdir(), 'glyph-source-paths-'));

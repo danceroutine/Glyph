@@ -5,9 +5,9 @@ import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleInstructionProvider.js';
 import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
-import { TurnContextSession } from '../TurnContextSession.ts';
+import { TurnContextSession } from '#src/context/turns/TurnContextSession.js';
 import { onTestFinished, describe, expect, it, vi } from 'vitest';
-import { TurnContextCoordinator } from '../TurnContextCoordinator.ts';
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import {
   AgentInstructionActivationMode,

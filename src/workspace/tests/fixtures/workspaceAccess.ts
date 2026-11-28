@@ -1,13 +1,13 @@
 import { resolve, relative, isAbsolute } from 'node:path';
-import { WorkspaceAccessPolicy } from '../../policy/WorkspaceAccessPolicy.ts';
-import { WorkspaceRootAccess } from '../../policy/WorkspaceRootAccess.ts';
-import { FileSystemWorkspaceTextStore } from '../../FileSystemWorkspaceTextStore.ts';
-import { workspaceCaseSensitivity } from '../../workspaceCaseSensitivity.ts';
-import type { WorkspacePathAccess } from '../../WorkspacePathAccess.ts';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
+import type { WorkspacePathAccess } from '#src/workspace/WorkspacePathAccess.js';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import type { RustWorkspacePathIndexOptions } from '#src/context/search/RustWorkspacePathIndexOptions.js';
 import { ProjectAccess } from '#src/project/ProjectAccess.js';
-import type { WorkspaceTextStore } from '../../WorkspaceTextStore.ts';
+import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 
 interface FixtureOptions {
   caseSensitive?: boolean;

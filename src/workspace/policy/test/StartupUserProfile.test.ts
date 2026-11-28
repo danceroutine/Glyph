@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { StartupUserProfile } from '../StartupUserProfile.ts';
+import { StartupUserProfile } from '#src/workspace/policy/StartupUserProfile.js';
 
 function fixture() {
   const base = fs.realpathSync.native(fs.mkdtempSync(join(tmpdir(), 'glyph-startup-profile-')));

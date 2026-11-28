@@ -179,37 +179,41 @@ function virtualWorkspace() {
     ['/fixture/src/file.txt', Buffer.from('base')],
     ['/fixture/source.txt', Buffer.from('base')],
   ]);
-  const inspect = (path: string) => {
+  const nodeAt = (path: string) => {
     for (let parent = dirname(path); parent !== '/'; parent = dirname(parent)) {
       if (nodes.get(parent) instanceof Buffer) throw Object.assign(new Error('Not a directory'), { code: 'ENOTDIR' });
     }
     const node = nodes.get(path);
     if (node === undefined) throw Object.assign(new Error('Missing path'), { code: 'ENOENT' });
+    return node;
+  };
+  const stats = (path: string, node: Buffer | null, options?: { bigint?: boolean }) => {
+    const integer = options?.bigint ? BigInt : Number;
     return {
-      dev: 7,
-      nlink: 1,
-      ino: path.length,
-      mode: 0o100644,
-      size: node?.length ?? 0,
+      dev: integer(7),
+      nlink: integer(1),
+      ino: integer(path.length),
+      mode: integer(node === null ? 0o40755 : 0o100644),
+      size: integer(node?.length ?? 0),
       isSymbolicLink: () => false,
       isDirectory: () => node === null,
       isFile: () => node instanceof Buffer,
     };
   };
-  filesystem.lstat.mockImplementation(async (path: string) => inspect(path));
-  filesystem.stat.mockImplementation(async (path: string) => inspect(path));
+  const statPath = async (path: string, options?: { bigint?: boolean }) => stats(path, nodeAt(path), options);
+  filesystem.lstat.mockImplementation(statPath);
+  filesystem.stat.mockImplementation(statPath);
   filesystem.unlink.mockResolvedValue(undefined);
   filesystem.realpath.mockImplementation(async (path: string) => {
-    inspect(path);
+    nodeAt(path);
     return path;
   });
   filesystem.open.mockImplementation(async (path: string) => {
-    const info = inspect(path);
-    const bytes = nodes.get(path);
+    const bytes = nodeAt(path);
     if (!bytes) throw new Error('Only files can be opened in this fixture.');
     let offset = 0;
     return {
-      stat: async () => info,
+      stat: async (options?: { bigint?: boolean }) => stats(path, bytes, options),
       close: async () => {},
       readFile: async () => bytes,
       read: async (buffer: Buffer) => {

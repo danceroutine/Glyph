@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { WorkspaceRootSelections } from '../WorkspaceRootSelections.ts';
+import { WorkspaceRootSelections } from '#src/workspace/WorkspaceRootSelections.js';
 
 describe(WorkspaceRootSelections, () => {
   it('releases descriptors on disposal and when the selected route fails the initial check', () => {

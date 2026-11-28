@@ -4,11 +4,11 @@ import { dirname, join, resolve } from 'node:path';
 import { describe, it, expect, onTestFinished } from 'vitest';
 import { ContextAttachmentService } from '#src/context/attachments/ContextAttachmentService.js';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
-import { NativeFilesystemMetadata } from '../NativeFilesystemMetadata.ts';
-import { FileSystemWorkspaceTextStore } from '../FileSystemWorkspaceTextStore.ts';
-import { WorkspaceContentAccess } from '../policy/WorkspaceContentAccess.ts';
-import { WorkspaceRootAccess } from '../policy/WorkspaceRootAccess.ts';
-import { StartupUserProfile } from '../policy/StartupUserProfile.ts';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { WorkspaceContentAccess } from '#src/workspace/policy/WorkspaceContentAccess.js';
+import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
+import { StartupUserProfile } from '#src/workspace/policy/StartupUserProfile.js';
 
 describe(WorkspaceContentAccess, () => {
   it('admits a selected personal file for one attachment while project reads and search keep their own scope', async () => {
