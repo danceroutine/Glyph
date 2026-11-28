@@ -1,9 +1,9 @@
 import { readFile, rm, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { GlyphWorkbench } from './GlyphWorkbench.mjs';
 import { contextFiles } from './ProviderPayloads.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 
-/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
 /** @typedef {import('./ScriptedProvider.mjs').ScriptedProvider} ScriptedProvider */
 
 const restartsHost = isolatedLaunch('restarts the host and reloads the window');
@@ -359,27 +359,48 @@ it.describe('Explicit editor and file attachments', () => {
   );
 
   it(
-    'restores exact selection badges after a rejected send and keeps them editable across pane remounts',
+    'keeps selection badges editable across pane remounts in an admitted read-only window',
     opensWindow,
     async ({ glyph, provider }) => {
+      // Saving the folder as a workspace preserves its Glyph session. Reopening the original
+      // folder then attaches a second authenticated window to that same session.
+      await glyph.application.evaluate(
+        ({ dialog }, path) => {
+          const original = dialog.showSaveDialog;
+          dialog.showSaveDialog = async () => {
+            dialog.showSaveDialog = original;
+            return { canceled: false, filePath: path };
+          };
+        },
+        join(dirname(glyph.workspace), 'owner.code-workspace'),
+      );
+      await glyph.command('Save Workspace As...');
+      await expect(glyph.page.getByRole('status').filter({ hasText: 'Workspace updated: workspace.' })).toBeVisible();
       provider.enqueue({ chunks: ['Owner running'], hold: true });
       await glyph.send('Hold ownership');
       await expect(glyph.sendButton).toHaveText('Cancel');
-      const duplicate = await glyph.duplicateWorkspace();
-      await duplicate.composer.fill('Preserve ');
-      await openFile(duplicate, join(glyph.workspace, 'alpha.txt'));
-      await selectLine(duplicate, 2);
-      await attachSelection(duplicate);
-      await expect(duplicate.diagnostics).toContainText([/owned by window/u]);
-      await expect(duplicate.sendButton).toBeDisabled();
-      await expect(duplicate.composer.getByRole('button', { name: 'Preview alpha.txt (2-2)' })).toBeVisible();
-      await duplicate.command('View: Toggle Secondary Side Bar Visibility');
-      await duplicate.command('Focus Glyph');
-      await duplicate.composer.getByRole('button', { name: 'Preview alpha.txt (2-2)' }).click();
-      const preview = duplicate.page.getByRole('region', { name: 'Attachment preview' });
+      const opened = glyph.application.waitForEvent('window');
+      await glyph.command('Open Recent...');
+      const originalFolder = glyph.page
+        .getByRole('option')
+        .filter({ has: glyph.page.getByText('workspace', { exact: true }) });
+      await originalFolder.click({ modifiers: ['ControlOrMeta'] });
+      const observer = new GlyphWorkbench(await opened, glyph.application);
+      await observer.open();
+      await observer.composer.fill('Preserve ');
+      await openFile(observer, join(glyph.workspace, 'alpha.txt'));
+      await selectLine(observer, 2);
+      await attachSelection(observer);
+      await expect(observer.sendButton).toBeDisabled();
+      await expect(observer.composer.getByRole('button', { name: 'Preview alpha.txt (2-2)' })).toBeVisible();
+      await observer.command('View: Toggle Secondary Side Bar Visibility');
+      await observer.command('Focus Glyph');
+      await observer.composer.getByRole('button', { name: 'Preview alpha.txt (2-2)' }).click();
+      const preview = observer.page.getByRole('region', { name: 'Attachment preview' });
       await expect(preview.locator('pre')).toHaveText('  café 🌱');
       await preview.getByRole('button', { name: 'Remove', exact: true }).click();
-      await expect(duplicate.composer).toHaveText('Preserve ');
+      await expect(observer.composer).toHaveText('Preserve ');
+      await expect(glyph.sendButton).toHaveText('Cancel');
       expect(provider.requests).toHaveLength(1);
       provider.release(0);
     },
