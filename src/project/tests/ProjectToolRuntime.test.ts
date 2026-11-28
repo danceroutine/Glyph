@@ -104,6 +104,7 @@ describe(ProjectToolRuntime, () => {
       const options = { signal: new AbortController().signal, context, roundCallCount: 1, onActivity, trace: vi.fn() };
       const reply = await executor.execute(call, options);
       expect(reply.output).toContain('INSTRUCTION_CONTEXT_REQUIRED');
+      expect(disclosePaths).toHaveBeenNthCalledWith(1, 'turn-1', ['src/new.ts'], options.signal);
       expect(onActivity).not.toHaveBeenCalled();
       expect(stage).not.toHaveBeenCalled();
       await executor.execute({ ...call, id: 'retry' }, options);
@@ -112,7 +113,7 @@ describe(ProjectToolRuntime, () => {
       const structured = runtime.tools.find(tool => tool.name === 'propose_edits')!;
       expect(structured.activityPresentation?.show(reply.output)).toBe(false);
       expect(structured.activityPresentation?.show('{"error":{"code":"STALE"}}')).toBe(true);
-      expect(disclosePaths).toHaveBeenCalledWith('turn-1', ['src/new.ts'], undefined);
+      expect(disclosePaths).toHaveBeenNthCalledWith(2, 'turn-1', ['src/new.ts'], options.signal);
     });
 
     it('reports an unknown tool as a failed tool call', async () => {
