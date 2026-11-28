@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { LocalSkillSourceAuthority } from '../LocalSkillSourceAuthority.ts';
+import { LocalSkillSourceAuthority } from '#src/skills/LocalSkillSourceAuthority.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 

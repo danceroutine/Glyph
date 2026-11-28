@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile, link, symlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { it, expect, onTestFinished } from 'vitest';
-import { installedPackageModes } from '../installedPackageModes.ts';
+import { installedPackageModes } from '#src/skills/installedPackageModes.js';
 
 it('compares changes against the inventoried destination and fails closed if an occupant is new or unreadable', async () => {
   const root = await mkdtemp(join(tmpdir(), 'glyph-installed-modes-'));

@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
-import { readHostFile } from '../readHostFile.ts';
-import { SkillPreferenceFile } from '../SkillPreferenceFile.ts';
+import { readHostFile } from '#src/skills/readHostFile.js';
+import { SkillPreferenceFile } from '#src/skills/SkillPreferenceFile.js';
 
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-host-file-')));
