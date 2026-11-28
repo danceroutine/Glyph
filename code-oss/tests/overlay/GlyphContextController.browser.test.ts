@@ -220,7 +220,7 @@ describe(GlyphContextController, () => {
       expect(await controller.refreshAttachment({ ...badge, unavailable: 'Old binding' })).toMatchObject({
         contentRevision: 'two',
       });
-      expect(controller.rebindAttachment({ ...badge, unavailable: 'Old binding' }).unavailable).toBeUndefined();
+      expect((await controller.rebindAttachment({ ...badge, unavailable: 'Old binding' })).unavailable).toBeUndefined();
       services.files.stat.mockImplementation(async resource => ({
         isFile: resource.path.endsWith('SKILL.md'),
         isDirectory: !resource.path.endsWith('SKILL.md'),
