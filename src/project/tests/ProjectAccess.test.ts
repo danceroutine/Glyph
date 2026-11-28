@@ -41,6 +41,24 @@ async function fixture(): Promise<{ access: ProjectAccess; root: string }> {
 }
 
 describe(ProjectAccess, () => {
+  it('withholds disk bytes if the file observed during source enrollment differs from the read descriptor', async () => {
+    const { root } = await fixture();
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const authority = {
+      capture: async (paths: readonly string[]) =>
+        paths.map(path => ({ path, origin: 'route', identity: 'other file' })),
+      authorize: vi.fn(),
+    };
+    const access = new ProjectAccess(fixtureWorkspace(root), { glob: vi.fn() }, {}, undefined, authority);
+    const result = await access.execute(
+      'read_project_file',
+      JSON.stringify({ path: 'README.md', start_line: null, end_line: null }),
+    );
+    expect(result).toContain('source changed while reading');
+    expect(result).not.toContain('# Sample');
+    expect(authority.authorize).not.toHaveBeenCalled();
+  });
+
   it('counts escaped and multibyte text in the read-result budget', async () => {
     const workspace = fixtureWorkspace('/fixture');
     const text = '😀\t"\\\n'.repeat(30_000);

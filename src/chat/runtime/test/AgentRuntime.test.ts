@@ -321,6 +321,56 @@ describe(AgentRuntime, () => {
     },
   );
 
+  it.each([false, true])(
+    'rechecks a pending file on provider retries and releases it after successful delivery (revoked %s)',
+    async revoked => {
+      const adapter = new ClaudeShapedAdapter();
+      let present = true;
+      let steered = false;
+      const validate = vi.fn(async () => {
+        if (!present) throw new Error('File route changed');
+        return () => {};
+      });
+      const prepare = adapter.prepareStep.bind(adapter);
+      const retrying: AgentModelAdapter<ClaudeTurn> = adapter;
+      retrying.prepareStep = async (turn, context) => {
+        const send = await prepare(turn, context);
+        return async (current, authorize) => {
+          if (turn.round === 1) {
+            current();
+            present = !revoked;
+            (await authorize())();
+          }
+          return send();
+        };
+      };
+      const captured = new AgentRuntime(
+        retrying,
+        { timeoutMs: 10_000 },
+        mockTools(async (_name, _input, _signal, context) => {
+          context?.retainResultAccess?.(() => {}, validate);
+          return 'Frozen file text';
+        }),
+      );
+      const pending = captured.send('read', {
+        signal: new AbortController().signal,
+        onText: () => {},
+        takeSteering: complete => {
+          if (complete && !steered) {
+            present = false;
+            steered = true;
+            return [{ text: 'Continue', attachments: [] }];
+          }
+          return [];
+        },
+      });
+      if (revoked) await expect(pending).rejects.toThrow('File route changed');
+      else await pending;
+      expect(validate).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(captured.exportState()).includes('Frozen file text')).toBe(!revoked);
+    },
+  );
+
   it('releases its own failed turn while preserving an already admitted turn with the same id', async () => {
     const contexts = new TurnContextCoordinator(new AgentInstructionCatalog([]));
     await contexts.beginTurn({ turnId: 'shared', attachmentPaths: [] });

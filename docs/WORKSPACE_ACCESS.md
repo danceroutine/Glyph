@@ -67,6 +67,11 @@ live authority when delivering it. If a source moves into private storage while
 a tool or worker is running, the adapter must withhold it. An unrelated edit
 should leave the identity of a still-authorized source usable.
 
+For an ordinary project file read, the host checks the captured file’s route at the
+first provider handoff and any retry. An atomic save in the same directory preserves
+access to the captured text. A new unsaved file stays bound to the live editor and
+its admitted workspace path through handoff.
+
 A file a human deliberately attaches is an explicit input to that request.
 The CLI keeps every selected root live until the entire attachment batch reaches the
 model. Desktop Send, Steer and Git review carry the originating window signal through

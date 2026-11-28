@@ -1,3 +1,4 @@
+import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { Tool } from '#src/tools/Tool.js';
@@ -130,6 +131,7 @@ export class ProjectAccess {
     private readonly pathIndex: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
     options: ProjectAccessOptions = {},
     private readonly turnContexts?: Pick<TurnContextCoordinator, 'disclosePaths'>,
+    private readonly sourceAuthority?: PinnedSourceAuthority,
   ) {
     this.options = projectAccessOptionsSchema.parse(options);
   }
@@ -190,7 +192,11 @@ export class ProjectAccess {
     const deliver = (value: object) => {
       signal?.throwIfAborted();
       access.assertCurrent();
-      if (access.hasSources) context?.retainResultAccess?.(access.assertCurrent);
+      if (access.hasSources)
+        context?.retainResultAccess?.(
+          access.assertCurrent,
+          access.hasValidators ? cancellation => access.authorize(cancellation) : undefined,
+        );
       return JSON.stringify(value);
     };
     try {
@@ -295,6 +301,7 @@ export class ProjectAccess {
     const startLine = requestedStart ?? 1;
     const snapshot = await this.workspace.read(path, {
       maxBytes: this.options.maxFileBytes,
+      ...(this.sourceAuthority && { source: { authority: this.sourceAuthority, disclosure: access } }),
       retainAccess: access.retain,
     });
     // Follow-up: read oversized files incrementally so line-range requests do not load the whole file.
