@@ -1,8 +1,12 @@
-import { fixtureWorkspace, fixtureIndex, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
+import { NativePinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { fixtureWorkspace, fixtureIndex } from '#src/workspace/tests/fixtures/workspaceAccess.js';
+import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
 import type { ProjectContext } from '#src/project/context/ProjectContext.js';
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
@@ -72,7 +76,13 @@ describe(ProjectAccess, () => {
         }),
       },
     ]);
-    const access = fixtureProjectAccess(apiRoot, {}, workspace, index);
+    const access = new ProjectAccess(
+      workspace,
+      index,
+      {},
+      undefined,
+      new NativePinnedSourceAuthority(new NativeFilesystemMetadata(binaryPath), new WorkspaceAccessPolicy(), () => {}),
+    );
 
     try {
       await index.initialize();
@@ -105,6 +115,23 @@ describe(ProjectAccess, () => {
           offset: 0,
         }),
       ).resolves.toMatchObject({ files: ['api/src/server.ts', 'web/src/App.tsx'] });
+      const retain = vi.fn<NonNullable<ToolExecutionContext['retainResultAccess']>>();
+      const signal = new AbortController().signal;
+      const text = await access.execute(
+        'read_project_file',
+        JSON.stringify({ path: 'web/src/App.tsx', start_line: null, end_line: null }),
+        signal,
+        { retainResultAccess: retain },
+      );
+      expect(text).toContain('sharedNeedle');
+      const authorize = retain.mock.calls[0]![1]!;
+      await writeFile(join(webRoot, 'saving'), 'A normal atomic save');
+      await rename(join(webRoot, 'saving'), join(webRoot, 'src', 'App.tsx'));
+      (await authorize(signal))();
+      await rename(join(webRoot, 'src'), join(webRoot, 'old'));
+      await mkdir(join(webRoot, 'src'));
+      await writeFile(join(webRoot, 'src', 'App.tsx'), 'Same path in another directory');
+      await expect(authorize(signal)).rejects.toThrow('source location changed');
     } finally {
       await index.dispose();
     }

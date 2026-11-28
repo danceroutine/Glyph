@@ -90,6 +90,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     },
   ): Promise<TurnResult> {
     const request = toChatRequest(inputRequest);
+    const pendingToolSources = new Set<(signal: AbortSignal) => Promise<() => void>>();
     const toolAccess = new WorkspaceDisclosure();
     const disclosures = new Set<WorkspaceDisclosure>([toolAccess]);
     if (request.disclosure) disclosures.add(request.disclosure);
@@ -229,6 +230,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         const authorize = async () => {
           const checks = await Promise.all([
             this.turnContexts?.authorizeDisclosure?.(turnId, signal),
+            ...[...pendingToolSources].map(validate => validate(signal)),
             ...[...disclosures].filter(value => value.hasSources).map(value => value.authorize(signal)),
           ]);
           return () => {
@@ -239,6 +241,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         const assertCurrent = await authorize();
         assertCurrent();
         const step = await send(assertCurrent, authorize);
+        pendingToolSources.clear();
         pendingWorkspaceInput = false;
         turn = step.turn;
         usageIncomplete ||= step.usage === null;
@@ -301,7 +304,8 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                     turnId,
                     mode: roundMode,
                     onModeChanged: setMode,
-                    retainResultAccess: check => {
+                    retainResultAccess: (check, beforeFirstDelivery) => {
+                      if (beforeFirstDelivery) pendingToolSources.add(beforeFirstDelivery);
                       workspaceResults.add(call.id);
                       toolAccess.retain(check);
                     },
