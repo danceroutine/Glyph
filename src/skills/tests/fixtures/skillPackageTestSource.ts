@@ -3,8 +3,8 @@ import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivit
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
-import { SkillPackageSourceReader } from '../../SkillPackageSource.ts';
-import type { OpenSkillIndex } from '../../listSkillPackageFiles.ts';
+import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
+import type { OpenSkillIndex } from '#src/skills/listSkillPackageFiles.js';
 import { HostProcessLeases, type HostWorkspaceRoots } from '#src/shell/HostProcessLeases.js';
 import type { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 

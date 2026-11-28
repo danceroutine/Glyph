@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
-import { SkillPackageSourceReader } from '../SkillPackageSource.ts';
+import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 import { testSkillSource, testPackageIndex } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
