@@ -1071,7 +1071,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const read = { type: GlyphEditorRequestType.READ_SNAPSHOT, operationId: 'read', path: 'file.txt' } as const;
       await expect(client.request(read, signal)).resolves.toMatchObject({ snapshot: { path: 'file.txt' } });
       expect(request).toHaveBeenLastCalledWith(factoryIdentity, read, signal);
-      expect(validate).toHaveBeenLastCalledWith('file.txt', undefined);
+      expect(validate).toHaveBeenLastCalledWith('file.txt');
       const occupancy = { type: GlyphEditorRequestType.EXISTS, operationId: 'exists', path: 'file.txt' } as const;
       await client.request(occupancy);
       expect(exists).toHaveBeenCalledExactlyOnceWith('file.txt');
