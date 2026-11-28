@@ -1,3 +1,6 @@
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { NativePinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import type { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import { createHash } from 'node:crypto';
 import { getGlyphWorkspaceRootId } from '#src/desktop/protocol/connection/getGlyphWorkspaceRootId.js';
@@ -1602,6 +1605,17 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         );
       const signal = new AbortController().signal;
       await expect(captured.indexOptions[0]!.readContentOverrides!(signal)).resolves.toEqual({ 'file.txt': 'live' });
+      const metadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
+      const authority = new NativePinnedSourceAuthority(metadata, new WorkspaceAccessPolicy(), () => {});
+      const retain = vi.fn();
+      await expect(captured.indexOptions[0]!.readContentOverrides!(signal, { authority, retain })).resolves.toEqual({
+        'file.txt': 'live',
+      });
+      expect(retain.mock.calls[0]?.[0]).toBe('file.txt');
+      const disclosure = retain.mock.calls[0]![1] as WorkspaceDisclosure;
+      (await disclosure.authorize(signal))();
+      await renameDirectory(join(roots[0]!, 'file.txt'), join(roots[0]!, 'moved.txt'));
+      await expect(disclosure.authorize(signal)).rejects.toThrow();
       expect(request).toHaveBeenLastCalledWith(
         factoryIdentity,
         expect.objectContaining({ type: GlyphEditorRequestType.READ_SNAPSHOT, path: read }),

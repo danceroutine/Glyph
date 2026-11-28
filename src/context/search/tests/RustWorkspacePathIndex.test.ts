@@ -1,4 +1,7 @@
-import { fixtureIndex } from '#src/workspace/tests/fixtures/workspaceAccess.js';
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+import { ProjectAccess } from '#src/project/ProjectAccess.js';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+import { fixtureWorkspace, fixtureIndex } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { EventEmitter, once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -13,6 +16,98 @@ import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePa
 
 describe(RustWorkspacePathIndex, () => {
   describe('live host boundaries', () => {
+    it('carries only the editor and disk sources that supplied match text to the provider', async () => {
+      const signal = new AbortController().signal;
+      const editor = new WorkspaceDisclosure();
+      const current = vi.fn();
+      editor.retain(current);
+      let editorReceipt = true;
+      let diskIdentity: string | undefined = '1:2';
+      const match = {
+        line: 1,
+        column: 1,
+        endLine: 1,
+        endColumn: 6,
+        lineText: 'match',
+        matchedText: 'match',
+        linesBefore: [],
+        linesAfter: [],
+      };
+      const worker = new FakeWorker(request => {
+        if (request.method === 'initialize') return indexState(2);
+        if (request.method === 'shutdown') return { shutdown: true };
+        expect(request.params).toHaveProperty('includeSourceIdentity', true);
+        return {
+          outputMode: 'content',
+          matches: [
+            { path: 'open.md', ...match },
+            { path: 'disk.md', ...match, sourceIdentity: diskIdentity },
+          ],
+          searchedFiles: 2,
+          skippedFiles: 0,
+          indexTruncated: false,
+          truncated: false,
+          nextOffset: null,
+        };
+      });
+      const index = fixtureIndex(
+        {
+          binaryPath: '/bin/index',
+          root: '/project',
+          readContentOverrides: async (_signal, sources) => {
+            if (editorReceipt) sources!.retain('open.md', editor);
+            return { 'open.md': 'match' };
+          },
+        },
+        () => worker,
+      );
+      onTestFinished(() => index.dispose());
+      const pins = [{ path: '/project/disk.md', origin: 'disk route', identity: '1:2' }];
+      const authority = { capture: vi.fn(async () => pins), authorize: vi.fn(async () => () => {}) };
+      const access = new ProjectAccess(fixtureWorkspace('/project'), index, {}, undefined, authority);
+      const retain = vi.fn<NonNullable<ToolExecutionContext['retainResultAccess']>>();
+      const search = () =>
+        access.execute(
+          'search_project_contents',
+          JSON.stringify({
+            pattern: 'match',
+            pattern_kind: 'literal',
+            path: null,
+            file_glob: null,
+            file_type: null,
+            output_mode: 'content',
+            lines_before: 0,
+            lines_after: 0,
+            case_sensitive: true,
+            multiline: false,
+            limit: 10,
+            offset: 0,
+          }),
+          signal,
+          { retainResultAccess: retain },
+        );
+      const text = await search();
+      expect(JSON.parse(text)).toMatchObject({
+        matches: [
+          { path: 'open.md', ...match },
+          { path: 'disk.md', ...match },
+        ],
+      });
+      expect(authority.capture).toHaveBeenCalledWith(['/project/disk.md'], signal);
+      const authorize = retain.mock.calls[0]![1]!;
+      (await authorize(signal))();
+      expect(authority.authorize).toHaveBeenCalledWith(pins, signal);
+      current.mockImplementation(() => {
+        throw new Error('Editor closed');
+      });
+      await expect(authorize(signal)).rejects.toThrow('Editor closed');
+      editorReceipt = false;
+      expect(await search()).toContain('editor search source is unavailable');
+      editorReceipt = true;
+      diskIdentity = undefined;
+      expect(await search()).toContain('worker did not identify the matching file');
+    });
+
     it('rebuilds cached workers and rejects old in-flight results when another profile is admitted', async () => {
       let privatePaths = ['/private/old.json'];
       const policy = new WorkspaceAccessPolicy({}, () => privatePaths);

@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { fixtureWorkspace, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleInstructionProvider.js';
 import { AgentInstructionSourceKind } from '#src/instructions/AgentInstructionSource.js';
@@ -41,6 +42,70 @@ async function fixture(): Promise<{ access: ProjectAccess; root: string }> {
 }
 
 describe(ProjectAccess, () => {
+  it('rejects conflicting or incomplete search identities and skips an empty batch', async () => {
+    const disclosure = new WorkspaceDisclosure();
+    const authority = { capture: vi.fn(async () => []), authorize: vi.fn() };
+    await disclosure.retainFiles(authority, []);
+    expect(authority.capture).not.toHaveBeenCalled();
+    const file = { path: '/project/source', identity: '1:1' };
+    await expect(disclosure.retainFiles(authority, [file, { ...file, identity: '1:2' }])).rejects.toThrow(
+      'source changed',
+    );
+    await expect(disclosure.retainFiles(authority, [file, file])).rejects.toThrow('source changed');
+    expect(authority.capture).toHaveBeenCalledOnce();
+    expect(disclosure.hasValidators).toBe(false);
+  });
+
+  it('withholds match text when an index cannot identify the selected sources', async () => {
+    const match = {
+      path: 'one.js',
+      line: 1,
+      column: 1,
+      endLine: 1,
+      endColumn: 2,
+      lineText: 'x',
+      matchedText: 'x',
+      linesBefore: [],
+      linesAfter: [],
+    };
+    const index = {
+      glob: vi.fn(),
+      searchContents: async () => ({
+        outputMode: 'content' as const,
+        matches: [match],
+        searchedFiles: 1,
+        skippedFiles: 0,
+        truncated: false,
+        indexTruncated: false,
+        nextOffset: null,
+      }),
+    };
+    const access = new ProjectAccess(fixtureWorkspace('/project'), index, {}, undefined, {
+      capture: vi.fn(),
+      authorize: vi.fn(),
+    });
+    const result = await access.execute(
+      'search_project_contents',
+      JSON.stringify({
+        pattern: 'x',
+        pattern_kind: 'literal',
+        path: null,
+        file_glob: null,
+        file_type: null,
+        output_mode: 'content',
+        lines_before: 0,
+        lines_after: 0,
+        case_sensitive: true,
+        multiline: false,
+        limit: 10,
+        offset: 0,
+      }),
+    );
+    expect(JSON.parse(result)).toMatchObject({
+      error: { message: expect.stringContaining('source of a search match is unavailable') },
+    });
+  });
+
   it('withholds disk bytes if the file observed during source enrollment differs from the read descriptor', async () => {
     const { root } = await fixture();
     onTestFinished(() => rm(root, { recursive: true, force: true }));
