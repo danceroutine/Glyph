@@ -1,3 +1,6 @@
+import { restoreGlyphPrompt } from '#src/desktop/workbench/restoreGlyphPrompt.js';
+import { toGlyphPromptText } from '#src/desktop/workbench/GlyphPromptDocument.js';
+import { formatFolderAttachment } from '#src/desktop/workbench/formatFolderContextOutline.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { withSkillLock } from '#src/skills/SkillPackageStorage.js';
 import { testSkillSource } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
@@ -96,6 +99,7 @@ async function fixture(
     readonly skillCatalog?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skills'];
     readonly refreshCatalogs?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['refreshCatalogs'];
     readonly records?: readonly ChatSessionRecord[];
+    readonly restoreAttachmentPath?: (path: string) => string;
     readonly referenceResources?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['referenceResources'];
     readonly instructionCatalog?: NonNullable<
       ConstructorParameters<typeof ProviderDesktopRuntime>[0]['instructionCatalog']
@@ -230,6 +234,7 @@ async function fixture(
     ...(extras.trusted === undefined ? {} : { trusted: extras.trusted }),
     ...(extras.agentReviews ? { agentReviews: extras.agentReviews } : {}),
     ...(extras.refreshCatalogs ? { refreshCatalogs: extras.refreshCatalogs } : {}),
+    ...(extras.restoreAttachmentPath && { restoreAttachmentPath: extras.restoreAttachmentPath }),
     ...(extras.referenceResources ? { referenceResources: extras.referenceResources } : {}),
     ...(extras.instructionCatalog ? { instructionCatalog: extras.instructionCatalog } : {}),
     ...(extras.userRules ? { userRules: extras.userRules as never } : {}),
@@ -2338,6 +2343,87 @@ describe(ProviderDesktopRuntime, () => {
       }
     });
 
+    it('restores upgraded file and folder badges at their saved spans with their captured contents', async () => {
+      const legacy = 'root@file%3A%2F%2F%2Fproject%2Flib';
+      const current = 'root@1234';
+      const file = legacy + '/notes';
+      const folder = legacy + '/src';
+      const outline = formatFolderAttachment(folder, ['app.ts'], false);
+      const checkpoint = {
+        providerState: { provider: 'fixture', version: 1, data: [] },
+        plans: [],
+        todos: [],
+        mode: AgentModeID.AGENT,
+      };
+      const text = '@' + file + ' then @' + folder;
+      const record = chatRecord({
+        transcript: [
+          {
+            userText: text,
+            attachmentPaths: [file, folder],
+            assistantText: 'Done',
+            reasoningSummary: '',
+            createdAt: '2026-10-02T00:00:00Z',
+            options: {
+              turnId: 'restored',
+              attachmentSpans: [
+                { from: 0, to: file.length + 1 },
+                { from: text.indexOf('@' + folder), to: text.length },
+              ],
+            },
+            checkpoints: { before: checkpoint, after: checkpoint },
+            attachments: [
+              { path: file, text: 'prior contents', revision: 'prior', byteOrderMark: false, byteLength: 14 },
+              {
+                path: folder,
+                text: outline,
+                revision: 'outline-revision',
+                byteOrderMark: false,
+                byteLength: outline.length,
+                source: { kind: 'folder', uri: 'file:///project/lib/src', revision: 'outline-revision', version: 0 },
+              },
+            ],
+          },
+        ],
+      });
+      const harness = await fixture(async () => {}, 'owner', undefined, {
+        records: [record],
+        restoreAttachmentPath: path => path.replace(legacy, current),
+        referenceResources: path => [{ uri: 'file:///project/lib/' + path.split('/')[1], caseSensitive: true }],
+      });
+      try {
+        await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'restored' });
+        const restored = harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)!;
+        const prompt = restoreGlyphPrompt(
+          restored.draft,
+          () => undefined,
+          () => 'capture',
+        );
+        expect(toGlyphPromptText(prompt.parts)).toBe('@' + current + '/notes then @' + current + '/src');
+        expect(prompt.parts).toMatchObject([
+          {
+            type: 'attachment',
+            attachment: {
+              path: current + '/notes',
+              uri: 'file:///project/lib/notes',
+              contentRevision: 'prior',
+              text: 'prior contents',
+            },
+          },
+          { type: 'text', text: ' then ' },
+          {
+            type: 'attachment',
+            attachment: {
+              path: current + '/src',
+              uri: 'file:///project/lib/src',
+              text: formatFolderAttachment(current + '/src', ['app.ts'], false),
+            },
+          },
+        ]);
+      } finally {
+        await harness.runtime.dispose();
+      }
+    });
     it.each([undefined, { skillIds: ['old'] }])(
       'restores a checkpointed draft and earlier options %j',
       async firstOptions => {
