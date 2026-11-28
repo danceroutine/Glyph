@@ -110,7 +110,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
   }
 
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
-    const { signal, retainAccess, ...serializableOptions } = options;
+    const { signal, retainAccess, sourceAuthority, ...serializableOptions } = options;
     const resolved = workspaceContentSearchOptionsSchema.parse(serializableOptions);
     const path = resolved.path !== null && resolved.path !== '' ? this.routePath(resolved.path) : undefined;
     const fileGlob =
@@ -139,6 +139,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
         check();
         const page = await index.searchContents(pattern, {
           ...resolved,
+          ...(sourceAuthority && { sourceAuthority }),
           path: (path?.path ?? '') || null,
           fileGlob: fileGlob?.pattern ?? resolved.fileGlob,
           offset,

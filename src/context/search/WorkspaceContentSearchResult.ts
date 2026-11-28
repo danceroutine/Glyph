@@ -1,9 +1,20 @@
+import type { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+
+/** Host evidence for the selected search match. A multi-root merge carries it with the text
+ * across pagination. Symbol keys stay out of tool output and provider history. */
+export const searchTextSource = Symbol('searchTextSource');
+export interface SearchFileIdentity {
+  readonly path: string;
+  readonly identity: string;
+}
+
 export interface WorkspaceContentSearchLine {
   readonly number: number;
   readonly content: string;
 }
 
 export interface WorkspaceContentMatch {
+  readonly [searchTextSource]?: WorkspaceDisclosure | SearchFileIdentity;
   readonly path: string;
   readonly line: number;
   readonly column: number;

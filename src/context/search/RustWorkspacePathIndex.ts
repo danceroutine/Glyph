@@ -13,7 +13,8 @@ import {
   workspaceContentSearchOptionsSchema,
   type WorkspaceContentSearchOptions,
 } from './WorkspaceContentSearchOptions.ts';
-import type { WorkspaceContentSearchResult } from './WorkspaceContentSearchResult.ts';
+import type { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+import { searchTextSource, type WorkspaceContentSearchResult } from './WorkspaceContentSearchResult.ts';
 import type { WorkspacePathGlobResult } from './WorkspacePathGlobResult.ts';
 import type { WorkspacePathIndex } from './WorkspacePathIndex.ts';
 import { WorkspacePathIndexError } from './WorkspacePathIndexError.ts';
@@ -102,6 +103,10 @@ const contentSearchResultSchema = z.discriminatedUnion('outputMode', [
             endColumn: z.number().int().positive(),
             lineText: z.string(),
             matchedText: z.string(),
+            sourceIdentity: z
+              .string()
+              .regex(/^\d+:\d+$/u)
+              .optional(),
             linesBefore: z.array(z.object({ number: z.number().int().positive(), content: z.string() }).strict()),
             linesAfter: z.array(z.object({ number: z.number().int().positive(), content: z.string() }).strict()),
           })
@@ -307,21 +312,49 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   }
 
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
-    const { signal, retainAccess, ...serializableOptions } = options;
+    const { signal, retainAccess, sourceAuthority, ...serializableOptions } = options;
     const resolvedOptions = workspaceContentSearchOptionsSchema.parse(serializableOptions);
     const operation = this.access.beginOperation();
     this.synchronizePolicy();
     if (!this.initialized) await this.initialize(signal);
-    const overrides = await this.readContentOverrides?.(signal);
+    const editorSources = new Map<string, WorkspaceDisclosure>();
+    const capture = resolvedOptions.outputMode === 'content' && sourceAuthority;
+    const overrides = capture
+      ? await this.readContentOverrides?.(signal, {
+          authority: capture,
+          retain: (path, disclosure) => {
+            editorSources.set(path, disclosure);
+          },
+        })
+      : await this.readContentOverrides?.(signal);
     operation.assertCurrent();
     signal?.throwIfAborted();
-    const params = { pattern, ...resolvedOptions, ...(overrides ? { overrides } : {}) };
+    const params = {
+      pattern,
+      ...resolvedOptions,
+      ...(overrides ? { overrides } : {}),
+      ...(capture && { includeSourceIdentity: true }),
+    };
     if (Buffer.byteLength(JSON.stringify(params)) > 900 * 1024)
       throw new Error('Editor search snapshots exceed the native request budget. Narrow the open working set.');
     const result = contentSearchResultSchema.parse(await this.request(PathIndexMethod.CONTENT_SEARCH, params, signal));
     operation.assertCurrent();
     retainAccess?.(operation.assertCurrent);
-    return result;
+    if (result.outputMode !== 'content') return result;
+    const matches = result.matches.map(({ sourceIdentity, ...match }) => {
+      if (!capture) return match;
+      if (overrides && Object.hasOwn(overrides, match.path)) {
+        const editor = editorSources.get(match.path);
+        if (!editor?.hasSources) throw new Error('The editor search source is unavailable.');
+        return { ...match, [searchTextSource]: editor };
+      }
+      if (!sourceIdentity) throw new Error('The search worker did not identify the matching file.');
+      return {
+        ...match,
+        [searchTextSource]: { path: resolve(this.options.root, match.path), identity: sourceIdentity },
+      };
+    });
+    return { ...result, matches };
   }
 
   /** Ensures mode-only replacement can preserve access controls on the file in this directory. */

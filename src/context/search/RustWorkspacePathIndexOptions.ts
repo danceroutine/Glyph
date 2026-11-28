@@ -1,3 +1,5 @@
+import type { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
+import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
 import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { z } from 'zod';
 import type { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
@@ -41,7 +43,13 @@ export type RustWorkspacePathIndexConfiguration = Omit<
 > & {
   readonly access: WorkspaceRootAccess;
   /** Authorized, transient editor text keyed by indexed project-relative path. */
-  readonly readContentOverrides?: (signal?: AbortSignal) => Promise<Readonly<Record<string, string>>>;
+  readonly readContentOverrides?: (
+    signal?: AbortSignal,
+    source?: {
+      readonly authority: PinnedSourceAuthority;
+      retain(path: string, disclosure: WorkspaceDisclosure): void;
+    },
+  ) => Promise<Readonly<Record<string, string>>>;
 };
 
 export type ResolvedRustWorkspacePathIndexOptions = z.output<typeof rustWorkspacePathIndexOptionsSchema> &

@@ -98,7 +98,7 @@ fn cancellation_during_file_io_returns_cancellation_instead_of_partial_success()
         cancelled: &'a AtomicBool,
     }
     impl SearchableFiles for CancellingFiles<'_> {
-        fn read(&self, path: &str) -> Result<String, ()> {
+        fn read(&self, path: &str) -> Result<(String, Option<String>), ()> {
             let result = self.files.read(path);
             self.cancelled.store(true, Ordering::Release);
             result
@@ -281,6 +281,7 @@ fn parameters(output_mode: ContentSearchOutputMode) -> ContentSearchParams {
         limit: 100,
         offset: 0,
         overrides: BTreeMap::new(),
+        include_source_identity: false,
     }
 }
 
@@ -966,7 +967,7 @@ struct ObservedFiles<'a> {
 }
 
 impl SearchableFiles for ObservedFiles<'_> {
-    fn read(&self, path: &str) -> Result<String, ()> {
+    fn read(&self, path: &str) -> Result<(String, Option<String>), ()> {
         let result = self.files.read(path);
         if let Some(cancelled) = self.cancel_on_read {
             cancelled.store(true, Ordering::Release);
@@ -1040,7 +1041,9 @@ fn excludes_unverified_hardlink_content_from_disk_searches() {
     assert!(read_searchable_file(&root, "ordinary", 32, &WorkspacePaths::default()).is_err());
     std::fs::remove_file(root.join("secret")).unwrap();
     assert_eq!(
-        read_searchable_file(&root, "ordinary", 32, &WorkspacePaths::default()).unwrap(),
+        read_searchable_file(&root, "ordinary", 32, &WorkspacePaths::default())
+            .unwrap()
+            .0,
         "fixture"
     );
 }

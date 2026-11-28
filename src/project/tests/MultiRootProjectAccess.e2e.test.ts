@@ -117,6 +117,32 @@ describe(ProjectAccess, () => {
       ).resolves.toMatchObject({ files: ['api/src/server.ts', 'web/src/App.tsx'] });
       const retain = vi.fn<NonNullable<ToolExecutionContext['retainResultAccess']>>();
       const signal = new AbortController().signal;
+      const search = await access.execute(
+        'search_project_contents',
+        JSON.stringify({
+          pattern: 'sharedNeedle',
+          pattern_kind: 'literal',
+          path: null,
+          file_glob: null,
+          file_type: null,
+          output_mode: 'content',
+          lines_before: 0,
+          lines_after: 0,
+          case_sensitive: true,
+          multiline: false,
+          limit: 1,
+          offset: 1,
+        }),
+        signal,
+        { retainResultAccess: retain },
+      );
+      expect(JSON.parse(search)).toMatchObject({ matches: [{ path: 'web/src/App.tsx' }] });
+      expect(search).not.toContain('sourceIdentity');
+      const authorizeSearch = retain.mock.calls[0]![1]!;
+      retain.mockClear();
+      // Only the returned page contributes text to this provider request.
+      await rename(join(apiRoot, 'src'), join(apiRoot, 'retired'));
+      (await authorizeSearch(signal))();
       const text = await access.execute(
         'read_project_file',
         JSON.stringify({ path: 'web/src/App.tsx', start_line: null, end_line: null }),
@@ -128,10 +154,12 @@ describe(ProjectAccess, () => {
       await writeFile(join(webRoot, 'saving'), 'A normal atomic save');
       await rename(join(webRoot, 'saving'), join(webRoot, 'src', 'App.tsx'));
       (await authorize(signal))();
+      (await authorizeSearch(signal))();
       await rename(join(webRoot, 'src'), join(webRoot, 'old'));
       await mkdir(join(webRoot, 'src'));
       await writeFile(join(webRoot, 'src', 'App.tsx'), 'Same path in another directory');
       await expect(authorize(signal)).rejects.toThrow('source location changed');
+      await expect(authorizeSearch(signal)).rejects.toThrow('source location changed');
     } finally {
       await index.dispose();
     }

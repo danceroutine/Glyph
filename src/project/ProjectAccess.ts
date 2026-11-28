@@ -1,3 +1,4 @@
+import { searchTextSource, type SearchFileIdentity } from '#src/context/search/WorkspaceContentSearchResult.js';
 import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
@@ -258,12 +259,27 @@ export class ProjectAccess {
   ) {
     const pathIndex = this.pathIndex;
     if (!pathIndex.searchContents) throw new Error('Native project content search is unavailable.');
-    return pathIndex.searchContents(pattern, {
+    const authority = this.sourceAuthority;
+    const result = await pathIndex.searchContents(pattern, {
+      ...(authority && { sourceAuthority: authority }),
       ...options,
       retainAccess: access.retain,
       path: options.path === null ? null : this.workspace.normalizePath(options.path),
       signal,
     });
+    if (authority && result.outputMode === 'content') {
+      const disk: SearchFileIdentity[] = [];
+      const editors = new Set<WorkspaceDisclosure>();
+      for (const match of result.matches) {
+        const source = match[searchTextSource];
+        if (!source) throw new Error('The source of a search match is unavailable.');
+        if (source instanceof WorkspaceDisclosure) editors.add(source);
+        else disk.push(source);
+      }
+      await access.retainFiles(authority, disk, signal);
+      for (const editor of editors) access.revalidate(cancellation => editor.authorize(cancellation));
+    }
+    return result;
   }
 
   private async listFiles(
