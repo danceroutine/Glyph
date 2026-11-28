@@ -145,6 +145,34 @@ describe(SkillContextContributor, () => {
     expect(() => turns.authorizeDisclosure('same', undefined, pending)).toThrow('ended');
   });
 
+  it('accepts explicit steering to a same-name package from another origin after retirement', async () => {
+    const first = aSkillDescriptor();
+    const second = aSkillDescriptor({
+      id: 'cursor:example',
+      origin: { ...first.origin, id: 'cursor', compatibility: 'cursor' },
+      directory: '.cursor/skills/example',
+      path: '.cursor/skills/example/SKILL.md',
+    });
+    const catalog = new SkillCatalog(
+      [first, second].map(skill => ({
+        id: skill.origin.id,
+        origin: skill.origin,
+        discover: async () => [skill],
+        capture: async () => aSkillPackage(skill, skill.id),
+        refreshIndex: async () => {},
+      })),
+    );
+    const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
+    const session = await turns.beginTurn({ turnId: 'turn', attachmentPaths: [], skillIds: [first.id] });
+    session.prepareReplay().didDeliver();
+    const steer = () => turns.steer({ turnId: 'turn', attachmentPaths: [], skillIds: [second.id] });
+    await expect(steer()).rejects.toThrow('same-name');
+    catalog.retirements.publish(first.id, 'removed');
+    expect((await steer())?.skills).toMatchObject([{ descriptor: { id: second.id }, body: second.id }]);
+    session.prepareReplay().didDeliver();
+    expect(turns.completeTurn('turn')?.skills?.map(skill => skill.body)).toEqual([first.id, second.id]);
+  });
+
   it('keeps new turns on a committed replacement during recovery and isolates failing notification listeners', async () => {
     const skill = aSkillDescriptor();
     const catalog = new SkillCatalog([
