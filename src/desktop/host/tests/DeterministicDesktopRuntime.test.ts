@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { DeterministicDesktopRuntimeFactory } from '#src/desktop/host/DeterministicDesktopRuntime.js';
+import type { GlyphDesktopWorkspaceRuntimeFactory } from '#src/desktop/host/GlyphDesktopWorkspaceRuntimeFactory.js';
 import { GlyphContextAttachmentKind } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { GlyphResponseDeltaKind } from '#src/desktop/protocol/events/GlyphResponseDelta.js';
@@ -264,6 +265,76 @@ describe(DeterministicDesktopRuntimeFactory, () => {
           emit: vi.fn(),
         }),
       ).resolves.toBeDefined();
+    });
+
+    it('retries failed workspace initialization and keeps backing workspace events out of the fixture stream', async () => {
+      passingProbe();
+      const backing = {
+        snapshot: async () => ({ accounts: [], models: [], chats: [], runs: [], proposals: [] }),
+        handle: async () => {},
+        connectionLost: async () => {},
+        dispose: vi.fn(async () => {}),
+      };
+      const create = vi
+        .fn<GlyphDesktopWorkspaceRuntimeFactory['create']>()
+        .mockRejectedValueOnce(new Error('Workspace still opening'))
+        .mockImplementation(async ({ emit }) => {
+          emit({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: [] });
+          return backing;
+        });
+      const emit = vi.fn();
+      const runtime = await new DeterministicDesktopRuntimeFactory({ create }).create({
+        identity,
+        trusted: true,
+        assertTrusted: () => {},
+        roots,
+        emit,
+      });
+      const resource = { uri: 'file:///project', path: '.', folder: true };
+      const signal = new AbortController().signal;
+      await expect(runtime.attachmentAccess!.resolve(resource, signal)).rejects.toThrow('Workspace still opening');
+      await expect(runtime.attachmentAccess!.resolve(resource, signal)).rejects.toThrow(
+        'Attachment access is unavailable',
+      );
+      expect(create).toHaveBeenCalledTimes(2);
+      expect(emit).not.toHaveBeenCalled();
+      await runtime.dispose();
+      expect(backing.dispose).toHaveBeenCalledOnce();
+    });
+
+    it('withholds a captured file when the fixture host has no backing workspace', async () => {
+      passingProbe();
+      const emit = vi.fn();
+      const runtime = await new DeterministicDesktopRuntimeFactory().create({
+        identity,
+        trusted: true,
+        assertTrusted: () => {},
+        roots,
+        emit,
+      });
+      await expect(
+        runtime.handle(
+          {
+            type: GlyphWorkbenchCommandType.SEND,
+            chatId: 'chat',
+            runId: 'run',
+            text: 'Review',
+            attachments: [
+              {
+                kind: GlyphContextAttachmentKind.FILE,
+                uri: 'file:///project/notes',
+                path: 'notes',
+                text: 'notes',
+                contentRevision: 'v1',
+              },
+            ],
+          },
+          { signal: new AbortController().signal, emit },
+        ),
+      ).rejects.toThrow('Attachment access is unavailable');
+      expect((await runtime.snapshot()).runs).toEqual([]);
+      expect(emit).not.toHaveBeenCalled();
+      await runtime.dispose();
     });
 
     it('opens real attachment access on demand and rejects a capture before streaming', async () => {
