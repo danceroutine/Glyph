@@ -17,7 +17,7 @@ import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadat
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { GlyphContextAttachmentKind as Kind } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { formatFolderAttachment } from '#src/desktop/workbench/formatFolderContextOutline.js';
-import { DesktopAttachmentAccess } from '../DesktopAttachmentAccess.ts';
+import { DesktopAttachmentAccess } from '#src/desktop/host/DesktopAttachmentAccess.js';
 
 describe(DesktopAttachmentAccess, () => {
   it('checks dirty selections, Git comparisons and folder outlines against live native policy', async () => {

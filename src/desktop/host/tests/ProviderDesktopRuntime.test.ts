@@ -5,7 +5,7 @@ import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
-import { DesktopAttachmentAccess } from '../DesktopAttachmentAccess.ts';
+import { DesktopAttachmentAccess } from '#src/desktop/host/DesktopAttachmentAccess.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
