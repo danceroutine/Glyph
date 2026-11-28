@@ -64,11 +64,26 @@ pub(super) fn inherit_permissions(
     glyph_filesystem_metadata::assert_access_metadata(parent).map_err(unsupported_metadata)?;
     #[cfg(target_os = "macos")]
     let group = fstat(parent)?.st_gid;
-    // Access policy admits ordinary parents. Linux creates their children with the caller's effective group.
     #[cfg(target_os = "linux")]
-    let group = rustix::process::getegid().as_raw();
+    let group = creation_group(parent, rustix::process::getegid().as_raw())?;
     let directory = open_child(stage, slot, DIRECTORY, Mode::empty())?;
     apply_permissions(&directory, group)
+}
+
+#[cfg(target_os = "linux")]
+fn creation_group(parent: &OwnedFd, effective_group: u32) -> Result<u32, Failure> {
+    if fstat(parent)?.st_gid == effective_group {
+        return Ok(effective_group);
+    }
+    // Mounts such as ext4 with grpid inherit an ordinary parent's group. Let the
+    // filesystem select it on the pinned parent. The probe can never be linked.
+    let probe = openat(
+        parent,
+        c".",
+        OFlags::TMPFILE | OFlags::EXCL | OFlags::WRONLY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    Ok(fstat(probe)?.st_gid)
 }
 
 fn apply_permissions(directory: &OwnedFd, group: u32) -> Result<(), Failure> {

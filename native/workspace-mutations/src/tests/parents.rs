@@ -65,6 +65,32 @@ fn restores_a_directory_populated_after_the_exclusive_claim_to_its_original_pare
 
 #[cfg(target_os = "linux")]
 #[test]
+fn observes_the_filesystems_creation_group_without_leaving_a_directory_entry() {
+    let temp = tempdir().unwrap();
+    let parent = open(temp.path(), DIRECTORY, Mode::empty()).unwrap();
+    let group = fstat(&parent).unwrap().st_gid;
+    mkdirat(&parent, c"control", Mode::RWXU).unwrap();
+    let control = open_child(&parent, "control", DIRECTORY, Mode::empty()).unwrap();
+    let expected = fstat(&control).unwrap().st_gid;
+
+    // A single-group test runner can still exercise both inheritance decisions.
+    assert_eq!(creation_group(&parent, group).unwrap(), group);
+    assert_eq!(creation_group(&parent, group ^ 1).unwrap(), expected);
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn requires_an_observed_group_only_when_the_parent_and_caller_groups_differ() {
+    // procfs supplies directory metadata but cannot create an anonymous file.
+    let parent = open("/proc", DIRECTORY, Mode::empty()).unwrap();
+    let group = fstat(&parent).unwrap().st_gid;
+    assert_eq!(creation_group(&parent, group).unwrap(), group);
+    assert!(creation_group(&parent, group ^ 1).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn rejects_setgid_destination_metadata_before_changing_the_staged_directory() {
     let temp = tempdir().unwrap();
     let stage = open(temp.path(), DIRECTORY, Mode::empty()).unwrap();
