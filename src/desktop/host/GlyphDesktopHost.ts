@@ -429,6 +429,7 @@ export class GlyphDesktopHost {
     if (
       !connection.trusted &&
       (isMutationCommand(command) ||
+        command.type === GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE ||
         command.type === GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE ||
         command.type === GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE)
     ) {
@@ -507,6 +508,26 @@ export class GlyphDesktopHost {
         type: GlyphHostEventType.RULE_REFERENCE_RESOLVED,
         lookupId: command.lookupId,
         ...(ruleId ? { ruleId } : {}),
+      });
+      return [toCommandResultGlyphHostEvent(requestId)];
+    }
+    if (command.type === GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE) {
+      if (
+        typeof command.lookupId !== 'string' ||
+        !command.lookupId ||
+        command.lookupId.length > 64 ||
+        typeof command.skillId !== 'string' ||
+        !command.skillId ||
+        command.skillId.length > 500 ||
+        (command.manifestUri !== undefined &&
+          (typeof command.manifestUri !== 'string' || command.manifestUri.length > 32768))
+      )
+        throw new Error('Invalid skill reference lookup.');
+      const skillId = record.runtime.resolveSkillReference?.(command.skillId, command.manifestUri);
+      this.send(connection, {
+        type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED,
+        lookupId: command.lookupId,
+        ...(skillId ? { skillId } : {}),
       });
       return [toCommandResultGlyphHostEvent(requestId)];
     }

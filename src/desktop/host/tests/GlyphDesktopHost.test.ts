@@ -417,6 +417,62 @@ describe(GlyphDesktopHost, () => {
     expect(fixture.events('owner').at(-1)?.event).toMatchObject({ type: GlyphHostEventType.ERROR });
   });
 
+  it('returns skill identity lookups only to their authorized attached window', async () => {
+    const fixture = new HostFixture();
+    const command = {
+      type: GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE,
+      lookupId: 'lookup',
+      skillId: 'old',
+    } as const;
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    await fixture.receive('owner', owner, 'attach-owner', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.receive('peer', peer, 'attach-peer', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.receive('peer', peer, 'absent', command);
+    expect(fixture.events('peer').at(-2)?.event).toEqual({
+      type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED,
+      lookupId: 'lookup',
+    });
+    Object.assign(fixture.runtime, { resolveSkillReference: () => 'canonical' });
+    await fixture.receive('peer', peer, 'lookup', command);
+    expect(fixture.events('peer').at(-2)?.event).toEqual({
+      type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED,
+      lookupId: 'lookup',
+      skillId: 'canonical',
+    });
+    expect(
+      fixture.events('owner').some(entry => entry.event.type === GlyphHostEventType.SKILL_REFERENCE_RESOLVED),
+    ).toBe(false);
+    for (const [i, bad] of [
+      { lookupId: null },
+      { lookupId: '' },
+      { lookupId: 'a'.repeat(65) },
+      { manifestUri: 12 },
+      { manifestUri: 'a'.repeat(32769) },
+      { skillId: null },
+      { skillId: '' },
+      { skillId: 'a'.repeat(501) },
+    ].entries()) {
+      await fixture.receive('peer', peer, 'invalid' + i, { ...command, ...bad } as typeof command);
+      expect(fixture.events('peer').at(-1)?.event).toMatchObject({ type: GlyphHostEventType.ERROR });
+    }
+    await fixture.receive('owner', owner, 'downgrade', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+    });
+    await fixture.receive('owner', owner, 'restricted', command);
+    expect(fixture.events('owner').at(-1)?.event).toMatchObject({ type: GlyphHostEventType.ERROR });
+  });
+
   it('keeps user-file checks conservative when owner or peer folder aliases change', async () => {
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-user-root-')));
     const fixture = new HostFixture();

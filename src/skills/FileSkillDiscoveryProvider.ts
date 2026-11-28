@@ -1,0 +1,266 @@
+import { fileURLToPath } from 'node:url';
+import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { sourceReads } from '#src/workspace/SourceDisclosure.js';
+import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { workspaceReadFailureBytes } from '#src/workspace/WorkspaceReadFailure.js';
+import { posix } from 'node:path';
+import { lstat } from 'node:fs/promises';
+import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import type { SkillDescriptor, SkillOrigin } from './SkillDescriptor.ts';
+import type { SkillDiscoveryProvider } from './SkillDiscoveryProvider.ts';
+import { packageRevision } from './skillPackageRevision.ts';
+import { captureSkillPackage, readSkillPackageFiles } from './SkillPackage.ts';
+import { skillPackageId } from './skillPackageId.ts';
+import { parseSkillManifest } from './SkillManifest.ts';
+
+/** Native and compatibility directories share a format but keep distinct location identities. */
+interface FileSkillLocation {
+  readonly origin: SkillOrigin;
+  readonly authority?: PinnedSourceAuthority;
+  readonly scopePrefix?: string;
+  readonly scopePathKey?: (path: string) => string;
+  /** Store-relative directory. Nested occurrences are allowed for project locations. */
+  readonly directory: string;
+  readonly workspace: WorkspaceTextStore;
+  readonly binaryStore?: Pick<FileSystemWorkspaceTextStore, 'readBytes'> &
+    Partial<Pick<FileSystemWorkspaceTextStore, 'resolvePath'>>;
+  readonly includeDirectory?: (directory: string) => boolean;
+  readonly packageId?: (directory: string) => string;
+  readonly matchesLegacyId?: (directory: string, id: string, budget: { remaining: number }) => boolean;
+  readonly uriForPath: (path: string) => string;
+  readonly refreshIndex: () => Promise<void>;
+}
+
+export type SkillDiscoveryLocation = FileSkillLocation &
+  (
+    | {
+        readonly listFiles: (
+          signal?: AbortSignal,
+        ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+        readonly captureFiles?: (
+          directory: string,
+          signal?: AbortSignal,
+        ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+      }
+    | {
+        readonly listPackages: (signal?: AbortSignal) => Promise<{
+          readonly packages: readonly { readonly directory: string; readonly manifest: string | null }[];
+          readonly truncated: boolean;
+        }>;
+        readonly captureFiles: (
+          directory: string,
+          signal?: AbortSignal,
+        ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+      }
+  );
+
+interface IndexedSkillDirectory {
+  readonly directory: string;
+  readonly scope: string;
+  manifest?: string;
+}
+
+/** Discovers package metadata from Rust-indexed paths. File reads retain the store's policy and symlink guards. */
+export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
+  readonly origin: SkillOrigin;
+  readonly id: string;
+  constructor(private readonly location: SkillDiscoveryLocation) {
+    this.origin = location.origin;
+    this.id = this.origin.id;
+  }
+
+  matchesLegacyId(directory: string, id: string, budget: { remaining: number }): boolean {
+    return this.location.matchesLegacyId?.(directory, id, budget) ?? false;
+  }
+
+  scopePathKey(path: string): string {
+    if (this.location.scopePathKey) return this.location.scopePathKey(path);
+    if (this.location.workspace.caseSensitive) return path;
+    if (!this.location.scopePrefix) return path.toLowerCase();
+    const [root, ...relative] = path.split('/');
+    return [root, ...relative.map(segment => segment.toLowerCase())].join('/');
+  }
+
+  async discover(signal?: AbortSignal): Promise<readonly SkillDescriptor[]> {
+    signal?.throwIfAborted();
+    const location = this.location;
+    const listed = 'listPackages' in location ? await location.listPackages(signal) : await location.listFiles(signal);
+    if (listed.truncated) throw new Error(`Skill discovery is incomplete for ${location.origin.label}.`);
+    const directories =
+      'packages' in listed
+        ? listed.packages.map(({ directory, manifest }) => {
+            const parent = posix.dirname(posix.dirname(posix.dirname(directory)));
+            const scope = this.origin.scope === 'project' && parent !== '.' ? parent : '';
+            return {
+              directory,
+              scope: [location.scopePrefix, scope].filter(Boolean).join('/') || '.',
+              ...(manifest ? { manifest } : {}),
+            };
+          })
+        : this.indexedDirectories(listed.files);
+    // Bound metadata reads across large native catalogs.
+    let remainingBytes = 8 * 1024 * 1024;
+    const maxManifestBytes = 256 * 1024;
+    const maxPhysicalBytes = 2 * maxManifestBytes;
+    const readDescriptor = async ({
+      directory,
+      scope,
+      manifest: indexedPath,
+    }: IndexedSkillDirectory): Promise<SkillDescriptor> => {
+      const path = indexedPath ?? `${directory}/SKILL.md`;
+      const name = posix.basename(directory);
+      const source: SkillDescriptor = {
+        id: this.location.packageId?.(directory) ?? skillPackageId(this.id, directory),
+        origin: this.location.origin,
+        path,
+        directory,
+        scope,
+        name,
+        description: '',
+        enabled: true,
+        status: 'active',
+        allowedTools: [],
+        uri: '',
+      };
+      let uri = '';
+      try {
+        signal?.throwIfAborted();
+        if (!indexedPath) throw new Error('Skill package has no indexed SKILL.md.');
+        const reserved = Math.min(remainingBytes, maxPhysicalBytes);
+        if (reserved <= 0) throw new Error('Skill metadata exceeds the 8 MiB discovery budget.');
+        remainingBytes -= reserved;
+        const snapshot = await this.location.workspace
+          .read(path, {
+            maxBytes: Math.min(reserved, maxManifestBytes),
+            physicalByteBudget: reserved,
+          })
+          .catch((error: unknown) => {
+            remainingBytes += reserved - workspaceReadFailureBytes(error);
+            throw error;
+          });
+        remainingBytes += reserved - Math.max(snapshot.byteLength, snapshot.bytesRead ?? 0);
+        uri = this.location.uriForPath(path);
+        const manifest = parseSkillManifest(snapshot.text, name);
+        return {
+          ...source,
+          ...(this.location.authority
+            ? { [sourceReads]: { authority: this.location.authority, files: [{ uri, identity: snapshot.identity }] } }
+            : {}),
+          uri,
+          name: manifest.name,
+          description: manifest.description,
+          revision: snapshot.revision,
+          allowedTools: manifest.allowedTools,
+          ...(manifest.compatibility ? { compatibility: manifest.compatibility } : {}),
+        };
+      } catch (error) {
+        if (signal?.aborted) throw signal.reason;
+        return {
+          ...source,
+          uri,
+          status: 'error' as const,
+          enabled: false,
+          message: error instanceof Error ? error.message : 'Skill metadata is unavailable.',
+        };
+      }
+    };
+    const ordered = directories
+      .filter(entry => this.location.includeDirectory?.(entry.directory) !== false)
+      .toSorted((left, right) => left.directory.localeCompare(right.directory));
+    const descriptors: SkillDescriptor[] = [];
+    for (let offset = 0; offset < ordered.length;) {
+      const width = Math.min(8, Math.max(1, Math.floor(remainingBytes / maxPhysicalBytes)));
+      descriptors.push(
+        ...(await Promise.all(ordered.slice(offset, offset + width).map(directory => readDescriptor(directory)))),
+      );
+      offset += width;
+    }
+    return descriptors;
+  }
+
+  async capture(descriptor: SkillDescriptor, signal?: AbortSignal, reconcile?: () => Promise<void>) {
+    const inventory = async () => {
+      const location = this.location;
+      const listed =
+        'listFiles' in location && !location.captureFiles
+          ? await location.refreshIndex().then(() => location.listFiles(signal))
+          : await location.captureFiles!(descriptor.directory, signal);
+      if (listed.truncated) throw new Error('Skill package inventory is incomplete.');
+      return listed.files.filter(path => path.startsWith(descriptor.directory + '/')).toSorted();
+    };
+    const directory = await this.location.binaryStore?.resolvePath?.(descriptor.directory);
+    // Replacing the package directory changes its filesystem identity even when a manifest is identical.
+    const generation = async () => {
+      if (!directory) return;
+      const stat = await lstat(directory, { bigint: true });
+      return [stat.dev, stat.ino, stat.birthtimeNs, stat.ctimeNs].join('/');
+    };
+    const initialGeneration = await generation();
+    const paths = await inventory();
+    const authority = this.location.authority;
+    const enrolled = authority
+      ? await authority.capture(
+          paths.map(path => fileURLToPath(this.location.uriForPath(path))),
+          signal,
+        )
+      : [];
+    const origins = new Map(
+      enrolled.map((file, i) => [posix.relative(descriptor.directory, paths[i]!), { authority: authority!, file }]),
+    );
+    const snapshot = await captureSkillPackage(
+      descriptor,
+      this.location.workspace,
+      paths,
+      signal,
+      this.location.binaryStore,
+      origins,
+    );
+    if (reconcile) await reconcile();
+    // Re-read every authorized file and both inventory boundaries before admitting this revision.
+    const verified = await readSkillPackageFiles(
+      descriptor,
+      this.location.workspace,
+      paths,
+      signal,
+      this.location.binaryStore,
+    );
+    const finalPaths = await inventory();
+    if (
+      initialGeneration !== (await generation()) ||
+      packageRevision(verified) !== snapshot.revision ||
+      JSON.stringify(paths) !== JSON.stringify(finalPaths)
+    )
+      throw new Error('The skill changed during capture. Refresh and activate it again.');
+    return snapshot;
+  }
+
+  refreshIndex(): Promise<void> {
+    return this.location.refreshIndex();
+  }
+
+  /** Adapt file-only discovery locations to package entries under their declared casing policy. */
+  private indexedDirectories(files: readonly string[]): IndexedSkillDirectory[] {
+    const marker = this.location.directory === '.' ? [] : this.location.directory.split('/');
+    const key = (name: string) => (this.location.workspace.caseSensitive ? name : name.toLowerCase());
+    const directories = new Map<string, IndexedSkillDirectory>();
+    for (const path of files) {
+      const segments = path.split('/');
+      const start =
+        marker.length === 0
+          ? 0
+          : segments.findIndex((_, i) => marker.every((segment, j) => key(segments[i + j] ?? '') === key(segment)));
+      const packageIndex = start + marker.length;
+      if (start < 0 || !segments[packageIndex] || segments.length < packageIndex + 2) continue;
+      const directory = segments.slice(0, packageIndex + 1).join('/');
+      const scope = this.origin.scope === 'project' ? segments.slice(0, start).join('/') : '';
+      const entry = directories.get(directory) ?? {
+        directory,
+        scope: [this.location.scopePrefix, scope].filter(Boolean).join('/') || '.',
+      };
+      if (segments.length === packageIndex + 2 && key(segments[packageIndex + 1]!) === key('SKILL.md'))
+        entry.manifest = path;
+      directories.set(directory, entry);
+    }
+    return [...directories.values()];
+  }
+}

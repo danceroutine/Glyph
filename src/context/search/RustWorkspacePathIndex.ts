@@ -31,6 +31,7 @@ enum PathIndexMethod {
   INITIALIZE = 'initialize',
   SEARCH = 'search',
   GLOB = 'glob',
+  LIST_SKILL_PACKAGES = 'listSkillPackages',
   FILTER_PATHS = 'filterPaths',
   ASSERT_REPLACEABLE_METADATA = 'assertReplaceableMetadata',
   CONTENT_SEARCH = 'contentSearch',
@@ -69,6 +70,13 @@ const searchResultSchema = z
 const globResultSchema = z
   .object({
     files: z.array(z.string().min(1)),
+    truncated: z.boolean(),
+  })
+  .strict();
+
+const skillPackageListingSchema = z
+  .object({
+    packages: z.array(z.object({ directory: z.string().min(1), manifest: z.string().min(1).nullable() }).strict()),
     truncated: z.boolean(),
   })
   .strict();
@@ -288,6 +296,17 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     );
     operation.assertCurrent();
     options.retainAccess?.(operation.assertCurrent);
+    return result;
+  }
+
+  /** One indexed representative per package, preferring the manifest over an ordinary resource. */
+  async listSkillPackages(marker: string | null, signal?: AbortSignal) {
+    const check = this.beginResultAccess();
+    await this.initialize(signal);
+    const result = skillPackageListingSchema.parse(
+      await this.request(PathIndexMethod.LIST_SKILL_PACKAGES, marker, signal),
+    );
+    check();
     return result;
   }
 

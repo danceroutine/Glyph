@@ -12,6 +12,7 @@ export enum GlyphContextAttachmentKind {
   TEST = 'test',
   /** Composer-only reference to a manual instruction rule; never serialized as captured file content. */
   RULE = 'rule',
+  SKILL = 'skill',
 }
 
 /** The host binds the editor URI to this workspace-relative route. */
@@ -40,6 +41,7 @@ export interface GlyphContextAttachment {
   readonly text: string;
   readonly contentRevision: string;
   readonly ruleId?: string;
+  readonly skillId?: string;
   readonly folderListing?: GlyphFolderListing;
   readonly projectFile?: true;
   /** The capture remains visible, but cannot be sent under the current workspace authority. */

@@ -1,3 +1,5 @@
+import { GlyphSkills } from './GlyphSkills/GlyphSkills.presentational.tsx';
+import type { GlyphSkill } from '#src/desktop/protocol/events/GlyphSkill.js';
 import { GlyphAgentReviewComment } from './GlyphAgentReview/GlyphAgentReviewComment.tsx';
 import { GlyphFileIcons } from './GlyphFileIcon/GlyphFileIcon.tsx';
 import { GlyphAgentReview } from './GlyphAgentReview/GlyphAgentReview.presentational.tsx';
@@ -192,6 +194,26 @@ export const mountGlyphAgentInstructions = (
     update,
     dispose: () => {
       if (disposed) return;
+      disposed = true;
+      render(null, container);
+    },
+  };
+};
+
+export const mountGlyphSkills = (
+  container: HTMLElement,
+  skills: readonly GlyphSkill[],
+  query: string,
+  edit: (skill: GlyphSkill) => void,
+) => {
+  let disposed = false;
+  const update = (next: readonly GlyphSkill[], search: string) => {
+    if (!disposed) render(<GlyphSkills skills={next} query={search} edit={edit} />, container);
+  };
+  update(skills, query);
+  return {
+    update,
+    dispose: () => {
       disposed = true;
       render(null, container);
     },

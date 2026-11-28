@@ -22,7 +22,7 @@ export function restoreGlyphPrompt(
   ) => { readonly name?: string; readonly revision?: string } | undefined,
   createId: () => string,
 ): GlyphPromptDocument {
-  const { attachmentSpans, referenceSpans = [], manualRuleIds = [], ...options } = draft.options ?? {};
+  const { attachmentSpans, referenceSpans = [], manualRuleIds = [], skillIds = [], ...options } = draft.options ?? {};
   const mentions: GlyphInlineMention<GlyphContextAttachment>[] = draft.attachments.map(
     ({ previousPath, ...capture }, i) => {
       const attachment = { ...capture, id: capture.id ?? createId() };
@@ -34,7 +34,10 @@ export function restoreGlyphPrompt(
       };
     },
   );
-  const selected = [...new Set(manualRuleIds)].map(sourceId => ({ kind: 'rule' as const, sourceId }));
+  const selected = [
+    ...[...new Set(manualRuleIds)].map(sourceId => ({ kind: 'rule' as const, sourceId })),
+    ...[...new Set(skillIds)].map(sourceId => ({ kind: 'skill' as const, sourceId })),
+  ];
   const exact = referenceSpans.filter(ref =>
     selected.some(choice => choice.kind === ref.kind && choice.sourceId === ref.sourceId),
   );
@@ -63,9 +66,10 @@ function restoreMentions(
     const mention = `/${ref.label}`;
     const attachment: GlyphContextAttachment = {
       id: createId(),
-      kind: GlyphContextAttachmentKind.RULE,
-      ruleId: ref.sourceId,
-      uri: `glyph-rule:${encodeURIComponent(ref.sourceId)}`,
+      ...(ref.kind === 'rule'
+        ? { kind: GlyphContextAttachmentKind.RULE, ruleId: ref.sourceId }
+        : { kind: GlyphContextAttachmentKind.SKILL, skillId: ref.sourceId }),
+      uri: `glyph-${ref.kind}:${encodeURIComponent(ref.sourceId)}`,
       path: ref.label,
       text: '',
       contentRevision: ref.revision,
@@ -98,7 +102,7 @@ export function restoreGlyphDraftReferences(text: string, saved: unknown, create
     for (const ref of entries) {
       if (
         !isRecord(ref) ||
-        ref.kind !== 'rule' ||
+        (ref.kind !== 'rule' && ref.kind !== 'skill') ||
         !boundedField(ref.sourceId, 500) ||
         !boundedField(ref.label, 64 * 1024) ||
         !boundedField(ref.revision, 500) ||

@@ -1,10 +1,18 @@
+import { UserSkillDirectory } from '#src/skills/UserSkillDirectory.js';
+import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { WorkspaceRootSelections } from '#src/workspace/WorkspaceRootSelections.js';
 import { DesktopAttachmentAccess } from './DesktopAttachmentAccess.ts';
 import { readSourcePathAliases } from '#src/workspace/SourcePathAliases.js';
 import { readDirectoryNamePolicies } from '#src/workspace/readDirectoryNamePolicies.js';
-import { filesystemPolicyDirectory, workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
+import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
+import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
+import { SkillToolRuntime } from '#src/skills/SkillToolRuntime.js';
+import { InstructionContextContributor } from '#src/context/turns/InstructionContextContributor.js';
+import { filesystemPolicyDirectory, workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { assertUserWorkingCopiesClean } from '#src/desktop/workspace/assertUserWorkingCopiesClean.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
@@ -98,6 +106,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   private initialized: Promise<void> | undefined;
   /** Runtimes attached to the same physical user directory share its rule index. */
   private readonly userRuleIndexes = new Map<string, RustWorkspacePathIndex>();
+  private readonly userSkillIndexes = new Map<string, RustWorkspacePathIndex>();
 
   private readonly profile: StartupUserProfile;
 
@@ -122,7 +131,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   async dispose(): Promise<void> {
     await this.initialized;
     try {
-      const results = await Promise.allSettled([...this.userRuleIndexes.values()].map(index => index.dispose()));
+      const results = await Promise.allSettled(
+        [...this.userRuleIndexes.values(), ...this.userSkillIndexes.values()].map(index => index.dispose()),
+      );
       const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
       if (failed) throw failed.reason;
     } finally {
@@ -405,6 +416,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             context.id,
             parts.map(part => ({ name: part.name, index: part.index })),
           );
+    let skills: SkillCatalog | undefined;
     const selectedFiles =
       parts.length === 1
         ? parts[0]!.selectedFiles
@@ -539,7 +551,113 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           userRuleDirectory.refresh();
         },
       );
-      turnContexts = new TurnContextCoordinator(instructionCatalog);
+      const userSkillDirectory = new UserSkillDirectory(userRuleRoot, userRuleStore.caseSensitive, sourcePathAliases);
+      const skillRoot = userSkillDirectory.path;
+      let userSkillIndex = this.userSkillIndexes.get(userRuleRoot);
+      if (!userSkillIndex) {
+        userSkillIndex = new RustWorkspacePathIndex({
+          binaryPath: indexExecutable,
+          access: new WorkspaceRootAccess(access.userCatalog, skillRoot, userCaseSensitive),
+          respectGitIgnore: false,
+        });
+        this.userSkillIndexes.set(userRuleRoot, userSkillIndex);
+      }
+      // Reconcile a single bounded package under the same live policy as its source provider.
+      const packageIndex =
+        (catalogPolicy: typeof policy, caseSensitive: boolean, respectGitIgnore: boolean) =>
+        (packageRoot: string, maxFiles: number) =>
+          new RustWorkspacePathIndex({
+            binaryPath: indexExecutable,
+            access: new WorkspaceRootAccess(catalogPolicy, packageRoot, caseSensitive),
+            maxFiles,
+            respectGitIgnore,
+          });
+      const userSkills = new FileSkillDiscoveryProvider({
+        authority: userSourceAuthority,
+        origin: { id: 'user:glyph', label: 'User skill', scope: 'user', compatibility: 'glyph' },
+        directory: 'skills',
+        matchesLegacyId: (directory, previousId, budget) =>
+          userSkillDirectory.matchesProjectReference(directory, previousId, budget),
+        workspace: userRuleStore,
+        captureFiles: (directory, signal) =>
+          listSkillPackageFiles(
+            userRuleStore,
+            directory,
+            packageIndex(access.userCatalog, userCaseSensitive, false),
+            signal,
+          ),
+        binaryStore: userRuleStore,
+        uriForPath: path => userRuleUri(userRuleRoot, path),
+        listPackages: async signal => {
+          this.profile.ensureDirectory();
+          return this.profile.access(async () => {
+            await userRuleStore.canonicalPath('skills');
+            await mkdir(skillRoot, { recursive: true, mode: 0o700 });
+            await userRuleStore.canonicalPath('skills');
+            const result = await userSkillIndex.listSkillPackages(null, signal);
+            userSkillDirectory.verifyAliases();
+            return {
+              truncated: result.truncated,
+              packages: result.packages.map(({ directory, manifest }) => ({
+                directory: 'skills/' + directory,
+                manifest: manifest && 'skills/' + manifest,
+              })),
+            };
+          });
+        },
+        refreshIndex: async () => {
+          await userSkillIndex.refresh();
+        },
+      });
+      skills = new SkillCatalog(
+        [
+          userSkills,
+          ...physicalParts.flatMap(part =>
+            ['.glyph', '.cursor'].map(location => {
+              const identity = new ProjectSkillIdentity(part.disk.root, location);
+              return new FileSkillDiscoveryProvider({
+                authority: projectSourceAuthority,
+                includeDirectory: directory => !userSkillDirectory.ownsPackage(join(part.disk.root, directory)),
+                scopePathKey: paths.key.bind(paths),
+                packageId: directory => identity.forDirectory(directory),
+                matchesLegacyId: (directory, previousId, budget) =>
+                  identity.matchesLegacyId(directory, previousId, budget),
+                origin: {
+                  id: identity.originId,
+                  label: `${part.name} ${location} skill`,
+                  scope: 'project',
+                  compatibility: location.slice(1),
+                },
+                directory: `${location}/skills`,
+                captureFiles: (directory, signal) =>
+                  listSkillPackageFiles(
+                    part.disk,
+                    directory,
+                    packageIndex(policy, part.disk.caseSensitive, true),
+                    signal,
+                  ),
+                workspace: part.catalog,
+                binaryStore: part.disk,
+                ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
+                uriForPath: path => userRuleUri(part.disk.root, path),
+                listPackages: signal => part.index.listSkillPackages(location, signal),
+                refreshIndex: async () => {
+                  await part.index.refresh();
+                },
+              });
+            }),
+          ),
+        ],
+        undefined,
+        routes,
+        () => {
+          userSkillDirectory.refresh();
+        },
+      );
+      turnContexts = new TurnContextCoordinator([
+        new InstructionContextContributor(instructionCatalog),
+        new SkillContextContributor(skills),
+      ]);
       userRules = new UserAgentRuleManager(
         userRuleStore,
         instructionCatalog,
@@ -638,7 +756,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           logger,
           turnContexts,
         ),
-        ...(turnContexts ? [new RuleToolRuntime(turnContexts)] : []),
+        ...(turnContexts ? [new RuleToolRuntime(turnContexts), new SkillToolRuntime(turnContexts)] : []),
         new WebToolRuntime(new WebFetchService(webHttp), new DuckDuckGoSearch(webHttp)),
         new ProposeQuestionToolRuntime(interactions),
         new ShellToolRuntime(shells),
@@ -703,11 +821,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       await shells.dispose();
       throw error;
     }
-    // Share the account lifetime, but expose only project read/search tools to
-    // reviews. No shell, proposal, mode-switch, or interactive tools are registered.
+    // Reviews can read project files and the rules and skill resources advertised in their turn.
     const reviewProjectAccess = new ProjectAccess(workspace, index, {}, turnContexts, projectSourceAuthority);
     const reviewTools = turnContexts
-      ? new ToolRegistry([...reviewProjectAccess.tools, ...new RuleToolRuntime(turnContexts).tools])
+      ? new ToolRegistry([
+          ...reviewProjectAccess.tools,
+          ...new RuleToolRuntime(turnContexts).tools,
+          ...new SkillToolRuntime(turnContexts).tools,
+        ])
       : reviewProjectAccess;
     const reviewBackend = new OpenAIBackend(
       store,
@@ -761,11 +882,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       ...(instructionCatalog
         ? { instructionCatalog, referenceResources: (path: string) => routes.referenceResources(path) }
         : {}),
+      ...(skills ? { skills } : {}),
       restoreAttachmentPath: (path, uri) => routes.routeForFileUri(uri) ?? restorePath(path),
       refreshCatalogs: async signal => {
-        await instructionCatalog?.refresh(signal);
+        await Promise.all([instructionCatalog?.refresh(signal), skills?.refresh(signal)]);
       },
-      instructionWatchRoots: userRules ? [userRules.directoryUri] : [],
+      instructionWatchRoots: userRules ? [userRules.directoryUri, userRuleUri(userRuleRoot, 'skills')] : [],
       ...(userRules ? { userRules } : {}),
       emit: input.emit,
       ownerWindowId: input.identity.windowId,

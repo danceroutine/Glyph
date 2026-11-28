@@ -1,4 +1,5 @@
 import { sourceReads, type SourcePin } from '#src/workspace/SourceDisclosure.js';
+import type { TurnContextEnvelope, TurnContextSnapshot } from './TurnContextEnvelope.ts';
 import {
   AgentInstructionActivationMode,
   AgentInstructionActivationReason,
@@ -6,9 +7,7 @@ import {
   AgentInstructionSourceStatus,
   type AgentInstructionActivation,
   type AgentInstructionCandidate,
-  type AgentInstructionContext,
   type AgentInstructionSource,
-  type AgentInstructionTurnSnapshot,
 } from '#src/instructions/AgentInstructionSource.js';
 import { resolveInstructionId } from '#src/instructions/resolveInstructionId.js';
 import { AgentInstructionSet, isUnavailableGuidance } from '#src/instructions/AgentInstructionSet.js';
@@ -33,7 +32,7 @@ export class TurnContextSession {
   private readonly scopeIndex: AgentInstructionSet;
   private readonly precedence: ReadonlyMap<AgentInstructionSource, number>;
   private advertisedCandidates = new Map<string, AgentInstructionCandidate>();
-  private readonly initial: AgentInstructionContext;
+  private readonly initial: TurnContextEnvelope;
 
   private readonly paths: InstructionPaths;
   private remainingBytes = 512 * 1024;
@@ -76,7 +75,7 @@ export class TurnContextSession {
   }
 
   /** Current origins for the bodies and candidate metadata included in this provider request. */
-  disclosurePins(context?: AgentInstructionContext): SourcePin[] {
+  disclosurePins(context?: TurnContextEnvelope): SourcePin[] {
     if (!this.input.origins) return [];
     const ids = context ? context.sources.map(source => source.id) : [...this.activated.keys()];
     const candidates = context ? (context.candidates ?? []) : this.advertisedCandidates.values();
@@ -101,23 +100,22 @@ export class TurnContextSession {
     };
   }
 
-  /** Initial instructions and bounded model-selectable metadata for provider turn creation. */
-  initialEnvelope(): AgentInstructionContext {
+  initialEnvelope(): TurnContextEnvelope {
     return structuredClone(this.initial);
   }
 
   /** Activate and disclose sources made applicable by project paths. */
-  disclosePaths(paths: readonly string[]): AgentInstructionContext | undefined {
+  disclosePaths(paths: readonly string[]): TurnContextEnvelope | undefined {
     return this.discloseMatchingPaths(paths, AgentInstructionActivationReason.FILE_ACCESS);
   }
 
   /** Activate and disclose rules made applicable by later user attachments or steering. */
-  discloseAttachments(paths: readonly string[]): AgentInstructionContext | undefined {
+  discloseAttachments(paths: readonly string[]): TurnContextEnvelope | undefined {
     return this.discloseMatchingPaths(paths, AgentInstructionActivationReason.ATTACHMENT);
   }
 
   /** Explicitly activate manual rules selected after the turn begins. */
-  activateManualRules(ruleIds: readonly string[]): AgentInstructionContext | undefined {
+  activateManualRules(ruleIds: readonly string[]): TurnContextEnvelope | undefined {
     this.stageManualRules(ruleIds);
     return this.undisclosedContext([]);
   }
@@ -126,7 +124,7 @@ export class TurnContextSession {
   activateRule(
     ruleId: string,
     reason: AgentInstructionActivationReason.MANUAL | AgentInstructionActivationReason.MODEL,
-  ): AgentInstructionContext | undefined {
+  ): TurnContextEnvelope | undefined {
     if (reason === AgentInstructionActivationReason.MANUAL) return this.activateManualRules([ruleId]);
     const source = resolveInstructionId(this.input.sources, ruleId);
     if (
@@ -140,7 +138,7 @@ export class TurnContextSession {
   }
 
   /** Exact context provenance retained after the turn completes or compacts. */
-  snapshot(): AgentInstructionTurnSnapshot {
+  snapshot(): TurnContextSnapshot {
     const activations = [...this.activated.values()];
     const ids = new Set(activations.map(activation => activation.sourceId));
     return {
@@ -157,7 +155,7 @@ export class TurnContextSession {
   private discloseMatchingPaths(
     paths: readonly string[],
     reason: AgentInstructionActivationReason.ATTACHMENT | AgentInstructionActivationReason.FILE_ACCESS,
-  ): AgentInstructionContext | undefined {
+  ): TurnContextEnvelope | undefined {
     const normalized = unique(paths);
     const batch = new RulePathBatch(normalized, this.paths);
     const applicable = this.sourcesFor(batch);
@@ -235,13 +233,13 @@ export class TurnContextSession {
     return candidates;
   }
 
-  private undisclosedContext(candidates: readonly AgentInstructionCandidate[]): AgentInstructionContext | undefined {
+  private undisclosedContext(candidates: readonly AgentInstructionCandidate[]): TurnContextEnvelope | undefined {
     const pending = [...this.pending.entries()].toSorted(
       ([a], [b]) => this.precedence.get(a)! - this.precedence.get(b)!,
     );
     this.pending.clear();
     if (pending.length === 0 && candidates.length === 0) return undefined;
-    const envelope: AgentInstructionContext = {
+    const envelope: TurnContextEnvelope = {
       schema: 'glyph.agent-instructions.v1',
       sources: pending.map(([source]) => {
         const { uri: _editorUri, legacyIds: _legacyIds, [sourceReads]: _origin, ...instruction } = source;
@@ -287,7 +285,7 @@ function unique(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
 }
 
-function emptyContext(): AgentInstructionContext {
+function emptyContext(): TurnContextEnvelope {
   return {
     schema: 'glyph.agent-instructions.v1',
     sources: [],

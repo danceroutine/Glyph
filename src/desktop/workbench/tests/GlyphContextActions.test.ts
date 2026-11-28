@@ -3,6 +3,6 @@ import { GlyphContextCandidateKind } from '#src/desktop/workbench/GlyphContextAc
 
 describe('GlyphContextCandidateKind', () => {
   it('distinguishes file, folder, and rule candidates', () => {
-    expect({ ...GlyphContextCandidateKind }).toEqual({ FILE: 'file', FOLDER: 'folder', RULE: 'rule' });
+    expect({ ...GlyphContextCandidateKind }).toEqual({ FILE: 'file', FOLDER: 'folder', RULE: 'rule', SKILL: 'skill' });
   });
 });

@@ -31,6 +31,11 @@ export class UserStoreProjectRoutes {
     this.entries = undefined;
   }
 
+  /** Verify that this discovery pass can identify the personal store and its mounted project aliases. */
+  verifyAliases(): void {
+    this.routes();
+  }
+
   ownsStore(path: string): boolean {
     return this.store.matches(path);
   }

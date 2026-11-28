@@ -170,6 +170,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         resource => this.resolveAttachmentResource(resource),
       ),
     );
+    this.context.setSkillSources(
+      () => this.state.skills ?? [],
+      undefined,
+      (id, manifestUri) => this.resolveHistoricalSkill(id, manifestUri),
+    );
     this.context.setInstructionRefresh(
       invalidate => this.refreshInstructionSources(invalidate),
       () => this.state.instructionWatchRoots ?? [],
@@ -250,6 +255,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         if (this.invalidateChangedSession()) return;
         const event = envelope.event;
         if (
+          event.type === GlyphHostEventType.SKILL_REFERENCE_RESOLVED ||
           event.type === GlyphHostEventType.RULE_REFERENCE_RESOLVED ||
           event.type === GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED
         )
@@ -264,6 +270,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             : undefined;
         this.projection.accept(event);
         if (
+          event.type === GlyphHostEventType.SKILLS_CHANGED ||
           event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED ||
           event.type === GlyphHostEventType.INITIAL_STATE
         )
@@ -312,7 +319,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             composer?.restoreDraft(
               restoreGlyphPrompt(
                 event.draft,
-                (_kind, id) => {
+                (kind, id) => {
+                  if (kind === 'skill') return this.state.skills?.find(skill => skill.id === id);
                   const source = resolveInstructionId(this.state.instructionSources ?? [], id);
                   return source
                     ? {
@@ -438,11 +446,18 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     }
     this.composer.insertAttachments(attachments);
   }
+  refreshSkills(): Promise<void> {
+    return this.refreshInstructionSources();
+  }
   copyText(text: string): Promise<void> {
     return this.clipboard.writeText(text);
   }
 
   async openLink(href: string): Promise<void> {
+    if (href.startsWith('glyph-skill:')) {
+      await this.context.openAttachment({ uri: href, path: '' });
+      return;
+    }
     if (href.startsWith('glyph-instruction:')) {
       const id = decodeURIComponent(href.slice('glyph-instruction:'.length));
       await this.context.openInstruction(id);
@@ -1192,6 +1207,28 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     });
     try {
       await this.request({ type: GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE, lookupId, ruleId });
+      this.assertWorkspaceRevision(revision);
+      return current;
+    } finally {
+      listener.dispose();
+    }
+  }
+
+  private async resolveHistoricalSkill(skillId: string, manifestUri?: string): Promise<string | undefined> {
+    const revision = this.workspaceRevision;
+    const lookupId = generateUuid();
+    let current: string | undefined;
+    const listener = this.client.onDidReceiveEvent(({ event }) => {
+      if (event.type === GlyphHostEventType.SKILL_REFERENCE_RESOLVED && event.lookupId === lookupId)
+        current = event.skillId;
+    });
+    try {
+      await this.request({
+        type: GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE,
+        lookupId,
+        skillId,
+        ...(manifestUri !== undefined ? { manifestUri } : {}),
+      });
       this.assertWorkspaceRevision(revision);
       return current;
     } finally {

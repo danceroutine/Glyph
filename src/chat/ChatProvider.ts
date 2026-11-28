@@ -30,6 +30,7 @@ export interface ChatProvider {
       onTrace?: (entry: ProviderTraceEntry) => void;
       onToolActivity?: (activity: ToolActivity) => void;
       /** Persists side-effecting tool rounds before the model is allowed to continue. */
+      onSteeringRejected?: (request: ChatRequest, error: Error) => void;
       onStateCheckpoint?: (state: ChatProviderState) => void | Promise<void>;
       toolContext?: ToolExecutionContext;
     },

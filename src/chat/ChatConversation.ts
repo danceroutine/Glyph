@@ -17,6 +17,7 @@ export interface ChatConversationSendOptions {
   readonly takeSteering?: (finishing: boolean) => readonly ChatRequest[];
   readonly onStateCheckpoint?: (state: ChatProviderState) => void | Promise<void>;
   readonly toolContext?: ToolExecutionContext;
+  readonly onSteeringRejected?: (request: ChatRequest, message: string) => void;
 }
 
 /** Mutable history for one host-owned chat session. */
@@ -82,6 +83,14 @@ export class ChatConversation {
         },
         onReasoningSummary: value => {
           response.push({ type: ChatResponsePartType.REASONING_SUMMARY, value });
+        },
+        onSteeringRejected: (steeringRequest, error) => {
+          options.onSteeringRejected?.(steeringRequest, this.redact(error.message));
+          response.push({
+            type: ChatResponsePartType.DIAGNOSTIC,
+            severity: DiagnosticSeverity.ERROR,
+            message: `Steering was not applied: ${this.redact(error.message)}`,
+          });
         },
         onToolActivity: activity => {
           response.push({ type: ChatResponsePartType.TOOL, activity });

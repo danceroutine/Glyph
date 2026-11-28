@@ -47,3 +47,5 @@ export * from './events/GlyphAnnotation.ts';
 export * from './events/GlyphModeSwap.ts';
 
 export { AgentModeID } from '#src/chat/AgentMode.js';
+
+export type { GlyphSkill, GlyphSkillActivation } from './events/GlyphSkill.ts';

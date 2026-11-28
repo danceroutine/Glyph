@@ -848,6 +848,56 @@ describe(RustWorkspacePathIndex, () => {
     });
   });
 
+  describe(RustWorkspacePathIndex.prototype.listSkillPackages, () => {
+    it('discards package metadata if the root policy changes after the native result is decoded', async () => {
+      let privatePaths: string[] = [];
+      const worker = new FakeWorker(req =>
+        req.method === 'initialize' ? indexState(1) : req.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE,
+      );
+      const index = fixtureIndex(
+        { root: '/project', binaryPath: '/fixture', accessPolicy: new WorkspaceAccessPolicy({}, () => privatePaths) },
+        () => worker,
+      );
+      onTestFinished(() => index.dispose());
+      await index.initialize();
+      const pending = index.listSkillPackages('.glyph');
+      await vi.waitFor(() => {
+        expect(worker.requests.at(-1)?.method).toBe('listSkillPackages');
+      });
+      worker.stdout.write(
+        JSON.stringify({
+          version: 1,
+          id: worker.requests.at(-1)!.id,
+          result: {
+            packages: [{ directory: '.glyph/skills/local', manifest: '.glyph/skills/local/SKILL.md' }],
+            truncated: false,
+          },
+        }) + '\n',
+      );
+      privatePaths = ['/project/.glyph/skills/local'];
+      await expect(pending).rejects.toThrow('access changed');
+    });
+
+    it('requests a package listing from the initialized resident index', async () => {
+      const worker = new FakeWorker(request => {
+        if (request.method === 'initialize') return indexState(1);
+        if (request.method === 'listSkillPackages')
+          return {
+            packages: [{ directory: '.cursor/skills/example', manifest: '.cursor/skills/example/SKILL.md' }],
+            truncated: false,
+          };
+        return { shutdown: true };
+      });
+      const index = fixtureIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      onTestFinished(() => index.dispose());
+      await expect(index.listSkillPackages('.cursor')).resolves.toEqual({
+        packages: [{ directory: '.cursor/skills/example', manifest: '.cursor/skills/example/SKILL.md' }],
+        truncated: false,
+      });
+      expect(worker.requests[1]).toMatchObject({ method: 'listSkillPackages', params: '.cursor' });
+    });
+  });
+
   describe(RustWorkspacePathIndex.prototype.glob, () => {
     it('initializes the index before the first glob', async () => {
       const worker = new FakeWorker(request => {

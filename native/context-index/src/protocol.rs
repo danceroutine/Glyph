@@ -43,6 +43,7 @@ enum Request {
     FilesystemNamePolicy(String),
     Search(SearchParams),
     Glob(GlobParams),
+    ListSkillPackages(Option<String>),
     FilterPaths(Vec<String>),
     AssertReplaceableMetadata(String),
     ContentSearch(ContentSearchParams),
@@ -308,6 +309,10 @@ fn service_loop(
                     Request::FilterPaths(paths) => {
                         (result_response(id, service.filter_paths(paths)), false)
                     }
+                    Request::ListSkillPackages(marker) => (
+                        result_response(id, service.list_skill_packages(marker.as_deref())),
+                        false,
+                    ),
                     Request::Glob(params) => (result_response(id, service.glob(params)), false),
                     Request::ContentSearch(params) => {
                         let context = match service.content_search_context() {
@@ -441,6 +446,11 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
         )?),
         "filterPaths" => Request::FilterPaths(decode_params(
             "filterPaths",
+            envelope.params,
+            Some(envelope.id.clone()),
+        )?),
+        "listSkillPackages" => Request::ListSkillPackages(decode_params(
+            "listSkillPackages",
             envelope.params,
             Some(envelope.id.clone()),
         )?),

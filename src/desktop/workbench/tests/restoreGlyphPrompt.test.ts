@@ -93,6 +93,64 @@ describe(restoreGlyphPrompt, () => {
     });
   });
 
+  it('keeps rule and skill IDs distinct across editable restores and queued sends', async () => {
+    const skill: GlyphContextAttachment = {
+      kind: GlyphContextAttachmentKind.SKILL,
+      skillId: 'same',
+      path: 'Use',
+      text: '',
+      contentRevision: 's1',
+      uri: 'glyph-skill:same',
+    };
+    const selectedRule = { ...rule, ruleId: 'same', uri: 'glyph-rule:same' };
+    const original = new GlyphComposerState();
+    original.setDocument({
+      parts: [
+        { type: 'text', text: 'Literal /Use ' },
+        { type: 'attachment', attachment: skill },
+        { type: 'text', text: ' before ' },
+        { type: 'attachment', attachment: selectedRule },
+      ],
+      from: 0,
+      to: 0,
+    });
+    let saved!: { text: string; attachments: readonly GlyphContextAttachment[]; options: ChatTurnOptions };
+    await original.submit(async (text, attachments, options) => {
+      saved = { text, attachments, options: options! };
+    });
+    expect(saved.attachments).toEqual([]);
+    expect(saved.options.referenceSpans?.map(({ kind, sourceId }) => [kind, sourceId])).toEqual([
+      ['skill', 'same'],
+      ['rule', 'same'],
+    ]);
+    expect(saved.options).toMatchObject({ skillIds: ['same'], manualRuleIds: ['same'] });
+    const restored = restoreGlyphPrompt(saved, vi.fn(), () => 'badge');
+    expect(restored.parts[0]).toEqual({ type: 'text', text: 'Literal /Use ' });
+    expect(restored.parts[1]).toMatchObject({ type: 'attachment', attachment: skill });
+    const composer = new GlyphComposerState();
+    composer.restoreDraft({
+      ...restored,
+      options: saved.options,
+      parts: restored.parts.filter(
+        part => part.type === 'text' || part.attachment.kind !== GlyphContextAttachmentKind.SKILL,
+      ),
+    });
+    composer.enqueueDraft();
+    await composer.sendQueued(composer.snapshot.queued[0]!.id, async (_text, attachments, options) => {
+      expect(attachments).toEqual([]);
+      expect(options?.skillIds).toBeUndefined();
+      expect(options?.manualRuleIds).toEqual(['same']);
+      expect(options?.referenceSpans).toHaveLength(1);
+      expect(options?.referenceSpans?.[0]?.kind).toBe('rule');
+    });
+    const legacy = restoreGlyphPrompt(
+      { text: 'Use /Use', attachments: [], options: { skillIds: ['same'] } },
+      (kind, id) => (kind === 'skill' && id === 'same' ? { name: 'Use', revision: 's1' } : undefined),
+      () => 'legacy',
+    );
+    expect(legacy.parts.at(-1)).toMatchObject({ type: 'attachment', attachment: skill });
+  });
+
   it('restores only selected IDs and appends visible badges for ambiguous or unavailable legacy mentions', () => {
     const text = '/Use /Same /Same /Similar';
     const options: ChatTurnOptions = {
@@ -128,7 +186,7 @@ describe(restoreGlyphPrompt, () => {
 it('restores only exact, ordered and bounded local draft selections', () => {
   const text = '  /Use /Use';
   const valid = { kind: 'rule', sourceId: 'a', label: 'Use', revision: 'rev', from: 2, to: 6 };
-  const second = { kind: 'rule', sourceId: 'b', label: 'Use', revision: 'rev2', from: 7, to: 11 };
+  const skill = { kind: 'skill', sourceId: 'b', label: 'Use', revision: 'rev2', from: 7, to: 11 };
   const invalid = [
     null,
     {},
@@ -143,7 +201,7 @@ it('restores only exact, ordered and bounded local draft selections', () => {
     { ...valid, to: 5 },
     { ...valid, from: 1, to: 5 },
   ];
-  const document = restoreGlyphDraftReferences(text, [...invalid, valid, valid, second], () => 'badge');
+  const document = restoreGlyphDraftReferences(text, [...invalid, valid, valid, skill], () => 'badge');
   expect(document.parts.map(part => (part.type === 'text' ? part.text : part.attachment.contentRevision))).toEqual([
     '  ',
     'rev',

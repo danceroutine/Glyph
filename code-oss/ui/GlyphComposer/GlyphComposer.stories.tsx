@@ -168,7 +168,7 @@ export const ContextPickerFolder: Story = {
 const rulePickerActions = previewActionsFixture({
   context: {
     ...contextActions.context,
-    searchRules: fn<typeof contextActions.context.searchRules>(async query =>
+    searchInstructions: fn<typeof contextActions.context.searchInstructions>(async query =>
       [
         {
           uri: 'glyph-rule:typescript-safety',
@@ -189,7 +189,7 @@ const rulePickerActions = previewActionsFixture({
           revision: 'storybook-rule-v1',
         },
       ].filter(rule => `${rule.name} ${rule.detail}`.toLowerCase().includes(query.toLowerCase())),
-    ).mockName('RulePicker.searchRules'),
+    ).mockName('RulePicker.searchInstructions'),
   },
 });
 

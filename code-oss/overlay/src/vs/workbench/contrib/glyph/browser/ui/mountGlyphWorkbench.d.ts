@@ -69,3 +69,13 @@ export declare function mountGlyphAgentReviewComment(
   fix: () => void,
   dismiss: () => void,
 ): { dispose(): void };
+
+export declare const mountGlyphSkills: (
+  container: HTMLElement,
+  skills: readonly import('#glyph/protocol/events/GlyphSkill.js').GlyphSkill[],
+  query: string,
+  edit: (skill: import('#glyph/protocol/events/GlyphSkill.js').GlyphSkill) => void,
+) => {
+  update(skills: readonly import('#glyph/protocol/events/GlyphSkill.js').GlyphSkill[], query: string): void;
+  dispose(): void;
+};

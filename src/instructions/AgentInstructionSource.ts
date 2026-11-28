@@ -116,28 +116,8 @@ export interface AgentInstructionCandidate {
   readonly scope: string;
 }
 
-/** Versioned instruction envelope delivered outside persisted user conversation text. */
-export interface AgentInstructionContext {
-  /** Wire schema identifier for provider adapters and tool results. */
-  readonly schema: 'glyph.agent-instructions.v1';
-  /** Ordered sources; later entries have nearer scope and higher precedence. */
-  readonly sources: readonly AgentInstructionSource[];
-  /** Activation provenance corresponding to newly supplied sources. */
-  readonly activations?: readonly AgentInstructionActivation[];
-  /** Model-selectable rule metadata; candidate bodies are intentionally omitted. */
-  readonly candidates?: readonly AgentInstructionCandidate[];
-}
-
-/** Serializable context state retained with a completed chat turn. */
-export interface AgentInstructionTurnSnapshot {
-  /** Wire schema identifier used by persistence and the workbench inspector. */
-  readonly schema: 'glyph.turn-context.v1';
-  /** Host-owned logical turn identity. */
-  readonly turnId: string;
-  /** Frozen revision and provenance of every source activated in the turn. */
-  readonly sources: readonly AgentInstructionSource[];
-  /** Why each source was activated. */
-  readonly activations: readonly AgentInstructionActivation[];
-  /** Candidate metadata offered to the model during the turn. */
-  readonly candidates: readonly AgentInstructionCandidate[];
-}
+// Historical type names used by instruction contributors and existing consumers.
+export type {
+  TurnContextEnvelope as AgentInstructionContext,
+  TurnContextSnapshot as AgentInstructionTurnSnapshot,
+} from '#src/context/turns/TurnContextEnvelope.js';

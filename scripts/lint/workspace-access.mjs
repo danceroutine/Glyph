@@ -37,6 +37,9 @@ const filesystem = new Set([
   'src/desktop/host/WorkspaceOwnershipRegistry.ts',
   'src/desktop/workspace/createCatalogWorkspace.ts',
   'src/project/context/ProjectContextResolver.ts',
+  // Verify the skill's entry and settings editor target against their discovery identities.
+  'src/skills/FileSkillDiscoveryProvider.ts',
+  'src/skills/matchesSkillManifest.ts',
   'src/shell/ShellRuntimePathPolicy.ts',
   'src/shell/ShellWorkingDirectoryResolver.ts',
   'src/workspace/DirectoryNamePolicies.ts',
@@ -72,6 +75,7 @@ const restrictedModules = new Map([
   ['fs/promises', filesystem],
   ['child_process', subprocess],
   ['worker_threads', subprocess],
+  ['src/skills/SkillPackage.ts', new Set(['src/skills/FileSkillDiscoveryProvider.ts'])],
   ['src/desktop/host/WindowCommandAuthority.ts', new Set(['src/desktop/host/GlyphDesktopHost.ts'])],
   [disk, composition],
   ['src/workspace/WorkspaceRootSelections.ts', composition],

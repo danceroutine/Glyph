@@ -6,6 +6,20 @@ import { authorizeSources, type SourcePin } from '#src/workspace/SourceDisclosur
 export class TurnDisclosure {
   private tail = Promise.resolve();
   constructor(private readonly assertActive: () => void) {}
+  /** Serialize asynchronous package selections with path, catalog and steering disclosures. */
+  exclusive<T>(work: () => Promise<T>): Promise<T> {
+    const operation = this.tail.then(async () => {
+      this.assertActive();
+      const value = await work();
+      this.assertActive();
+      return value;
+    });
+    this.tail = operation.then(
+      () => {},
+      () => {},
+    );
+    return operation;
+  }
   async publish<T, R>(
     checkpoint: () => () => void,
     prepare: () => T,
@@ -13,8 +27,7 @@ export class TurnDisclosure {
     deliver: (value: T) => R,
     signal?: AbortSignal,
   ): Promise<R> {
-    const operation = this.tail.then(async () => {
-      this.assertActive();
+    const operation = this.exclusive(async () => {
       const undo = checkpoint();
       let value: T;
       let commit: () => void;
@@ -31,10 +44,6 @@ export class TurnDisclosure {
       commit();
       return result;
     });
-    this.tail = operation.then(
-      () => {},
-      () => {},
-    );
     return operation;
   }
 }

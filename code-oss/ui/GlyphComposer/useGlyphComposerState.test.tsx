@@ -30,7 +30,7 @@ function composerActions(overrides: Partial<GlyphWorkbenchViewActions> = {}): Gl
     context: {
       selectFiles: vi.fn(async () => []),
       searchFiles: vi.fn(async () => []),
-      searchRules: vi.fn(async () => []),
+      searchInstructions: vi.fn(async () => []),
       captureFile: vi.fn(async (uri: string) => fileAttachment({ uri })),
       openAttachment: vi.fn(async () => {}),
       refreshAttachment: vi.fn(async (attachment: GlyphContextAttachment) => attachment),
@@ -104,7 +104,7 @@ function picker(mode: 'context' | 'rules' = 'context') {
 
 async function openPicker(actions: GlyphWorkbenchViewActions, text: string, candidates: GlyphContextCandidate[]) {
   const rules = text.startsWith('/');
-  vi.mocked(rules ? actions.context.searchRules : actions.context.searchFiles).mockResolvedValue(candidates);
+  vi.mocked(rules ? actions.context.searchInstructions : actions.context.searchFiles).mockResolvedValue(candidates);
   typeDraft(actions.composer, text);
   if (candidates.length > 0) await screen.findAllByRole('option', {}, patience);
   else
@@ -127,14 +127,14 @@ describe(useGlyphComposerState, () => {
     renderComposer({ status: GlyphWorkbenchStatus.READY, actions: { ...actions, context } });
     typeDraft(actions.composer, '/rule');
     await waitFor(() => {
-      expect(context.searchRules).toHaveBeenCalled();
+      expect(context.searchInstructions).toHaveBeenCalled();
     }, patience);
-    vi.mocked(context.searchRules).mockClear();
+    vi.mocked(context.searchInstructions).mockClear();
     act(() => {
       refresh();
     });
     await waitFor(() => {
-      expect(context.searchRules).toHaveBeenCalled();
+      expect(context.searchInstructions).toHaveBeenCalled();
     }, patience);
   });
 
@@ -469,7 +469,7 @@ describe(useGlyphComposerState, () => {
     });
 
     expect(actions.context.captureFile).not.toHaveBeenCalled();
-    expect(actions.context.searchRules).toHaveBeenCalledWith('typ');
+    expect(actions.context.searchInstructions).toHaveBeenCalledWith('typ');
     expect(actions.context.searchFiles).not.toHaveBeenCalled();
     expect(actions.composer.snapshot.document.parts).toEqual([
       {
@@ -1129,4 +1129,47 @@ describe(useGlyphComposerState, () => {
 
     expect(document.activeElement).toBe(prompt());
   });
+});
+
+it('inserts a selected skill with its stable origin identity and current revision', async () => {
+  const actions = composerActions();
+  renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
+  await openPicker(actions, '/review', [
+    {
+      uri: 'glyph-skill:project-review',
+      path: 'review',
+      name: 'Review workflow',
+      kind: GlyphContextCandidateKind.SKILL,
+      skillId: 'project-review',
+      revision: 'pinned',
+    },
+  ]);
+  await act(async () => {
+    fireEvent.click(screen.getByRole('option', { name: 'review' }));
+  });
+  expect(actions.composer.snapshot.document.parts).toMatchObject([
+    {
+      type: 'attachment',
+      attachment: {
+        kind: GlyphContextAttachmentKind.SKILL,
+        path: 'Review workflow',
+        skillId: 'project-review',
+        contentRevision: 'pinned',
+      },
+    },
+  ]);
+  expect(actions.context.captureFile).not.toHaveBeenCalled();
+});
+
+it('rejects skill candidates without a stable identity', async () => {
+  const actions = composerActions();
+  const { result } = renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
+  await act(() =>
+    result.current.choose({
+      uri: 'glyph-skill:missing',
+      path: 'Missing skill',
+      kind: GlyphContextCandidateKind.SKILL,
+    }),
+  );
+  expect(screen.getByRole('alert').textContent).toBe('This skill cannot be selected.');
 });

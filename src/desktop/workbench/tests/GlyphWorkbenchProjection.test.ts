@@ -151,6 +151,12 @@ describe(GlyphWorkbenchProjection, () => {
   });
 
   describe(GlyphWorkbenchProjection.prototype.accept, () => {
+    it('replaces skill metadata from authoritative host events', () => {
+      const projection = new GlyphWorkbenchProjection();
+      projection.accept({ type: GlyphHostEventType.SKILLS_CHANGED, skills: [] });
+      expect(projection.state.skills).toEqual([]);
+    });
+
     it('replaces the active instruction source catalog', () => {
       const projection = new GlyphWorkbenchProjection();
       const sources = [
@@ -362,6 +368,11 @@ describe(GlyphWorkbenchProjection, () => {
     it('ignores command results', () => {
       const projection = new GlyphWorkbenchProjection();
       const before = projection.state;
+      projection.accept({
+        type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED,
+        lookupId: 'private',
+        skillId: 'canonical',
+      });
       projection.accept({
         type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED,
         lookupId: 'folder',

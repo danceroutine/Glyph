@@ -1,3 +1,4 @@
+import type { GlyphSkill } from './GlyphSkill.ts';
 import type { AgentReview } from '#src/reviewing/AgentReview.js';
 import type { GlyphBackgroundShell } from './GlyphBackgroundShell.ts';
 import type {
@@ -37,6 +38,8 @@ export enum GlyphHostEventType {
   RUN_STATE = 'run_state',
   CHAT_RESTORED = 'chat_restored',
   HOST_STATUS = 'host_status',
+  SKILL_REFERENCE_RESOLVED = 'skill_reference_resolved',
+  SKILLS_CHANGED = 'skills_changed',
   ATTACHMENT_RESOURCE_RESOLVED = 'attachment_resource_resolved',
   RULE_REFERENCE_RESOLVED = 'rule_reference_resolved',
   INSTRUCTION_SOURCES_CHANGED = 'instruction_sources_changed',
@@ -45,6 +48,8 @@ export enum GlyphHostEventType {
 
 /** Closed event union used to keep every host-to-renderer transition exhaustively typed. */
 export type GlyphHostEvent =
+  | { readonly type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED; readonly lookupId: string; readonly skillId?: string }
+  | { readonly type: GlyphHostEventType.SKILLS_CHANGED; readonly skills: readonly GlyphSkill[] }
   | {
       readonly type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED;
       readonly lookupId: string;

@@ -63,7 +63,7 @@ export const chatTurnOptionsSchema = z
       .array(
         z
           .object({
-            kind: z.literal('rule'),
+            kind: z.enum(['rule', 'skill']),
             sourceId: z.string().min(1).max(500),
             label: z.string().min(1),
             revision: z.string().min(1),
@@ -74,6 +74,7 @@ export const chatTurnOptionsSchema = z
           .refine(span => span.to - span.from === span.label.length + 1),
       )
       .optional(),
+    skillIds: z.array(z.string().min(1).max(500)).max(32).optional(),
     manualRuleIds: z.array(z.string().min(1).max(500)).max(32).optional(),
   })
   .strict()
@@ -88,6 +89,7 @@ export const chatTurnOptionsSchema = z
       planBuild,
       planProgress,
       manualRuleIds,
+      skillIds,
     }) => ({
       ...(referenceSpans && referenceSpans.length > 0 ? { referenceSpans } : {}),
       ...(attachmentSpans ? { attachmentSpans } : {}),
@@ -97,6 +99,7 @@ export const chatTurnOptionsSchema = z
       ...(annotations ? { annotations } : {}),
       ...(planBuild ? { planBuild } : {}),
       ...(planProgress ? { planProgress } : {}),
+      ...(skillIds && skillIds.length > 0 ? { skillIds: [...new Set(skillIds)] } : {}),
       ...(manualRuleIds && manualRuleIds.length > 0 ? { manualRuleIds: [...new Set(manualRuleIds)] } : {}),
     }),
   );
